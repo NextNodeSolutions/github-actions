@@ -1,4 +1,4 @@
-name: Deploy to Production Pack
+name: Prod Deploy
 
 on:
   workflow_call:
@@ -60,7 +60,7 @@ on:
 
 jobs:
   quality-checks:
-    name: Quality Checks
+    name: QA
     if: inputs.run-quality-checks
     uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
     with:
@@ -75,7 +75,7 @@ jobs:
       working-directory: ${{ inputs.working-directory }}
       
   deploy:
-    name: Deploy to Fly.io Production
+    name: Fly.io
     needs: [quality-checks]
     if: always() && (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
     uses: NextNodeSolutions/github-actions/.github/workflows/job-deploy-fly.yml@main
@@ -90,7 +90,7 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       
   dns:
-    name: Configure DNS
+    name: DNS
     needs: [deploy]
     if: needs.deploy.result == 'success' && inputs.domain != ''
     uses: NextNodeSolutions/github-actions/.github/workflows/job-dns-cloudflare.yml@main

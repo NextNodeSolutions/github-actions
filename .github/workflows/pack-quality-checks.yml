@@ -1,4 +1,4 @@
-name: Quality Checks Pack
+name: QA
 
 on:
   workflow_call:
