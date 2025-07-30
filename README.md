@@ -17,19 +17,18 @@ github-actions/
 │   ├── setup-node/      # Node.js setup with caching
 │   ├── setup-pnpm/      # pnpm setup and dependency installation
 │   └── setup-environment/ # Complete environment setup
-├── .github/workflows/
-│   ├── jobs/            # Individual job workflows
-│   │   ├── lint.yml     # Linting job
-│   │   ├── typecheck.yml # Type checking job
-│   │   ├── test.yml     # Testing job
-│   │   ├── build.yml    # Build job
-│   │   ├── security.yml # Security scanning job
-│   │   ├── deploy-fly.yml # Fly.io deployment
-│   │   └── dns-cloudflare.yml # Cloudflare DNS management
-│   └── packs/           # Workflow packs (combinations)
-│       ├── quality-checks.yml # Lint + Type + Test + Build
-│       ├── deploy-dev.yml     # Full dev deployment
-│       └── deploy-prod.yml    # Full prod deployment
+└── .github/workflows/    # All reusable workflows (top-level only)
+    ├── job-lint.yml      # Individual linting job
+    ├── job-typecheck.yml # Individual type checking job
+    ├── job-test.yml      # Individual testing job
+    ├── job-build.yml     # Individual build job
+    ├── job-security.yml  # Individual security job
+    ├── job-deploy-fly.yml # Individual Fly.io deployment job
+    ├── job-dns-cloudflare.yml # Individual DNS management job
+    ├── pack-quality-checks.yml # Quality checks pack (lint+type+test+build)
+    ├── pack-deploy-dev.yml     # Full dev deployment pack
+    ├── pack-deploy-prod.yml    # Full prod deployment pack
+    └── test-actions.yml  # Internal testing workflow
 ```
 
 ## ⚙️ Repository Setup (Required)
@@ -62,13 +61,13 @@ on:
 
 jobs:
   lint:
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/lint.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-lint.yml@main
     with:
       node-version: '22'
       pnpm-version: '10.11.0'
       
   test:
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/test.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-test.yml@main
     with:
       coverage: true
 ```
@@ -83,7 +82,7 @@ on:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-dev.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-dev.yml@main
     with:
       app-name: 'dev-myapp'
       fly-org: 'nextnode'
@@ -95,7 +94,7 @@ jobs:
 
 ### Individual Jobs
 
-#### `workflows/jobs/lint.yml`
+#### `job-lint.yml`
 Runs linting checks on your codebase.
 
 **Inputs:**
@@ -104,7 +103,7 @@ Runs linting checks on your codebase.
 - `working-directory` (default: '.')
 - `command` (default: 'pnpm lint')
 
-#### `workflows/jobs/typecheck.yml`
+#### `job-typecheck.yml`
 Runs TypeScript type checking.
 
 **Inputs:**
@@ -113,7 +112,7 @@ Runs TypeScript type checking.
 - `working-directory` (default: '.')
 - `command` (default: 'pnpm type-check')
 
-#### `workflows/jobs/test.yml`
+#### `job-test.yml`
 Runs tests with optional coverage.
 
 **Inputs:**
@@ -123,7 +122,7 @@ Runs tests with optional coverage.
 - `coverage` (default: false)
 - `command` (default: automatic based on coverage)
 
-#### `workflows/jobs/build.yml`
+#### `job-build.yml`
 Builds the project with optional artifact upload.
 
 **Inputs:**
@@ -135,7 +134,7 @@ Builds the project with optional artifact upload.
 - `artifact-name` (default: 'build-output')
 - `artifact-path` (default: 'dist')
 
-#### `workflows/jobs/security.yml`
+#### `job-security.yml`
 Runs security audits and Docker scans.
 
 **Inputs:**
@@ -145,7 +144,7 @@ Runs security audits and Docker scans.
 - `audit-level` (default: 'high')
 - `docker-scan` (default: true)
 
-#### `workflows/jobs/deploy-fly.yml`
+#### `job-deploy-fly.yml`
 Deploys to Fly.io with health checks and rollback.
 
 **Inputs:**
@@ -166,7 +165,7 @@ Deploys to Fly.io with health checks and rollback.
 - `fly-url`: Deployed application URL
 - `deployed`: Deployment status
 
-#### `workflows/jobs/dns-cloudflare.yml`
+#### `job-dns-cloudflare.yml`
 Manages DNS records via Cloudflare API.
 
 **Inputs:**
@@ -187,7 +186,7 @@ Manages DNS records via Cloudflare API.
 
 ### Workflow Packs
 
-#### `workflows/packs/quality-checks.yml`
+#### `pack-quality-checks.yml`
 Combined quality checks workflow.
 
 **Inputs:**
@@ -199,7 +198,7 @@ Combined quality checks workflow.
 - `test-coverage` (default: false)
 - Plus all individual job inputs
 
-#### `workflows/packs/deploy-dev.yml`
+#### `pack-deploy-dev.yml`
 Complete development deployment.
 
 **Features:**
@@ -215,7 +214,7 @@ Complete development deployment.
 - `run-quality-checks` (default: true)
 - Plus standard Node.js/pnpm inputs
 
-#### `workflows/packs/deploy-prod.yml`
+#### `pack-deploy-prod.yml`
 Complete production deployment.
 
 **Features:**
@@ -243,7 +242,7 @@ jobs:
   quality:
     # Skip redundant checks on develop→main PRs
     if: !(github.base_ref == 'main' && github.head_ref == 'develop')
-    uses: NextNodeSolutions/github-actions/.github/workflows/packs/quality-checks.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
     with:
       run-build: false
 ```
@@ -258,7 +257,7 @@ on:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-dev.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-dev.yml@main
     with:
       app-name: 'dev-myapp'
       fly-org: 'nextnode'
@@ -277,7 +276,7 @@ on:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@main
     with:
       app-name: 'prod-myapp'
       fly-org: 'nextnode'
@@ -297,7 +296,7 @@ on:
 
 jobs:
   security:
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/security.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-security.yml@main
     with:
       audit-level: 'moderate'
 ```
@@ -331,13 +330,13 @@ For production use, pin to specific versions:
 
 ```yaml
 # Use specific tag
-uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@v1.0.0
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@v1.0.0
 
 # Use commit SHA
-uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@abc123
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@abc123
 
 # Use main branch (latest)
-uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@main
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@main
 ```
 
 ## 🧪 Testing

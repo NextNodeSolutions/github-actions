@@ -78,7 +78,7 @@ jobs:
           
   test-quality-checks-pack:
     name: Test Quality Checks Pack
-    uses: ./.github/workflows/packs/quality-checks.yml
+    uses: ./.github/workflows/pack-quality-checks.yml
     with:
       run-lint: true
       run-typecheck: true

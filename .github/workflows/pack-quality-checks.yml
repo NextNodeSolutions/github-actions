@@ -72,7 +72,7 @@ on:
 jobs:
   lint:
     if: inputs.run-lint
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/lint.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-lint.yml@main
     with:
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
@@ -81,7 +81,7 @@ jobs:
       
   typecheck:
     if: inputs.run-typecheck
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/typecheck.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-typecheck.yml@main
     with:
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
@@ -90,7 +90,7 @@ jobs:
       
   test:
     if: inputs.run-test
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/test.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-test.yml@main
     with:
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
@@ -100,7 +100,7 @@ jobs:
       
   build:
     if: inputs.run-build
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/build.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-build.yml@main
     with:
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
@@ -109,7 +109,7 @@ jobs:
       
   security:
     if: inputs.run-security
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/security.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-security.yml@main
     with:
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}

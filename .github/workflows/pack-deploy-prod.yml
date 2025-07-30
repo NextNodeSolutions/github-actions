@@ -1,4 +1,4 @@
-name: Deploy to Development Pack
+name: Deploy to Production Pack
 
 on:
   workflow_call:
@@ -36,10 +36,15 @@ on:
         required: false
         default: '.'
         type: string
-      checkout-ref:
-        description: 'Git ref to checkout'
+      min-machines:
+        description: 'Minimum machines for production'
         required: false
-        default: 'develop'
+        default: '2'
+        type: string
+      memory-mb:
+        description: 'Memory allocation in MB'
+        required: false
+        default: '1024'
         type: string
     secrets:
       FLY_API_TOKEN:
@@ -51,34 +56,36 @@ on:
     outputs:
       deployed-url:
         description: 'Deployed application URL'
-        value: ${{ jobs.deploy.outputs.fly-url }}
+        value: ${{ jobs.dns.outputs.custom-url || jobs.deploy.outputs.fly-url }}
 
 jobs:
   quality-checks:
     name: Quality Checks
     if: inputs.run-quality-checks
-    uses: NextNodeSolutions/github-actions/.github/workflows/packs/quality-checks.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
     with:
       run-lint: true
       run-typecheck: true
       run-test: true
       run-build: true
-      run-security: false
-      test-coverage: false
+      run-security: true
+      test-coverage: true
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
       working-directory: ${{ inputs.working-directory }}
       
   deploy:
-    name: Deploy to Fly.io Dev
+    name: Deploy to Fly.io Production
     needs: [quality-checks]
     if: always() && (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/deploy-fly.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-deploy-fly.yml@main
     with:
-      environment: development
+      environment: production
       app-name: ${{ inputs.app-name }}
       fly-org: ${{ inputs.fly-org }}
-      checkout-ref: ${{ inputs.checkout-ref }}
+      strategy: bluegreen
+      min-machines: ${{ inputs.min-machines }}
+      memory-mb: ${{ inputs.memory-mb }}
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       
@@ -86,10 +93,10 @@ jobs:
     name: Configure DNS
     needs: [deploy]
     if: needs.deploy.result == 'success' && inputs.domain != ''
-    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/dns-cloudflare.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/job-dns-cloudflare.yml@main
     with:
       domain: ${{ inputs.domain }}
-      subdomain: 'dev'
+      subdomain: ''
       app-name: ${{ inputs.app-name }}
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -97,14 +104,14 @@ jobs:
       CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
       
   summary:
-    name: Deployment Summary
+    name: Production Summary
     runs-on: ubuntu-latest
     needs: [quality-checks, deploy, dns]
     if: always()
     steps:
       - name: Summary
         run: |
-          echo "### 🚀 Development Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
@@ -115,7 +122,7 @@ jobs:
           
           if [[ "${{ needs.deploy.result }}" == "success" ]]; then
             if [[ -n "${{ inputs.domain }}" ]]; then
-              echo "✅ **Deployed to:** https://dev.${{ inputs.domain }}" >> $GITHUB_STEP_SUMMARY
+              echo "✅ **Deployed to:** https://${{ inputs.domain }}" >> $GITHUB_STEP_SUMMARY
             else
               echo "✅ **Deployed to:** https://${{ inputs.app-name }}.fly.dev" >> $GITHUB_STEP_SUMMARY
             fi
