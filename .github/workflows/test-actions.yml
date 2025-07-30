@@ -65,6 +65,9 @@ jobs:
           
           # Create pnpm-lock.yaml
           echo "lockfileVersion: '9.0'" > pnpm-lock.yaml
+          echo "dependencies: {}" >> pnpm-lock.yaml
+          echo "devDependencies: {}" >> pnpm-lock.yaml
+          echo "packages: {}" >> pnpm-lock.yaml
           
           # Create Dockerfile for security test
           cat > Dockerfile << 'EOF'
@@ -78,6 +81,7 @@ jobs:
           
   test-quality-checks-pack:
     name: Test Quality Checks Pack
+    needs: test-individual-workflows
     uses: ./.github/workflows/pack-quality-checks.yml
     with:
       run-lint: true

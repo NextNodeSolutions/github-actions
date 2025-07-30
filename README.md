@@ -31,23 +31,14 @@ github-actions/
     └── test-actions.yml  # Internal testing workflow
 ```
 
-## ⚙️ Repository Setup (Required)
+## ⚙️ Repository Setup
 
-**IMPORTANT**: Before using these workflows, you must configure repository access:
+**No setup required!** This repository is public and workflows are immediately accessible to all repositories.
 
-1. **Navigate to Repository Settings**:
-   - Go to https://github.com/NextNodeSolutions/github-actions/settings/actions
-   - Click on **Actions** → **General**
-
-2. **Configure Access**:
-   - Scroll to the **"Access"** section at the bottom
-   - Select **"Accessible from repositories in the 'NextNodeSolutions' organization"**
-   - Click **Save**
-
-3. **Repository Visibility**:
-   - This repository is set to **Private** for organization security
-   - Only NextNodeSolutions organization members can access workflows
-   - No need to publish actions publicly
+### Repository Status:
+- ✅ **Public repository** - No access restrictions
+- ✅ **Immediately usable** - No configuration needed
+- ✅ **Community friendly** - Others can learn from your workflow patterns
 
 ## 🚀 Quick Start
 
@@ -311,18 +302,18 @@ Configure these secrets in your repository settings:
 
 ## 🔒 Access & Security
 
-### Organization-Level Sharing
-This repository uses GitHub's **private repository workflow sharing** feature:
-- ✅ Workflows are shared only within NextNodeSolutions organization
-- ✅ No public access or publishing required
-- ✅ Secure by default with organization boundaries
-- ✅ Available since December 2022 (GitHub Actions GA feature)
+### Public Repository Benefits
+This repository is **public** for maximum accessibility and ease of use:
+- ✅ **Zero configuration** required for any repository to use these workflows
+- ✅ **Works immediately** without access restrictions
+- ✅ **Community contribution** - others can learn from and contribute to your workflows
+- ✅ **No maintenance overhead** for access permissions
 
 ### Access Requirements
-- Repository must be accessible from organization repositories
-- Calling repositories must be in the same organization
-- Secrets are inherited using `secrets: inherit`
-- Workflows run with appropriate permissions
+- ✅ **Any repository** can use these workflows (public or private)
+- ✅ **No organization restrictions** - works across different organizations
+- ✅ Secrets are inherited using `secrets: inherit`
+- ✅ Workflows run with appropriate permissions
 
 ## 📌 Version Pinning
 
