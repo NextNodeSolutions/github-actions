@@ -71,6 +71,7 @@ on:
 
 jobs:
   lint:
+    name: Lint
     if: inputs.run-lint
     uses: NextNodeSolutions/github-actions/.github/workflows/job-lint.yml@main
     with:
@@ -80,6 +81,7 @@ jobs:
       command: ${{ inputs.lint-command }}
       
   typecheck:
+    name: Type Check
     if: inputs.run-typecheck
     uses: NextNodeSolutions/github-actions/.github/workflows/job-typecheck.yml@main
     with:
@@ -89,6 +91,7 @@ jobs:
       command: ${{ inputs.typecheck-command }}
       
   test:
+    name: Test
     if: inputs.run-test
     uses: NextNodeSolutions/github-actions/.github/workflows/job-test.yml@main
     with:
@@ -99,6 +102,7 @@ jobs:
       command: ${{ inputs.test-command }}
       
   build:
+    name: Build
     if: inputs.run-build
     uses: NextNodeSolutions/github-actions/.github/workflows/job-build.yml@main
     with:
@@ -108,6 +112,7 @@ jobs:
       command: ${{ inputs.build-command }}
       
   security:
+    name: Security
     if: inputs.run-security
     uses: NextNodeSolutions/github-actions/.github/workflows/job-security.yml@main
     with:
