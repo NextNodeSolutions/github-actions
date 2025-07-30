@@ -32,6 +32,24 @@ github-actions/
 │       └── deploy-prod.yml    # Full prod deployment
 ```
 
+## ⚙️ Repository Setup (Required)
+
+**IMPORTANT**: Before using these workflows, you must configure repository access:
+
+1. **Navigate to Repository Settings**:
+   - Go to https://github.com/NextNodeSolutions/github-actions/settings/actions
+   - Click on **Actions** → **General**
+
+2. **Configure Access**:
+   - Scroll to the **"Access"** section at the bottom
+   - Select **"Accessible from repositories in the 'NextNodeSolutions' organization"**
+   - Click **Save**
+
+3. **Repository Visibility**:
+   - This repository is set to **Private** for organization security
+   - Only NextNodeSolutions organization members can access workflows
+   - No need to publish actions publicly
+
 ## 🚀 Quick Start
 
 ### Using Individual Jobs
@@ -291,6 +309,21 @@ Configure these secrets in your repository settings:
 - **`FLY_API_TOKEN`**: Fly.io API token for deployments
 - **`CLOUDFLARE_API_TOKEN`**: Cloudflare API token (if using custom domains)
 - **`CLOUDFLARE_ZONE_ID`**: Cloudflare zone ID (if using custom domains)
+
+## 🔒 Access & Security
+
+### Organization-Level Sharing
+This repository uses GitHub's **private repository workflow sharing** feature:
+- ✅ Workflows are shared only within NextNodeSolutions organization
+- ✅ No public access or publishing required
+- ✅ Secure by default with organization boundaries
+- ✅ Available since December 2022 (GitHub Actions GA feature)
+
+### Access Requirements
+- Repository must be accessible from organization repositories
+- Calling repositories must be in the same organization
+- Secrets are inherited using `secrets: inherit`
+- Workflows run with appropriate permissions
 
 ## 📌 Version Pinning
 
