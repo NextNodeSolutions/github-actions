@@ -43,10 +43,13 @@ jobs:
       - name: Run tests
         working-directory: ${{ inputs.working-directory }}
         run: |
-          if [ -n "${{ inputs.command }}" ]; then
+          if [[ -n "${{ inputs.command }}" ]]; then
+            echo "Running custom command: ${{ inputs.command }}"
             ${{ inputs.command }}
-          elif [ "${{ inputs.coverage }}" == "true" ]; then
+          elif [[ "${{ inputs.coverage }}" == "true" ]]; then
+            echo "Running tests with coverage"
             pnpm test:coverage
           else
+            echo "Running tests"
             pnpm test
           fi
