@@ -17,7 +17,7 @@ github-actions/
 │   ├── setup-node/      # Node.js setup with caching
 │   ├── setup-pnpm/      # pnpm setup and dependency installation
 │   └── setup-environment/ # Complete environment setup
-├── workflows/
+├── .github/workflows/
 │   ├── jobs/            # Individual job workflows
 │   │   ├── lint.yml     # Linting job
 │   │   ├── typecheck.yml # Type checking job
@@ -44,13 +44,13 @@ on:
 
 jobs:
   lint:
-    uses: NextNodeSolutions/github-actions/workflows/jobs/lint.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/lint.yml@main
     with:
       node-version: '22'
       pnpm-version: '10.11.0'
       
   test:
-    uses: NextNodeSolutions/github-actions/workflows/jobs/test.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/test.yml@main
     with:
       coverage: true
 ```
@@ -65,7 +65,7 @@ on:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/workflows/packs/deploy-dev.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-dev.yml@main
     with:
       app-name: 'dev-myapp'
       fly-org: 'nextnode'
@@ -225,7 +225,7 @@ jobs:
   quality:
     # Skip redundant checks on develop→main PRs
     if: !(github.base_ref == 'main' && github.head_ref == 'develop')
-    uses: NextNodeSolutions/github-actions/workflows/packs/quality-checks.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/packs/quality-checks.yml@main
     with:
       run-build: false
 ```
@@ -240,7 +240,7 @@ on:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/workflows/packs/deploy-dev.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-dev.yml@main
     with:
       app-name: 'dev-myapp'
       fly-org: 'nextnode'
@@ -259,7 +259,7 @@ on:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/workflows/packs/deploy-prod.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@main
     with:
       app-name: 'prod-myapp'
       fly-org: 'nextnode'
@@ -279,7 +279,7 @@ on:
 
 jobs:
   security:
-    uses: NextNodeSolutions/github-actions/workflows/jobs/security.yml@main
+    uses: NextNodeSolutions/github-actions/.github/workflows/jobs/security.yml@main
     with:
       audit-level: 'moderate'
 ```
@@ -298,13 +298,13 @@ For production use, pin to specific versions:
 
 ```yaml
 # Use specific tag
-uses: NextNodeSolutions/github-actions/workflows/packs/deploy-prod.yml@v1.0.0
+uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@v1.0.0
 
 # Use commit SHA
-uses: NextNodeSolutions/github-actions/workflows/packs/deploy-prod.yml@abc123
+uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@abc123
 
 # Use main branch (latest)
-uses: NextNodeSolutions/github-actions/workflows/packs/deploy-prod.yml@main
+uses: NextNodeSolutions/github-actions/.github/workflows/packs/deploy-prod.yml@main
 ```
 
 ## 🧪 Testing
