@@ -101,7 +101,7 @@ jobs:
           cp ${{ inputs.fly-config }} $TEMP_CONFIG
           
           # Update config with environment-specific settings
-          sed -i "s/app = .*/app = \"${{ inputs.app-name }}\"/" $TEMP_CONFIG
+          sed -i "s/^app = .*/app = \"${{ inputs.app-name }}\"/" $TEMP_CONFIG
           
           if [ "${{ inputs.environment }}" == "production" ]; then
             sed -i "s/min_machines_running = .*/min_machines_running = ${{ inputs.min-machines }}/" $TEMP_CONFIG
