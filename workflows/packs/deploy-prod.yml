@@ -1,0 +1,132 @@
+name: Deploy to Production Pack
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: 'Fly.io app name'
+        required: true
+        type: string
+      fly-org:
+        description: 'Fly.io organization'
+        required: true
+        type: string
+      domain:
+        description: 'Custom domain (leave empty for Fly.io URL only)'
+        required: false
+        default: ''
+        type: string
+      run-quality-checks:
+        description: 'Run quality checks before deployment'
+        required: false
+        default: true
+        type: boolean
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '22'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.11.0'
+        type: string
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      min-machines:
+        description: 'Minimum machines for production'
+        required: false
+        default: '2'
+        type: string
+      memory-mb:
+        description: 'Memory allocation in MB'
+        required: false
+        default: '1024'
+        type: string
+    secrets:
+      FLY_API_TOKEN:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_ZONE_ID:
+        required: false
+    outputs:
+      deployed-url:
+        description: 'Deployed application URL'
+        value: ${{ jobs.dns.outputs.custom-url || jobs.deploy.outputs.fly-url }}
+
+jobs:
+  quality-checks:
+    name: Quality Checks
+    if: inputs.run-quality-checks
+    uses: NextNodeSolutions/github-actions/workflows/packs/quality-checks.yml@main
+    with:
+      run-lint: true
+      run-typecheck: true
+      run-test: true
+      run-build: true
+      run-security: true
+      test-coverage: true
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      working-directory: ${{ inputs.working-directory }}
+      
+  deploy:
+    name: Deploy to Fly.io Production
+    needs: [quality-checks]
+    if: always() && (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
+    uses: NextNodeSolutions/github-actions/workflows/jobs/deploy-fly.yml@main
+    with:
+      environment: production
+      app-name: ${{ inputs.app-name }}
+      fly-org: ${{ inputs.fly-org }}
+      strategy: bluegreen
+      min-machines: ${{ inputs.min-machines }}
+      memory-mb: ${{ inputs.memory-mb }}
+    secrets:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      
+  dns:
+    name: Configure DNS
+    needs: [deploy]
+    if: needs.deploy.result == 'success' && inputs.domain != ''
+    uses: NextNodeSolutions/github-actions/workflows/jobs/dns-cloudflare.yml@main
+    with:
+      domain: ${{ inputs.domain }}
+      subdomain: ''
+      app-name: ${{ inputs.app-name }}
+    secrets:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+      
+  summary:
+    name: Production Summary
+    runs-on: ubuntu-latest
+    needs: [quality-checks, deploy, dns]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "### 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Checks | ${{ needs.quality-checks.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DNS | ${{ needs.dns.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            if [[ -n "${{ inputs.domain }}" ]]; then
+              echo "✅ **Deployed to:** https://${{ inputs.domain }}" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "✅ **Deployed to:** https://${{ inputs.app-name }}.fly.dev" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ **Deployment failed**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi

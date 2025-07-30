@@ -1,0 +1,63 @@
+name: Build Job
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '22'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.11.0'
+        type: string
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      command:
+        description: 'Build command to run'
+        required: false
+        default: 'pnpm build'
+        type: string
+      upload-artifact:
+        description: 'Upload build artifacts'
+        required: false
+        default: false
+        type: boolean
+      artifact-name:
+        description: 'Artifact name'
+        required: false
+        default: 'build-output'
+        type: string
+      artifact-path:
+        description: 'Path to artifact files'
+        required: false
+        default: 'dist'
+        type: string
+
+jobs:
+  build:
+    name: '🔨 Build'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/setup-environment@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - name: Build project
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.command }}
+        
+      - name: Upload artifacts
+        if: inputs.upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
+          retention-days: 7

@@ -1,0 +1,52 @@
+name: Test Job
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '22'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.11.0'
+        type: string
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      coverage:
+        description: 'Run tests with coverage'
+        required: false
+        default: false
+        type: boolean
+      command:
+        description: 'Test command (overrides coverage setting)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  test:
+    name: '🧪 Test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/setup-environment@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "${{ inputs.command }}" ]; then
+            ${{ inputs.command }}
+          elif [ "${{ inputs.coverage }}" == "true" ]; then
+            pnpm test:coverage
+          else
+            pnpm test
+          fi
