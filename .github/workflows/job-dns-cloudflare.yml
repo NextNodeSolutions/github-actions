@@ -31,8 +31,6 @@ on:
         required: true
       CLOUDFLARE_API_TOKEN:
         required: true
-      CLOUDFLARE_ZONE_ID:
-        required: true
     outputs:
       dns-updated:
         description: 'DNS update status'
@@ -58,7 +56,6 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
         run: |
           # Construct full domain
           if [ -n "${{ inputs.subdomain }}" ]; then
@@ -70,6 +67,22 @@ jobs:
           fi
           
           echo "Configuring DNS for: $FULL_DOMAIN"
+          
+          # Get Zone ID for the domain
+          echo "Fetching Zone ID for domain: ${{ inputs.domain }}"
+          ZONE_RESPONSE=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=${{ inputs.domain }}" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json")
+          
+          CLOUDFLARE_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // ""')
+          
+          if [ -z "$CLOUDFLARE_ZONE_ID" ] || [ "$CLOUDFLARE_ZONE_ID" == "null" ]; then
+            echo "::error::Could not find Zone ID for domain ${{ inputs.domain }}"
+            echo "API Response: $ZONE_RESPONSE"
+            exit 1
+          fi
+          
+          echo "Found Zone ID: $CLOUDFLARE_ZONE_ID"
           
           # Get Fly.io IPs
           IPV4=$(flyctl ips list --app ${{ inputs.app-name }} --json | jq -r '.[] | select(.Type == "v4") | .Address' | head -1)
