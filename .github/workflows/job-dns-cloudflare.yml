@@ -179,17 +179,83 @@ jobs:
             echo "SSL certificate already exists for $FULL_DOMAIN"
           fi
           
-          # Wait for certificate to be ready
-          echo "Waiting for SSL certificate to be ready..."
-          MAX_WAIT=300  # 5 minutes
-          ELAPSED=0
-          while [ $ELAPSED -lt $MAX_WAIT ]; do
-            STATUS=$(flyctl certs show $FULL_DOMAIN --app ${{ inputs.app-name }} --json | jq -r '.status // "unknown"')
-            if [ "$STATUS" == "Ready" ] || [ "$STATUS" == "ready" ]; then
-              echo "SSL certificate is ready"
-              break
+          # Get ACME challenge info
+          ACME_CHALLENGE_INFO=$(flyctl certs show $FULL_DOMAIN --app ${{ inputs.app-name }} 2>&1)
+          
+          # Check if we need to create ACME challenge CNAME
+          if echo "$ACME_CHALLENGE_INFO" | grep -q "_acme-challenge"; then
+            ACME_TARGET=$(echo "$ACME_CHALLENGE_INFO" | grep -o "[a-zA-Z0-9]\+\.$FULL_DOMAIN\.[a-zA-Z0-9]\+\.flydns\.net" | head -1)
+            if [ -n "$ACME_TARGET" ]; then
+              echo "Creating ACME challenge CNAME: _acme-challenge.$FULL_DOMAIN -> $ACME_TARGET"
+              
+              # Create ACME challenge CNAME record
+              ACME_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data "{
+                  \"type\": \"CNAME\",
+                  \"name\": \"_acme-challenge.$(if [ -n \"${{ inputs.subdomain }}\" ]; then echo \"${{ inputs.subdomain }}\"; else echo \"@\"; fi)\",
+                  \"content\": \"$ACME_TARGET\",
+                  \"ttl\": 120,
+                  \"proxied\": false
+                }")
+              
+              if echo "$ACME_RESPONSE" | jq -r '.success' | grep -q true; then
+                echo "ACME challenge CNAME created successfully"
+                # Wait for DNS propagation
+                echo "Waiting for DNS propagation..."
+                sleep 30
+              else
+                echo "Failed to create ACME challenge CNAME: $(echo "$ACME_RESPONSE" | jq -r '.errors')"
+              fi
             fi
-            echo "Certificate status: $STATUS, waiting..."
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
+          fi
+          
+          # Wait for certificate to be ready with better error handling
+          echo "Waiting for SSL certificate to be ready..."
+          MAX_WAIT=600  # 10 minutes
+          ELAPSED=0
+          RETRY_COUNT=0
+          MAX_RETRIES=3
+          
+          while [ $ELAPSED -lt $MAX_WAIT ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            # Check certificate status with error handling
+            CERT_OUTPUT=$(flyctl certs show $FULL_DOMAIN --app ${{ inputs.app-name }} --json 2>&1)
+            
+            if echo "$CERT_OUTPUT" | jq . >/dev/null 2>&1; then
+              # Valid JSON output
+              STATUS=$(echo "$CERT_OUTPUT" | jq -r '.status // "unknown"')
+              if [ "$STATUS" == "Ready" ] || [ "$STATUS" == "ready" ]; then
+                echo "SSL certificate is ready"
+                break
+              elif [ "$STATUS" == "Error" ] || [ "$STATUS" == "error" ]; then
+                echo "Certificate is in error state, attempting to recreate..."
+                # Delete the failed certificate
+                flyctl certs delete $FULL_DOMAIN --app ${{ inputs.app-name }} --yes || true
+                sleep 5
+                # Recreate certificate
+                flyctl certs create $FULL_DOMAIN --app ${{ inputs.app-name }}
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                ELAPSED=0  # Reset timer for new certificate
+                continue
+              fi
+              echo "Certificate status: $STATUS, waiting..."
+            else
+              # Invalid JSON or error output
+              echo "Certificate check returned error: $CERT_OUTPUT"
+              if echo "$CERT_OUTPUT" | grep -q "not found"; then
+                echo "Certificate not found, recreating..."
+                flyctl certs create $FULL_DOMAIN --app ${{ inputs.app-name }}
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                ELAPSED=0
+                continue
+              fi
+            fi
+            
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
           done
+          
+          if [ $ELAPSED -ge $MAX_WAIT ] || [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+            echo "::warning::Certificate setup timed out or failed after retries. Certificate may still be processing."
+          fi
