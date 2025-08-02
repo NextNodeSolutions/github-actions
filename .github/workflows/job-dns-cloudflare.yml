@@ -57,6 +57,10 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
+          # Start timing
+          START_TIME=$(date +%s)
+          echo "🕐 DNS configuration started at $(date)"
+          
           # Construct full domain
           if [ -n "${{ inputs.subdomain }}" ]; then
             FULL_DOMAIN="${{ inputs.subdomain }}.${{ inputs.domain }}"
@@ -66,13 +70,15 @@ jobs:
             RECORD_NAME="@"
           fi
           
-          echo "Configuring DNS for: $FULL_DOMAIN"
+          echo "🌐 Configuring DNS for: $FULL_DOMAIN"
           
           # Get Zone ID for the domain
-          echo "Fetching Zone ID for domain: ${{ inputs.domain }}"
+          echo "📡 Fetching Zone ID for domain: ${{ inputs.domain }}"
+          ZONE_START=$(date +%s)
           ZONE_RESPONSE=$(curl -s "https://api.cloudflare.com/client/v4/zones?name=${{ inputs.domain }}" \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             -H "Content-Type: application/json")
+          ZONE_END=$(date +%s)
           
           CLOUDFLARE_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // ""')
           
@@ -82,11 +88,14 @@ jobs:
             exit 1
           fi
           
-          echo "Found Zone ID: $CLOUDFLARE_ZONE_ID"
+          echo "✅ Found Zone ID: $CLOUDFLARE_ZONE_ID (took $((ZONE_END - ZONE_START))s)"
           
           # Get Fly.io IPs
+          echo "🚀 Fetching Fly.io IPs for app: ${{ inputs.app-name }}"
+          FLY_START=$(date +%s)
           IPV4=$(flyctl ips list --app ${{ inputs.app-name }} --json | jq -r '.[] | select(.Type == "v4") | .Address' | head -1)
           IPV6=$(flyctl ips list --app ${{ inputs.app-name }} --json | jq -r '.[] | select(.Type == "v6") | .Address' | head -1)
+          FLY_END=$(date +%s)
           
           if [ -z "$IPV4" ]; then
             echo "::error::No IPv4 address found for app ${{ inputs.app-name }}"
@@ -104,7 +113,7 @@ jobs:
             OLD_TYPE="AAAA"
           fi
           
-          echo "Target IP: $TARGET_IP (Type: $RECORD_TYPE)"
+          echo "🎯 Target IP: $TARGET_IP (Type: $RECORD_TYPE) - Retrieved in $((FLY_END - FLY_START))s"
           
           # Check existing DNS record
           EXISTING_RECORD=$(curl -s "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?name=$FULL_DOMAIN&type=$RECORD_TYPE" \
@@ -160,10 +169,24 @@ jobs:
           
           echo "custom-url=https://$FULL_DOMAIN" >> $GITHUB_OUTPUT
           
+          # DNS timing summary
+          DNS_END_TIME=$(date +%s)
+          DNS_TOTAL_TIME=$((DNS_END_TIME - START_TIME))
+          
+          echo ""
+          echo "📊 === DNS Configuration Performance Summary ==="
+          echo "🕐 Total DNS setup time: ${DNS_TOTAL_TIME}s"
+          echo "🌐 DNS configuration completed at $(date)"
+          echo "==============================================="
+          
       - name: Configure SSL certificate
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
+          # Start SSL timing
+          SSL_START_TIME=$(date +%s)
+          echo "🔒 SSL configuration started at $(date)"
+          
           # Construct full domain
           if [ -n "${{ inputs.subdomain }}" ]; then
             FULL_DOMAIN="${{ inputs.subdomain }}.${{ inputs.domain }}"
@@ -171,12 +194,36 @@ jobs:
             FULL_DOMAIN="${{ inputs.domain }}"
           fi
           
-          # Check if certificate already exists
-          if ! flyctl certs list --app ${{ inputs.app-name }} | grep -q "$FULL_DOMAIN"; then
+          # Check if certificate already exists and its status
+          CERT_EXISTS=$(flyctl certs list --app ${{ inputs.app-name }} | grep -q "$FULL_DOMAIN" && echo "true" || echo "false")
+          CERT_STATUS="unknown"
+          SKIP_CERT_CREATION="false"
+          
+          if [ "$CERT_EXISTS" == "true" ]; then
+            echo "Certificate exists for $FULL_DOMAIN, checking status..."
+            CERT_STATUS_OUTPUT=$(flyctl certs show $FULL_DOMAIN --app ${{ inputs.app-name }} --json 2>/dev/null || echo "{}")
+            
+            if echo "$CERT_STATUS_OUTPUT" | jq . >/dev/null 2>&1; then
+              CERT_STATUS=$(echo "$CERT_STATUS_OUTPUT" | jq -r '.status // "unknown"')
+              echo "Current certificate status: $CERT_STATUS"
+              
+              if [ "$CERT_STATUS" == "Ready" ] || [ "$CERT_STATUS" == "ready" ]; then
+                echo "✅ SSL certificate is already ready for $FULL_DOMAIN, skipping creation"
+                SKIP_CERT_CREATION="true"
+              elif [ "$CERT_STATUS" == "Error" ] || [ "$CERT_STATUS" == "error" ]; then
+                echo "❌ Certificate is in error state, will recreate"
+                flyctl certs delete $FULL_DOMAIN --app ${{ inputs.app-name }} --yes || true
+                sleep 5
+              else
+                echo "⏳ Certificate exists but is not ready (status: $CERT_STATUS), will monitor existing one"
+                SKIP_CERT_CREATION="true"
+              fi
+            fi
+          fi
+          
+          if [ "$SKIP_CERT_CREATION" == "false" ]; then
             echo "Creating SSL certificate for $FULL_DOMAIN"
             flyctl certs create $FULL_DOMAIN --app ${{ inputs.app-name }}
-          else
-            echo "SSL certificate already exists for $FULL_DOMAIN"
           fi
           
           # Get ACME challenge info
@@ -211,14 +258,16 @@ jobs:
             fi
           fi
           
-          # Wait for certificate to be ready with better error handling
-          echo "Waiting for SSL certificate to be ready..."
-          MAX_WAIT=600  # 10 minutes
-          ELAPSED=0
-          RETRY_COUNT=0
-          MAX_RETRIES=3
-          
-          while [ $ELAPSED -lt $MAX_WAIT ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          # Only wait for certificate if we created one or it's not already ready
+          if [ "$SKIP_CERT_CREATION" == "false" ] || [ "$CERT_STATUS" != "Ready" ] && [ "$CERT_STATUS" != "ready" ]; then
+            echo "⏳ Waiting for SSL certificate to be ready..."
+            CERT_WAIT_START=$(date +%s)
+            MAX_WAIT=300  # 5 minutes
+            ELAPSED=0
+            RETRY_COUNT=0
+            MAX_RETRIES=3
+            
+            while [ $ELAPSED -lt $MAX_WAIT ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             # Check certificate status with error handling
             CERT_OUTPUT=$(flyctl certs show $FULL_DOMAIN --app ${{ inputs.app-name }} --json 2>&1)
             
@@ -252,10 +301,27 @@ jobs:
               fi
             fi
             
-            sleep 15
-            ELAPSED=$((ELAPSED + 15))
+            sleep 30
+            ELAPSED=$((ELAPSED + 30))
           done
           
-          if [ $ELAPSED -ge $MAX_WAIT ] || [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-            echo "::warning::Certificate setup timed out or failed after retries. Certificate may still be processing."
+            CERT_WAIT_END=$(date +%s)
+            if [ $ELAPSED -ge $MAX_WAIT ] || [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "::warning::Certificate setup timed out or failed after retries. Certificate may still be processing."
+              echo "⏱️ Certificate wait time: $((CERT_WAIT_END - CERT_WAIT_START))s (timeout after ${MAX_WAIT}s)"
+            else
+              echo "✅ SSL certificate is ready after $((CERT_WAIT_END - CERT_WAIT_START))s"
+            fi
+          else
+            echo "✅ SSL certificate is already ready, skipping wait"
           fi
+          
+          # Final timing summary
+          SSL_END_TIME=$(date +%s)
+          SSL_TOTAL_TIME=$((SSL_END_TIME - SSL_START_TIME))
+          
+          echo ""
+          echo "📊 === SSL Configuration Performance Summary ==="
+          echo "🕐 Total SSL setup time: ${SSL_TOTAL_TIME}s"
+          echo "🔒 SSL configuration completed at $(date)"
+          echo "==============================================="

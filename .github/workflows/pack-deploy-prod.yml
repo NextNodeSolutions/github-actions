@@ -46,6 +46,11 @@ on:
         required: false
         default: '1024'
         type: string
+      configure-ssl:
+        description: 'Configure SSL certificate and DNS (can be skipped to avoid GitHub Actions timeout)'
+        required: false
+        default: true
+        type: boolean
     secrets:
       FLY_API_TOKEN:
         required: true
@@ -54,7 +59,7 @@ on:
     outputs:
       deployed-url:
         description: 'Deployed application URL'
-        value: ${{ jobs.dns.outputs.custom-url || jobs.deploy.outputs.fly-url }}
+        value: ${{ (inputs.configure-ssl && inputs.domain != '' && jobs.dns.outputs.custom-url) || jobs.deploy.outputs.fly-url }}
 
 jobs:
   quality-checks:
@@ -88,9 +93,9 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       
   dns:
-    name: DNS
+    name: DNS & SSL
     needs: [deploy]
-    if: needs.deploy.result == 'success' && inputs.domain != ''
+    if: needs.deploy.result == 'success' && inputs.domain != '' && inputs.configure-ssl
     uses: NextNodeSolutions/github-actions/.github/workflows/job-dns-cloudflare.yml@main
     with:
       domain: ${{ inputs.domain }}
@@ -114,12 +119,26 @@ jobs:
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Quality Checks | ${{ needs.quality-checks.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| DNS | ${{ needs.dns.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          
+          # DNS & SSL status with explanation
+          DNS_STATUS="${{ needs.dns.result || 'skipped' }}"
+          if [[ "${{ inputs.configure-ssl }}" == "false" ]]; then
+            DNS_STATUS="skipped (disabled)"
+          elif [[ -z "${{ inputs.domain }}" ]]; then
+            DNS_STATUS="skipped (no domain)"
+          fi
+          echo "| DNS & SSL | $DNS_STATUS |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ needs.deploy.result }}" == "success" ]]; then
-            if [[ -n "${{ inputs.domain }}" ]]; then
+            # Determine final URL
+            if [[ "${{ inputs.configure-ssl }}" == "true" ]] && [[ -n "${{ inputs.domain }}" ]] && [[ "${{ needs.dns.result }}" == "success" ]]; then
               echo "✅ **Deployed to:** https://${{ inputs.domain }}" >> $GITHUB_STEP_SUMMARY
+              echo "🔒 **SSL configured:** Certificate and DNS configured" >> $GITHUB_STEP_SUMMARY
+            elif [[ -n "${{ inputs.domain }}" ]] && [[ "${{ inputs.configure-ssl }}" == "false" ]]; then
+              echo "✅ **Deployed to:** https://${{ inputs.app-name }}.fly.dev" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ **SSL skipped:** You can configure SSL manually later or re-run with configure-ssl=true" >> $GITHUB_STEP_SUMMARY
+              echo "💡 **Custom domain:** Configure DNS manually to point ${{ inputs.domain }} to your Fly.io app" >> $GITHUB_STEP_SUMMARY
             else
               echo "✅ **Deployed to:** https://${{ inputs.app-name }}.fly.dev" >> $GITHUB_STEP_SUMMARY
             fi
