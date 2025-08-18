@@ -41,6 +41,11 @@ on:
         required: false
         default: 'develop'
         type: string
+      app-env:
+        description: 'Application environment (LOCAL/DEV/PROD)'
+        required: false
+        default: 'DEV'
+        type: string
     secrets:
       FLY_API_TOKEN:
         required: true
@@ -77,6 +82,7 @@ jobs:
       app-name: ${{ inputs.app-name }}
       fly-org: ${{ inputs.fly-org }}
       checkout-ref: ${{ inputs.checkout-ref }}
+      app-env: ${{ inputs.app-env }}
     secrets:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       

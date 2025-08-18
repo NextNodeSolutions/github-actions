@@ -45,6 +45,11 @@ on:
         required: false
         default: ''
         type: string
+      app-env:
+        description: 'Application environment (LOCAL/DEV/PROD)'
+        required: false
+        default: ''
+        type: string
     secrets:
       FLY_API_TOKEN:
         required: true
@@ -108,11 +113,17 @@ jobs:
             sed -i "s/memory_mb = .*/memory_mb = ${{ inputs.memory-mb }}/" $TEMP_CONFIG
           fi
           
-          # Deploy with appropriate strategy
+          # Deploy with appropriate strategy and APP_ENV if provided
+          DEPLOY_ARGS="--config $TEMP_CONFIG"
+          
+          if [ -n "${{ inputs.app-env }}" ]; then
+            DEPLOY_ARGS="$DEPLOY_ARGS --env APP_ENV=${{ inputs.app-env }}"
+          fi
+          
           if [ "${{ inputs.strategy }}" == "bluegreen" ]; then
-            flyctl deploy --config $TEMP_CONFIG --wait-timeout=15m --strategy=bluegreen
+            flyctl deploy $DEPLOY_ARGS --wait-timeout=15m --strategy=bluegreen
           else
-            flyctl deploy --config $TEMP_CONFIG --wait-timeout=10m
+            flyctl deploy $DEPLOY_ARGS --wait-timeout=10m
           fi
           
           rm $TEMP_CONFIG
