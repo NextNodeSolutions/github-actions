@@ -13,22 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Test setup-node action
-        uses: ./actions/setup-node
+      - name: Test setup-environment action
+        uses: ./actions/setup-environment
         with:
           node-version: '20'
+          pnpm-version: '10.11.0'
+          install-deps: 'false'
           
       - name: Verify Node.js version
         run: |
           NODE_VERSION=$(node --version)
           echo "Node.js version: $NODE_VERSION"
           [[ "$NODE_VERSION" == *"v20"* ]] || exit 1
-          
-      - name: Test setup-pnpm action
-        uses: ./actions/setup-pnpm
-        with:
-          version: '10.11.0'
-          install-deps: 'false'
           
       - name: Verify pnpm version
         run: |

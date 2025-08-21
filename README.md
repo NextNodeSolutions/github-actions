@@ -1,34 +1,27 @@
 # NextNode GitHub Actions
 
-Centralized GitHub Actions for NextNode projects. This repository provides reusable workflows and actions to ensure consistency across all NextNode projects.
+Centralized, reusable GitHub Actions for NextNode projects following DRY and KISS principles.
 
 ## 🎯 Design Principles
 
-- **Zero Logic in Templates**: Project templates only import actions, no logic
-- **Modular Design**: Import individual jobs or complete workflow packs
-- **Branch-aware**: Smart behavior to reduce noise in PRs
-- **Fully Parameterized**: Extensive configuration options for flexibility
+- **DRY (Don't Repeat Yourself)**: Shared logic centralized in composite actions
+- **KISS (Keep It Simple)**: Minimal complexity, maximum clarity
+- **Single Responsibility**: Each action has one clear purpose
+- **Composability**: Actions can be combined for complex workflows
+- **Performance Optimized**: Fast CI/CD execution with smart caching
 
 ## 📁 Repository Structure
 
 ```
 github-actions/
 ├── actions/              # Reusable composite actions
-│   ├── setup-node/      # Node.js setup with caching
-│   ├── setup-pnpm/      # pnpm setup and dependency installation
-│   └── setup-environment/ # Complete environment setup
-└── .github/workflows/    # All reusable workflows (top-level only)
-    ├── job-lint.yml      # Individual linting job
-    ├── job-typecheck.yml # Individual type checking job
-    ├── job-test.yml      # Individual testing job
-    ├── job-build.yml     # Individual build job
-    ├── job-security.yml  # Individual security job
-    ├── job-deploy-fly.yml # Individual Fly.io deployment job
-    ├── job-dns-cloudflare.yml # Individual DNS management job
-    ├── pack-quality-checks.yml # Quality checks pack (lint+type+test+build)
-    ├── pack-deploy-dev.yml     # Full dev deployment pack
-    ├── pack-deploy-prod.yml    # Full prod deployment pack
-    └── test-actions.yml  # Internal testing workflow
+│   ├── setup-environment/    # Complete environment setup (Node.js + pnpm)
+│   ├── quality-pipeline/     # Comprehensive quality checks
+│   ├── setup-node/           # [DEPRECATED] Use setup-environment
+│   └── setup-pnpm/           # [DEPRECATED] Use setup-environment
+├── config/               # Centralized configuration
+│   └── defaults.yml     # Default values for all actions
+└── .github/workflows/    # Reusable workflows
 ```
 
 ## ⚙️ Repository Setup
@@ -42,46 +35,85 @@ github-actions/
 
 ## 🚀 Quick Start
 
-### Using Individual Jobs
+### Pull Request Testing
 
 ```yaml
-name: Tests
+name: Test
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 
 jobs:
-  lint:
-    uses: NextNodeSolutions/github-actions/.github/workflows/job-lint.yml@main
-    with:
-      node-version: '22'
-      pnpm-version: '10.11.0'
-      
-  test:
-    uses: NextNodeSolutions/github-actions/.github/workflows/job-test.yml@main
-    with:
-      coverage: true
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          path: .github-actions
+          sparse-checkout: actions
+      - uses: ./.github-actions/actions/quality-pipeline
 ```
 
-### Using Workflow Packs
+### Release Workflow
 
 ```yaml
-name: CI/CD
+name: Release
 on:
   push:
-    branches: [develop]
+    branches: [main]
 
 jobs:
-  deploy:
-    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-dev.yml@main
-    with:
-      app-name: 'dev-myapp'
-      fly-org: 'nextnode'
-      domain: 'myapp.com'
-    secrets: inherit
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          path: .github-actions
+          sparse-checkout: actions
+      - uses: ./.github-actions/actions/quality-pipeline
+      - uses: changesets/action@v1
+        with:
+          publish: pnpm changeset:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-## 📋 Workflow Reference
+## 📋 Available Actions
+
+### `setup-environment`
+Complete environment setup with Node.js, pnpm, and optional dependency installation.
+
+```yaml
+- uses: ./.github-actions/actions/setup-environment
+  with:
+    node-version: '20'        # default: '20'
+    pnpm-version: '10.11.0'   # default: '10.11.0'
+    install-deps: 'true'      # default: 'true'
+    frozen-lockfile: 'true'   # default: 'true'
+    working-directory: '.'    # default: '.'
+```
+
+### `quality-pipeline`
+Comprehensive quality checks including lint, type-check, test, and build.
+
+```yaml
+- uses: ./.github-actions/actions/quality-pipeline
+  with:
+    node-version: '20'        # default: '20'
+    pnpm-version: '10.11.0'   # default: '10.11.0'
+    skip-tests: 'false'       # default: 'false'
+    skip-build: 'false'       # default: 'false'
+    skip-audit: 'false'       # default: 'false'
+    audit-level: 'high'       # default: 'high'
+    working-directory: '.'    # default: '.'
+```
+
+## 📋 Legacy Workflow Reference
 
 ### Individual Jobs
 

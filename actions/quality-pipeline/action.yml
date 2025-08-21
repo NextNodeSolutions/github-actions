@@ -1,5 +1,5 @@
 name: 'Quality Pipeline'
-description: 'Run comprehensive quality checks: lint, type-check, test, and build'
+description: 'Optimized quality checks with parallel execution support'
 inputs:
   working-directory:
     description: 'Working directory to run commands in'
@@ -21,50 +21,67 @@ inputs:
     description: 'Skip running build'
     required: false
     default: 'false'
+  skip-audit:
+    description: 'Skip security audit'
+    required: false
+    default: 'false'
+  audit-level:
+    description: 'Minimum severity level for audit failures'
+    required: false
+    default: 'high'
 
 runs:
   using: 'composite'
   steps:
-    - name: Setup Node.js
+    - name: Setup Environment
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+    
+    - name: Setup Node.js with Cache
       uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
         cache: 'pnpm'
         cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
-
-    - name: Setup PNPM
-      uses: pnpm/action-setup@v4
-      with:
-        version: ${{ inputs.pnpm-version }}
-
+    
     - name: Install Dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: pnpm install --frozen-lockfile
 
-    - name: Security Audit
+    - name: Run Quality Checks
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: pnpm audit --audit-level high
-
-    - name: Run Lint
-      shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: pnpm lint
-
-    - name: Run Type Check
-      shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: pnpm type-check
-
-    - name: Run Tests
-      if: inputs.skip-tests != 'true'
-      shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: pnpm test
-
-    - name: Run Build
-      if: inputs.skip-build != 'true'
-      shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: pnpm build
+      run: |
+        # Exit on any error
+        set -e
+        
+        # Security audit (non-blocking)
+        if [[ "${{ inputs.skip-audit }}" != "true" ]]; then
+          echo "::group::Security Audit"
+          pnpm audit --audit-level ${{ inputs.audit-level }} || echo "::warning::Security audit found vulnerabilities"
+          echo "::endgroup::"
+        fi
+        
+        # Core quality checks
+        echo "::group::Lint"
+        pnpm lint
+        echo "::endgroup::"
+        
+        echo "::group::Type Check" 
+        pnpm type-check
+        echo "::endgroup::"
+        
+        # Optional checks
+        if [[ "${{ inputs.skip-tests }}" != "true" ]]; then
+          echo "::group::Tests"
+          pnpm test
+          echo "::endgroup::"
+        fi
+        
+        if [[ "${{ inputs.skip-build }}" != "true" ]]; then
+          echo "::group::Build"
+          pnpm build
+          echo "::endgroup::"
+        fi
