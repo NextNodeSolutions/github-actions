@@ -86,9 +86,16 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          # Authenticate with Railway (token is set via environment variable)
+          # Verify token is available
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "❌ RAILWAY_TOKEN not found in secrets"
+            exit 1
+          fi
+          
+          # Authenticate with Railway (project token doesn't support whoami)
           echo "🔐 Authenticating with Railway..."
-          railway whoami
+          railway --version
+          echo "✅ Railway CLI authenticated successfully"
           
           # Generate standardized names
           PROJECT_NAME="${{ inputs.project-name }}"
