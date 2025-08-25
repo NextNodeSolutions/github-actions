@@ -21,6 +21,10 @@ inputs:
     description: 'Working directory'
     required: false
     default: '.'
+  enable-cache:
+    description: 'Enable pnpm cache'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -34,8 +38,8 @@ runs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        cache: 'pnpm'
-        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+        cache: ${{ inputs.enable-cache == 'true' && 'pnpm' || '' }}
+        cache-dependency-path: ${{ inputs.enable-cache == 'true' && format('{0}/pnpm-lock.yaml', inputs.working-directory) || '' }}
         
     - name: Install dependencies
       if: inputs.install-deps == 'true'

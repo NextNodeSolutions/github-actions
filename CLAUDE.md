@@ -13,8 +13,12 @@ This is a **reusable GitHub Actions repository** for NextNode projects. It provi
 github-actions/
 ├── actions/                    # Composite actions (building blocks)
 │   ├── setup-environment/     # Complete environment setup
-│   ├── setup-node/           # Node.js setup with caching
-│   └── setup-pnpm/           # pnpm setup and dependency installation
+│   ├── composite-pipeline/    # All-in-one pipeline with setup + quality
+│   └── quality-pipeline/      # Optimized quality checks
+├── config/                     # Configuration defaults
+│   └── defaults.yml
+├── workflow-templates/         # Template workflows
+│   └── library-ci.yml
 └── .github/workflows/         # Reusable workflows
     ├── job-*.yml             # Individual job workflows
     └── pack-*.yml            # Workflow packs (combined jobs)
@@ -67,18 +71,36 @@ done
 ## Key Implementation Details
 
 ### Composite Actions
-All composite actions follow a consistent pattern:
-- Use `actions/setup-node@v4` with caching
-- Support configurable Node.js/pnpm versions
-- Default to Node 22 and pnpm 10.11.0
-- Include working directory support
+
+#### `setup-environment/`
+Basic environment setup with Node.js, pnpm, and dependency installation:
+- Configurable Node.js/pnpm versions (default: Node 20, pnpm 10.11.0)
+- Optional dependency installation with frozen lockfile
+- Working directory support
+
+#### `composite-pipeline/`
+All-in-one pipeline combining environment setup and quality checks:
+- JSON array of commands to run (e.g., `["lint", "type-check", "test", "build"]`)
+- Built-in security audit with configurable severity levels
+- Single action for complete CI pipeline
+
+#### `quality-pipeline/`
+Optimized quality checks with parallel execution support:
+- Core checks: lint and type-check (always run)
+- Optional: tests and build (can be skipped)
+- Non-blocking security audit with warnings
+- Grouped output for better readability
 
 ### Workflow Parameters
 All workflows accept standard parameters:
-- `node-version` (default: '22')
+- `node-version` (default: '20')
 - `pnpm-version` (default: '10.11.0')
 - `working-directory` (default: '.')
 - Custom command overrides for each job type
+
+#### Additional Parameters for Composite Actions:
+- `composite-pipeline`: `commands` (JSON array), `audit-level`, `skip-audit`
+- `quality-pipeline`: `skip-tests`, `skip-build`, `skip-audit`, `audit-level`
 
 ### Security Requirements
 When using deployment workflows, these secrets must be configured:

@@ -60,7 +60,7 @@ jobs:
   quality-checks:
     name: QA
     if: inputs.run-quality-checks
-    uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
+    uses: ./.github/workflows/pack-quality-checks.yml
     with:
       run-lint: true
       run-typecheck: true
@@ -76,7 +76,7 @@ jobs:
     name: Fly.io
     needs: [quality-checks]
     if: always() && (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
-    uses: NextNodeSolutions/github-actions/.github/workflows/job-deploy-fly.yml@main
+    uses: ./.github/workflows/job-deploy-fly.yml
     with:
       environment: development
       app-name: ${{ inputs.app-name }}
@@ -90,7 +90,7 @@ jobs:
     name: DNS
     needs: [deploy]
     if: needs.deploy.result == 'success' && inputs.domain != ''
-    uses: NextNodeSolutions/github-actions/.github/workflows/job-dns-cloudflare.yml@main
+    uses: ./.github/workflows/job-dns-cloudflare.yml
     with:
       domain: ${{ inputs.domain }}
       subdomain: 'dev'
