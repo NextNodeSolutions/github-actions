@@ -47,7 +47,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         
-      - uses: ./actions/setup-environment
+      - uses: NextNodeSolutions/github-actions/actions/setup-environment@main
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
