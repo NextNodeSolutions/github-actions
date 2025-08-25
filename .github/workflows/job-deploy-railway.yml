@@ -64,7 +64,8 @@ jobs:
   deploy:
     name: Deploy to Railway
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    # Temporarily remove environment for testing - org secrets should be accessible
+    # environment: ${{ inputs.environment }}
     outputs:
       railway-url: ${{ steps.deploy-info.outputs.railway-url }}
       deployed: ${{ steps.deploy-info.outputs.deployed }}
