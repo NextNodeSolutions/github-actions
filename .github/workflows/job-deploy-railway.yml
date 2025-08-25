@@ -85,9 +85,9 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          # Login to Railway
+          # Authenticate with Railway (token is set via environment variable)
           echo "🔐 Authenticating with Railway..."
-          railway login --token $RAILWAY_TOKEN
+          railway whoami
           
           # Generate standardized names
           PROJECT_NAME="${{ inputs.project-name }}"
