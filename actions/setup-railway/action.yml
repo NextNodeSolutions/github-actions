@@ -1,0 +1,50 @@
+name: 'Setup Railway'
+description: 'Setup Railway CLI and authenticate'
+inputs:
+  railway-token:
+    description: 'Railway API token'
+    required: true
+  project-id:
+    description: 'Railway project ID'
+    required: false
+    default: ''
+  service-name:
+    description: 'Railway service name'
+    required: false
+    default: ''
+  environment:
+    description: 'Railway environment'
+    required: false
+    default: 'production'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Railway CLI
+      shell: bash
+      run: |
+        npm install -g @railway/cli
+        
+    - name: Authenticate with Railway
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway-token }}
+      run: |
+        railway login --token $RAILWAY_TOKEN
+        
+    - name: Link to project and service
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway-token }}
+      run: |
+        if [ -n "${{ inputs.project-id }}" ]; then
+          railway link ${{ inputs.project-id }}
+          
+          if [ -n "${{ inputs.service-name }}" ]; then
+            railway service --name ${{ inputs.service-name }}
+          fi
+          
+          if [ -n "${{ inputs.environment }}" ] && [ "${{ inputs.environment }}" != "production" ]; then
+            railway environment --name ${{ inputs.environment }}
+          fi
+        fi

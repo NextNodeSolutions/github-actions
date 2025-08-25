@@ -1,0 +1,150 @@
+name: Deploy to Railway
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment (development/production)'
+        required: true
+        type: string
+      project-id:
+        description: 'Railway project ID'
+        required: true
+        type: string
+      service-name:
+        description: 'Railway service name'
+        required: false
+        default: ''
+        type: string
+      railway-environment:
+        description: 'Railway environment'
+        required: false
+        default: 'production'
+        type: string
+      health-check-url:
+        description: 'URL for health check'
+        required: false
+        default: ''
+        type: string
+      checkout-ref:
+        description: 'Git ref to checkout'
+        required: false
+        default: ''
+        type: string
+      app-env:
+        description: 'Application environment (LOCAL/DEV/PROD)'
+        required: false
+        default: ''
+        type: string
+      deploy-detach:
+        description: 'Deploy without waiting for completion'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      RAILWAY_TOKEN:
+        required: true
+    outputs:
+      railway-url:
+        description: 'Deployed application URL'
+        value: ${{ jobs.deploy.outputs.railway-url }}
+      deployed:
+        description: 'Deployment status'
+        value: ${{ jobs.deploy.outputs.deployed }}
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      railway-url: ${{ steps.deploy-info.outputs.railway-url }}
+      deployed: ${{ steps.deploy-info.outputs.deployed }}
+      
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout-ref || github.ref }}
+          
+      - name: Setup Railway CLI
+        uses: ./actions/setup-railway
+        with:
+          railway-token: ${{ secrets.RAILWAY_TOKEN }}
+          project-id: ${{ inputs.project-id }}
+          service-name: ${{ inputs.service-name }}
+          environment: ${{ inputs.railway-environment }}
+          
+      - name: Set environment variables
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.app-env }}" ]; then
+            railway variables set APP_ENV="${{ inputs.app-env }}"
+          fi
+          
+      - name: Deploy application
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ "${{ inputs.deploy-detach }}" == "true" ]; then
+            railway up --detach
+          else
+            railway up
+          fi
+          
+      - name: Get deployment URL
+        id: get-url
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          # Get the service domain
+          DOMAIN=$(railway domain | grep -E '\.railway\.app$|\.up\.railway\.app$' | head -1 | sed 's/^[[:space:]]*//')
+          
+          if [ -n "$DOMAIN" ]; then
+            echo "railway-url=https://$DOMAIN" >> $GITHUB_OUTPUT
+          else
+            # If no custom domain, try to get from service info
+            SERVICE_URL=$(railway service | grep -i "domain\|url" | head -1 | awk '{print $NF}')
+            if [ -n "$SERVICE_URL" ]; then
+              echo "railway-url=$SERVICE_URL" >> $GITHUB_OUTPUT
+            else
+              echo "railway-url=" >> $GITHUB_OUTPUT
+            fi
+          fi
+          
+      - name: Health check
+        run: |
+          sleep 30
+          URL="${{ inputs.health-check-url }}"
+          if [ -z "$URL" ]; then
+            URL="${{ steps.get-url.outputs.railway-url }}"
+          fi
+          
+          if [ -z "$URL" ]; then
+            echo "⚠️ No URL available for health check"
+            exit 0
+          fi
+          
+          MAX_RETRIES=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            if curl -f -s --max-time 30 "$URL" > /dev/null; then
+              echo "✅ Health check passed"
+              break
+            elif [ $i -eq $MAX_RETRIES ]; then
+              echo "❌ Health check failed after $MAX_RETRIES attempts"
+              if [ "${{ inputs.environment }}" == "production" ]; then
+                echo "⚠️ Production deployment health check failed - manual intervention may be required"
+                exit 1
+              else
+                echo "⚠️ Development deployment health check failed - continuing anyway"
+              fi
+            fi
+            echo "🔄 Health check attempt $i failed, retrying..."
+            sleep 30
+          done
+          
+      - name: Set deployment info
+        id: deploy-info
+        run: |
+          echo "railway-url=${{ steps.get-url.outputs.railway-url }}" >> $GITHUB_OUTPUT
+          echo "deployed=true" >> $GITHUB_OUTPUT
