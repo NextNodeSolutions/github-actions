@@ -34,6 +34,9 @@ jobs:
     name: '🔒 Security'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
       - uses: NextNodeSolutions/github-actions/actions/setup-environment@main
         with:
           node-version: ${{ inputs.node-version }}
