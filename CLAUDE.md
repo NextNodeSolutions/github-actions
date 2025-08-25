@@ -171,10 +171,9 @@ jobs:
   deploy-dev:
     uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
     with:
-      project-id: ${{ vars.RAILWAY_PROJECT_ID }}
-      service-name: my-service-dev
-      railway-environment: development
-      configure-dns: false
+      app-name: "nextnode-front"  # Simple! Auto-generates "dev-nextnode-front"
+      # project-name: optional, defaults to repository name
+      # domain: optional, for custom domain setup
     secrets:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 ```
@@ -230,9 +229,18 @@ Railway workflows support custom commands:
 ```yaml
 - uses: ./.github/workflows/pack-deploy-railway-dev.yml@main
   with:
-    service-name: my-app
-    custom-build-command: "pnpm build"
-    custom-start-command: "pnpm start"
+    app-name: "my-app"              # Generates "dev-my-app" 
+    build-command: "pnpm build"     # Custom build command
+    start-command: "pnpm start"     # Custom start command
+```
+
+#### Production Deployment Example
+```yaml
+- uses: ./.github/workflows/pack-deploy-railway-prod.yml@main
+  with:
+    app-name: "nextnode-front"      # Generates "prod-nextnode-front"
+    domain: "nextnode.com"          # Custom domain configuration
+    require-approval: true         # Manual approval for production
 ```
 
 ### Cost Comparison Example
