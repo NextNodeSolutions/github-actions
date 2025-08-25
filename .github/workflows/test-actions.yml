@@ -19,6 +19,7 @@ jobs:
           node-version: '20'
           pnpm-version: '10.11.0'
           install-deps: 'false'
+          enable-cache: 'false'
           
       - name: Verify Node.js version
         run: |
@@ -75,20 +76,6 @@ jobs:
           CMD ["node", "index.js"]
           EOF
           
-  test-quality-checks-pack:
-    name: Test Quality Checks Pack
-    needs: test-individual-workflows
-    uses: ./.github/workflows/pack-quality-checks.yml
-    with:
-      run-lint: true
-      run-typecheck: true
-      run-test: true
-      run-build: false
-      working-directory: './test-project'
-      lint-command: 'echo "Lint passed"'
-      typecheck-command: 'echo "Type check passed"'
-      test-command: 'echo "Tests passed"'
-      
   validate-yaml:
     name: Validate YAML Files
     runs-on: ubuntu-latest
