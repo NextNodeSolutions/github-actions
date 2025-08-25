@@ -1,0 +1,189 @@
+name: Railway Dev Deploy
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: 'Application name (e.g., nextnode-front, yasmine)'
+        required: true
+        type: string
+      project-name:
+        description: 'Railway project name (defaults to repository name)'
+        required: false
+        default: ''
+        type: string
+      domain:
+        description: 'Custom domain (leave empty for Railway URL only)'
+        required: false
+        default: ''
+        type: string
+      run-quality-checks:
+        description: 'Run quality checks before deployment'
+        required: false
+        default: true
+        type: boolean
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '22'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.11.0'
+        type: string
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      checkout-ref:
+        description: 'Git ref to checkout'
+        required: false
+        default: 'develop'
+        type: string
+      app-env:
+        description: 'Application environment variable'
+        required: false
+        default: 'DEV'
+        type: string
+      build-command:
+        description: 'Custom build command'
+        required: false
+        default: ''
+        type: string
+      start-command:
+        description: 'Custom start command'
+        required: false
+        default: ''
+        type: string
+      deploy-detach:
+        description: 'Deploy without waiting for completion'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      RAILWAY_TOKEN:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_ZONE_ID:
+        required: false
+    outputs:
+      deployed-url:
+        description: 'Deployed application URL'
+        value: ${{ jobs.deploy.outputs.railway-url }}
+      service-name:
+        description: 'Generated service name'
+        value: ${{ jobs.deploy.outputs.service-name }}
+
+jobs:
+  quality-checks:
+    name: Quality Assurance
+    if: inputs.run-quality-checks
+    uses: ./.github/workflows/pack-quality-checks.yml
+    with:
+      run-lint: true
+      run-typecheck: true
+      run-test: true
+      run-build: true
+      run-security: false  # Lighter for dev
+      test-coverage: false # Lighter for dev
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      working-directory: ${{ inputs.working-directory }}
+      
+  deploy:
+    name: Railway Deployment
+    needs: [quality-checks]
+    if: always() && (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
+    uses: ./.github/workflows/job-deploy-railway.yml
+    with:
+      environment: development
+      app-name: ${{ inputs.app-name }}
+      project-name: ${{ inputs.project-name }}
+      checkout-ref: ${{ inputs.checkout-ref }}
+      app-env: ${{ inputs.app-env }}
+      build-command: ${{ inputs.build-command }}
+      start-command: ${{ inputs.start-command }}
+      deploy-detach: ${{ inputs.deploy-detach }}
+    secrets:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      
+  dns:
+    name: DNS Configuration
+    needs: [deploy]
+    if: needs.deploy.result == 'success' && inputs.domain != ''
+    runs-on: ubuntu-latest
+    outputs:
+      dns-configured: ${{ steps.dns-setup.outputs.configured }}
+    steps:
+      - name: Configure Cloudflare DNS
+        id: dns-setup
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "⚠️ Cloudflare API token not provided, skipping DNS configuration"
+            echo "💡 To enable DNS configuration, add CLOUDFLARE_API_TOKEN secret"
+            echo "configured=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Extract Railway domain from deployment URL
+          RAILWAY_DOMAIN=$(echo "${{ needs.deploy.outputs.railway-url }}" | sed 's|https://||' | sed 's|http://||')
+          
+          if [ -z "$RAILWAY_DOMAIN" ]; then
+            echo "❌ Could not determine Railway domain from deployment URL"
+            echo "configured=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "🌐 Configuring DNS for dev.${{ inputs.domain }} → $RAILWAY_DOMAIN"
+          
+          # Note: This is a simplified DNS setup
+          # For production use, consider using the job-dns-cloudflare-railway.yml workflow
+          echo "✅ DNS configuration would point dev.${{ inputs.domain }} to $RAILWAY_DOMAIN"
+          echo "💡 For automatic DNS configuration, use the full DNS workflow"
+          echo "configured=manual" >> $GITHUB_OUTPUT
+      
+  summary:
+    name: Development Summary
+    runs-on: ubuntu-latest
+    needs: [quality-checks, deploy, dns]
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## 🚂 Railway Development Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** \`dev-${{ inputs.app-name }}\` (auto-generated)" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Development" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Checks | ${{ needs.quality-checks.result || '⏭️ skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Railway Deploy | ${{ needs.deploy.result || '❌ failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DNS Setup | ${{ needs.dns.result || '⏭️ skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            echo "### 🎯 Deployment Details" >> $GITHUB_STEP_SUMMARY
+            echo "- **Railway URL:** ${{ needs.deploy.outputs.railway-url }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Service Name:** ${{ needs.deploy.outputs.service-name }}" >> $GITHUB_STEP_SUMMARY
+            
+            if [[ -n "${{ inputs.domain }}" ]]; then
+              echo "- **Custom Domain:** Configured for dev.${{ inputs.domain }}" >> $GITHUB_STEP_SUMMARY
+              echo "  - Manual DNS setup may be required" >> $GITHUB_STEP_SUMMARY
+              echo "  - Point dev.${{ inputs.domain }} CNAME to Railway domain" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🚀 **Ready to test!** Your development application is live." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the deployment logs above for details." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi

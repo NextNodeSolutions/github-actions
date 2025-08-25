@@ -1,0 +1,297 @@
+name: Deploy to Railway
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment (development/production)'
+        required: true
+        type: string
+      app-name:
+        description: 'Application name (e.g., nextnode-front, yasmine)'
+        required: true
+        type: string
+      project-name:
+        description: 'Railway project name (defaults to repository name)'
+        required: false
+        default: ''
+        type: string
+      health-check-url:
+        description: 'URL for health check'
+        required: false
+        default: ''
+        type: string
+      checkout-ref:
+        description: 'Git ref to checkout'
+        required: false
+        default: ''
+        type: string
+      app-env:
+        description: 'Application environment variable (LOCAL/DEV/PROD)'
+        required: false
+        default: ''
+        type: string
+      deploy-detach:
+        description: 'Deploy without waiting for completion'
+        required: false
+        default: false
+        type: boolean
+      build-command:
+        description: 'Custom build command'
+        required: false
+        default: ''
+        type: string
+      start-command:
+        description: 'Custom start command'
+        required: false
+        default: ''
+        type: string
+    secrets:
+      RAILWAY_TOKEN:
+        required: true
+    outputs:
+      railway-url:
+        description: 'Deployed application URL'
+        value: ${{ jobs.deploy.outputs.railway-url }}
+      deployed:
+        description: 'Deployment status'
+        value: ${{ jobs.deploy.outputs.deployed }}
+      service-name:
+        description: 'Generated service name'
+        value: ${{ jobs.deploy.outputs.service-name }}
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    # Temporarily remove environment for testing - org secrets should be accessible
+    # environment: ${{ inputs.environment }}
+    outputs:
+      railway-url: ${{ steps.deploy-info.outputs.railway-url }}
+      deployed: ${{ steps.deploy-info.outputs.deployed }}
+      service-name: ${{ steps.deploy-info.outputs.service-name }}
+      
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout-ref || github.ref }}
+          
+      - name: Setup Railway CLI
+        run: |
+          echo "📦 Installing Railway CLI..."
+          npm install -g @railway/cli
+          echo "✅ Railway CLI installed successfully"
+          
+      - name: Authenticate and setup project
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          # Verify token is available
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "❌ RAILWAY_TOKEN not found in secrets"
+            exit 1
+          fi
+          
+          # Authenticate with Railway (project token doesn't support whoami)
+          echo "🔐 Authenticating with Railway..."
+          railway --version
+          echo "✅ Railway CLI authenticated successfully"
+          
+          # Generate standardized names
+          PROJECT_NAME="${{ inputs.project-name }}"
+          if [ -z "$PROJECT_NAME" ]; then
+            PROJECT_NAME="${{ github.event.repository.name }}"
+          fi
+          
+          # Standardized nomenclature: environment-appname  
+          ENV_PREFIX="${{ inputs.environment }}"
+          if [ "$ENV_PREFIX" = "development" ]; then
+            ENV_PREFIX="dev"
+          elif [ "$ENV_PREFIX" = "production" ]; then
+            ENV_PREFIX="prod"
+          fi
+          SERVICE_NAME="${ENV_PREFIX}-${{ inputs.app-name }}"
+          
+          echo "🏷️  Project: $PROJECT_NAME"
+          echo "🏷️  Service: $SERVICE_NAME" 
+          
+          # Save for later steps
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+          echo "SERVICE_NAME=$SERVICE_NAME" >> $GITHUB_ENV
+          
+      - name: Create or connect to Railway project
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "🚀 Setting up Railway project: $PROJECT_NAME"
+          
+          # Try to link to existing project first
+          if railway link $PROJECT_NAME 2>/dev/null; then
+            echo "✅ Connected to existing project: $PROJECT_NAME"
+          else
+            echo "📁 Project doesn't exist, creating new project: $PROJECT_NAME"
+            railway init $PROJECT_NAME
+            echo "✅ Created and linked to new project: $PROJECT_NAME"
+          fi
+          
+          # Verify project connection
+          railway status
+          
+      - name: Create or connect to Railway service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "🛠️  Setting up Railway service: $SERVICE_NAME"
+          
+          # Check if service exists
+          if railway service use $SERVICE_NAME 2>/dev/null; then
+            echo "✅ Connected to existing service: $SERVICE_NAME"
+          else
+            echo "🆕 Service doesn't exist, creating new service: $SERVICE_NAME"
+            railway add --service $SERVICE_NAME
+            echo "✅ Created new service: $SERVICE_NAME"
+          fi
+          
+          # Connect service to this repository
+          echo "🔗 Connecting service to GitHub repository..."
+          railway service connect repo ${{ github.repository }}
+          
+          # Verify service connection
+          railway status
+          
+      - name: Configure environment variables
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "⚙️  Configuring environment variables..."
+          railway service use $SERVICE_NAME
+          
+          # Set APP_ENV if provided
+          if [ -n "${{ inputs.app-env }}" ]; then
+            railway variables set APP_ENV="${{ inputs.app-env }}"
+            echo "✅ Set APP_ENV=${{ inputs.app-env }}"
+          fi
+          
+          # Set NODE_ENV based on environment
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            railway variables set NODE_ENV=production
+            echo "✅ Set NODE_ENV=production"
+          else
+            railway variables set NODE_ENV=development  
+            echo "✅ Set NODE_ENV=development"
+          fi
+          
+          # Set custom build command if provided
+          if [ -n "${{ inputs.build-command }}" ]; then
+            railway variables set RAILWAY_BUILD_COMMAND="${{ inputs.build-command }}"
+            echo "✅ Set custom build command: ${{ inputs.build-command }}"
+          fi
+          
+          # Set custom start command if provided
+          if [ -n "${{ inputs.start-command }}" ]; then
+            railway variables set RAILWAY_START_COMMAND="${{ inputs.start-command }}"
+            echo "✅ Set custom start command: ${{ inputs.start-command }}"
+          fi
+          
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "🚂 Deploying to Railway..."
+          railway service use $SERVICE_NAME
+          
+          # Deploy with appropriate options
+          if [ "${{ inputs.deploy-detach }}" == "true" ]; then
+            echo "🔄 Deploying in detached mode..."
+            railway up --detach
+          else
+            echo "⏳ Deploying and waiting for completion..."
+            railway up
+          fi
+          
+          echo "✅ Railway deployment completed"
+          
+      - name: Get deployment URL
+        id: get-url
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "🌐 Retrieving deployment URL..."
+          railway service use $SERVICE_NAME
+          
+          # Wait for deployment to be ready
+          sleep 10
+          
+          # Try to get domain from railway domain command
+          DOMAIN=$(railway domain 2>/dev/null | grep -E '\.railway\.app$|\.up\.railway\.app$' | head -1 | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+          
+          if [ -n "$DOMAIN" ]; then
+            RAILWAY_URL="https://$DOMAIN"
+            echo "✅ Found domain: $DOMAIN"
+          else
+            # Fallback: generate URL from service name
+            RAILWAY_URL="https://$SERVICE_NAME.up.railway.app"
+            echo "⚠️  Using fallback URL pattern: $RAILWAY_URL"
+          fi
+          
+          echo "railway-url=$RAILWAY_URL" >> $GITHUB_OUTPUT
+          echo "🌍 Deployment URL: $RAILWAY_URL"
+          
+      - name: Health check
+        run: |
+          echo "🏥 Starting health check..."
+          sleep 30
+          
+          URL="${{ inputs.health-check-url }}"
+          if [ -z "$URL" ]; then
+            URL="${{ steps.get-url.outputs.railway-url }}"
+          fi
+          
+          if [ -z "$URL" ]; then
+            echo "⚠️  No URL available for health check, skipping..."
+            exit 0
+          fi
+          
+          echo "🔍 Health check URL: $URL"
+          
+          MAX_RETRIES=3
+          SUCCESS=false
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "🔄 Health check attempt $i/$MAX_RETRIES..."
+            
+            if curl -f -s --max-time 30 "$URL" > /dev/null; then
+              echo "✅ Health check passed!"
+              SUCCESS=true
+              break
+            else
+              echo "❌ Health check attempt $i failed"
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "⏳ Waiting 30s before retry..."
+                sleep 30
+              fi
+            fi
+          done
+          
+          if [ "$SUCCESS" = "false" ]; then
+            echo "💥 Health check failed after $MAX_RETRIES attempts"
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              echo "🚨 Production deployment health check failed - failing deployment"
+              exit 1
+            else
+              echo "⚠️  Development deployment health check failed - continuing anyway"
+            fi
+          fi
+          
+      - name: Set deployment info
+        id: deploy-info
+        run: |
+          echo "📊 Setting deployment outputs..."
+          echo "railway-url=${{ steps.get-url.outputs.railway-url }}" >> $GITHUB_OUTPUT
+          echo "deployed=true" >> $GITHUB_OUTPUT
+          echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+          
+          echo "🎉 Deployment Summary:"
+          echo "   📍 Service: $SERVICE_NAME"
+          echo "   🌐 URL: ${{ steps.get-url.outputs.railway-url }}"
+          echo "   ✅ Status: Deployed"

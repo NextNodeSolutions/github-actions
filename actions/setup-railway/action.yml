@@ -1,0 +1,56 @@
+name: 'Setup Railway CLI'
+description: 'Install and authenticate Railway CLI for automatic project/service management'
+
+inputs:
+  railway-token:
+    description: 'Railway authentication token'
+    required: true
+
+outputs:
+  railway-version:
+    description: 'Railway CLI version'
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Railway CLI
+      shell: bash
+      run: |
+        echo "📦 Installing Railway CLI..."
+        npm install -g @railway/cli
+        echo "✅ Railway CLI installed successfully"
+        
+    - name: Get Railway CLI version
+      id: version
+      shell: bash
+      run: |
+        VERSION=$(railway version)
+        echo "🏷️  Railway CLI version: $VERSION"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+    - name: Authenticate with Railway
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway-token }}
+      run: |
+        echo "🔐 Authenticating with Railway..."
+        railway login --token $RAILWAY_TOKEN
+        echo "✅ Successfully authenticated with Railway"
+        
+    - name: Verify authentication
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ inputs.railway-token }}
+      run: |
+        echo "🔍 Verifying Railway authentication..."
+        
+        # Test authentication by listing projects
+        if railway projects --json > /dev/null 2>&1; then
+          echo "✅ Railway authentication verified successfully"
+        else
+          echo "❌ Railway authentication failed"
+          exit 1
+        fi
+        
+        echo "🚀 Railway CLI is ready for automatic project/service management"
