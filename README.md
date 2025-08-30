@@ -1,6 +1,6 @@
 # NextNode GitHub Actions
 
-Centralized, reusable GitHub Actions for NextNode projects following DRY and KISS principles.
+Reusable GitHub Actions workflows and composite actions for NextNode projects, providing consistent CI/CD automation with Railway deployment support.
 
 ## 🎯 Design Principles
 
@@ -14,14 +14,17 @@ Centralized, reusable GitHub Actions for NextNode projects following DRY and KIS
 
 ```
 github-actions/
-├── actions/              # Reusable composite actions
-│   ├── setup-environment/    # Complete environment setup (Node.js + pnpm)
-│   ├── quality-pipeline/     # Comprehensive quality checks
-│   ├── setup-node/           # [DEPRECATED] Use setup-environment
-│   └── setup-pnpm/           # [DEPRECATED] Use setup-environment
-├── config/               # Centralized configuration
-│   └── defaults.yml     # Default values for all actions
-└── .github/workflows/    # Reusable workflows
+├── actions/                    # Composite actions (building blocks)
+│   ├── setup-environment/     # Complete environment setup
+│   ├── composite-pipeline/    # All-in-one pipeline with setup + quality
+│   └── quality-pipeline/      # Optimized quality checks
+├── config/                     # Configuration defaults
+│   └── defaults.yml
+├── workflow-templates/         # Template workflows
+│   └── railway-cd.yml         # Railway CD template
+└── .github/workflows/         # Reusable workflows
+    ├── job-*.yml             # Individual job workflows
+    └── pack-*.yml            # Workflow packs (combined jobs)
 ```
 
 ## ⚙️ Repository Setup
@@ -35,55 +38,83 @@ github-actions/
 
 ## 🚀 Quick Start
 
-### Pull Request Testing
+### Railway Deployment (Recommended)
 
-```yaml
-name: Test
-on:
-  pull_request:
-    branches: [main]
+Copy the [railway-cd.yml](workflow-templates/railway-cd.yml) template to your project's `.github/workflows/` directory:
 
-jobs:
-  quality:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: NextNodeSolutions/github-actions
-          path: .github-actions
-          sparse-checkout: actions
-      - uses: ./.github-actions/actions/quality-pipeline
+```bash
+mkdir -p .github/workflows
+curl -o .github/workflows/railway-cd.yml https://raw.githubusercontent.com/NextNodeSolutions/github-actions/main/workflow-templates/railway-cd.yml
 ```
 
-### Release Workflow
+### Required Secrets
+
+Add these secrets to your repository or organization:
+
+- **RAILWAY_API_TOKEN** - Your Railway account token for deployments
+
+Optional secrets:
+- **CLOUDFLARE_API_TOKEN** - For custom domain DNS management
+
+### Example Usage
 
 ```yaml
-name: Release
-on:
-  push:
-    branches: [main]
+# Development deployment
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
+with:
+  app-name: "my-app"  # Creates: dev-my-app
+  app-env: "DEV"
+secrets:
+  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
 
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: NextNodeSolutions/github-actions
-          path: .github-actions
-          sparse-checkout: actions
-      - uses: ./.github-actions/actions/quality-pipeline
-      - uses: changesets/action@v1
-        with:
-          publish: pnpm changeset:publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+# Production deployment
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-prod.yml@main
+with:
+  app-name: "my-app"  # Creates: prod-my-app
+  domain: "myapp.com"
+  app-env: "PROD"
+secrets:
+  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
 ```
 
-## 📋 Available Actions
+## 📦 Available Workflows
+
+### Railway Deployment Packs
+
+#### Development Deployment
+```yaml
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
+with:
+  app-name: "my-app"  # Creates: dev-my-app
+  app-env: "DEV"
+  variables: '{"NODE_ENV": "development"}'
+secrets:
+  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+#### Production Deployment
+```yaml
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-prod.yml@main
+with:
+  app-name: "my-app"  # Creates: prod-my-app
+  domain: "myapp.com"
+  app-env: "PROD"
+  memory-mb: "1024"
+  variables: '{"NODE_ENV": "production"}'
+secrets:
+  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+### Quality Checks
+```yaml
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
+with:
+  run-lint: true
+  run-typecheck: true
+  run-test: true
+```
+
+## 📋 Composite Actions
 
 ### `setup-environment`
 Complete environment setup with Node.js, pnpm, and optional dependency installation.
@@ -96,6 +127,19 @@ Complete environment setup with Node.js, pnpm, and optional dependency installat
     install-deps: 'true'      # default: 'true'
     frozen-lockfile: 'true'   # default: 'true'
     working-directory: '.'    # default: '.'
+```
+
+### Railway Deployment
+Use the reusable workflows instead of composite actions for Railway deployment:
+
+```yaml
+# Development deployment
+uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
+with:
+  app-name: "my-app"
+  variables: '{"NODE_ENV": "development"}'
+secrets:
+  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
 ```
 
 ### `quality-pipeline`
@@ -188,6 +232,28 @@ Deploys to Fly.io with health checks and rollback.
 - `fly-url`: Deployed application URL
 - `deployed`: Deployment status
 
+#### `job-deploy-railway.yml`
+Deploys to Railway with project/service management and health checks.
+
+**Inputs:**
+- `environment` (required: 'development' or 'production')
+- `app-name` (required) - Creates `${environment}-${app-name}` project
+- `service-name` (optional, defaults to app-name)
+- `health-check-url` (optional)
+- `memory-mb` (default: '512')
+- `app-env` (optional: LOCAL/DEV/PROD)
+- `variables` (optional: JSON object for environment variables)
+- `working-directory` (default: '.')
+
+**Secrets:**
+- `RAILWAY_API_TOKEN` (required)
+
+**Outputs:**
+- `railway-url`: Deployed application URL
+- `project-id`: Railway project ID
+- `service-id`: Railway service ID
+- `deployed`: Deployment status
+
 #### `job-dns-cloudflare.yml`
 Manages DNS records via Cloudflare API.
 
@@ -222,7 +288,7 @@ Combined quality checks workflow.
 - Plus all individual job inputs
 
 #### `pack-deploy-dev.yml`
-Complete development deployment.
+Complete development deployment to Fly.io.
 
 **Features:**
 - Quality checks (optional)
@@ -238,7 +304,7 @@ Complete development deployment.
 - Plus standard Node.js/pnpm inputs
 
 #### `pack-deploy-prod.yml`
-Complete production deployment.
+Complete production deployment to Fly.io.
 
 **Features:**
 - Full quality checks with security
@@ -250,6 +316,37 @@ Complete production deployment.
 - Same as deploy-dev plus:
 - `min-machines` (default: '2')
 - `memory-mb` (default: '1024')
+
+#### `pack-deploy-railway-dev.yml`
+Complete development deployment to Railway.
+
+**Features:**
+- Quality checks (optional)
+- Railway deployment with auto project/service creation
+- Cloudflare DNS setup
+- Deployment summary
+
+**Inputs:**
+- `app-name` (required) - Creates `dev-${app-name}` project
+- `service-name` (optional, defaults to app-name)
+- `domain` (optional)
+- `run-quality-checks` (default: true)
+- `variables` (optional: JSON object for environment variables)
+- Plus standard Node.js/pnpm inputs
+
+#### `pack-deploy-railway-prod.yml`
+Complete production deployment to Railway.
+
+**Features:**
+- Full quality checks with security and coverage
+- Railway deployment with enhanced health checks
+- Production-grade settings
+- DNS configuration
+
+**Inputs:**
+- Same as railway-dev plus:
+- `memory-mb` (default: '1024')
+- `max-wait-minutes` (default: '15')
 
 ## 🎯 Common Use Cases
 
@@ -328,6 +425,11 @@ jobs:
 
 Configure these secrets in your repository settings:
 
+### Railway Deployments (Recommended)
+- **`RAILWAY_API_TOKEN`**: Railway account token for deployments
+- **`CLOUDFLARE_API_TOKEN`**: Cloudflare API token (optional, for custom domains)
+
+### Fly.io Deployments (Legacy)
 - **`FLY_API_TOKEN`**: Fly.io API token for deployments
 - **`CLOUDFLARE_API_TOKEN`**: Cloudflare API token (if using custom domains)
 - **`CLOUDFLARE_ZONE_ID`**: Cloudflare zone ID (if using custom domains)

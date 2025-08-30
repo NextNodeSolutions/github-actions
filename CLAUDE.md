@@ -14,7 +14,8 @@ github-actions/
 ├── actions/                    # Composite actions (building blocks)
 │   ├── setup-environment/     # Complete environment setup
 │   ├── composite-pipeline/    # All-in-one pipeline with setup + quality
-│   └── quality-pipeline/      # Optimized quality checks
+│   ├── quality-pipeline/      # Optimized quality checks
+│   └── railway-deploy/        # Railway deployment action
 ├── config/                     # Configuration defaults
 │   └── defaults.yml
 ├── workflow-templates/         # Template workflows
@@ -61,12 +62,15 @@ done
 - `job-build.yml` - Build with optional artifact upload
 - `job-security.yml` - Security audits and Docker scans
 - `job-deploy-fly.yml` - Fly.io deployment with health checks
+- `job-deploy-railway.yml` - Railway deployment with project/service management
 - `job-dns-cloudflare.yml` - DNS management via Cloudflare
 
 ### Workflow Packs (`pack-*.yml`)
 - `pack-quality-checks.yml` - Combined QA (lint + typecheck + test + build)
-- `pack-deploy-dev.yml` - Complete development deployment
-- `pack-deploy-prod.yml` - Production deployment with blue-green strategy
+- `pack-deploy-dev.yml` - Complete development deployment (Fly.io)
+- `pack-deploy-prod.yml` - Production deployment with blue-green strategy (Fly.io)
+- `pack-deploy-railway-dev.yml` - Complete development deployment (Railway)
+- `pack-deploy-railway-prod.yml` - Production deployment (Railway)
 
 ## Key Implementation Details
 
@@ -91,6 +95,14 @@ Optimized quality checks with parallel execution support:
 - Non-blocking security audit with warnings
 - Grouped output for better readability
 
+#### `railway-deploy/`
+Complete Railway deployment with zero-configuration automation:
+- Project/service detection and auto-creation using `${env}-{app_name}` nomenclature
+- Authentication via RAILWAY_API_TOKEN with proper error handling
+- Environment variable management and health checks
+- Full deployment lifecycle management with status monitoring
+- Compatible with all NextNode project types
+
 ### Workflow Parameters
 All workflows accept standard parameters:
 - `node-version` (default: '20')
@@ -104,9 +116,15 @@ All workflows accept standard parameters:
 
 ### Security Requirements
 When using deployment workflows, these secrets must be configured:
+
+#### Fly.io Deployments
 - `FLY_API_TOKEN` - Required for Fly.io deployments
 - `CLOUDFLARE_API_TOKEN` - Required for DNS management
 - `CLOUDFLARE_ZONE_ID` - Required for DNS management
+
+#### Railway Deployments
+- `RAILWAY_API_TOKEN` - Required for Railway deployments (account-level token recommended for full project management)
+- `CLOUDFLARE_API_TOKEN` - Optional for custom DNS configuration
 
 ## Usage Patterns
 
@@ -119,8 +137,9 @@ uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml
 uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@v1.0.0
 ```
 
-### Common Integration
-Most NextNode projects use this pattern:
+### Common Integration Patterns
+
+#### Quality Checks Only
 ```yaml
 jobs:
   quality:
@@ -130,6 +149,37 @@ jobs:
       run-typecheck: true
       run-test: true
       test-coverage: true
+```
+
+#### Railway Development Deployment
+```yaml
+jobs:
+  deploy-dev:
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
+    with:
+      app-name: "nextnode-front"  # Creates dev-nextnode-front project
+      run-quality-checks: true
+      app-env: "DEV"
+      variables: '{"NODE_ENV": "development", "API_URL": "https://dev-api.example.com"}'
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+#### Railway Production Deployment
+```yaml
+jobs:
+  deploy-prod:
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-prod.yml@main
+    with:
+      app-name: "nextnode-front"  # Creates prod-nextnode-front project
+      domain: "nextnode.com"
+      configure-ssl: true
+      memory-mb: "1024"
+      app-env: "PROD"
+      variables: '{"NODE_ENV": "production", "API_URL": "https://api.nextnode.com"}'
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
 
 ## Testing Strategy

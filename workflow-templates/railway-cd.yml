@@ -1,0 +1,61 @@
+name: Railway CD
+
+# Template workflow for Railway continuous deployment
+# Copy this file to .github/workflows/ in your project and customize as needed
+
+on:
+  push:
+    branches:
+      - develop  # Development deployments
+      - main     # Production deployments
+  pull_request:
+    branches:
+      - main     # Run quality checks on PRs to main
+
+jobs:
+  # Quality checks for all pushes and PRs
+  quality:
+    if: github.event_name == 'pull_request' || github.ref_name == 'develop' || github.ref_name == 'main'
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
+    with:
+      run-lint: true
+      run-typecheck: true
+      run-test: true
+      run-build: true
+      test-coverage: github.event_name == 'pull_request'
+      run-security: github.ref_name == 'main'
+
+  # Development deployment
+  deploy-dev:
+    if: github.ref_name == 'develop'
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
+    with:
+      app-name: "${{ github.event.repository.name }}"  # Uses repository name
+      domain: "nextnode.fr"  # Will become dev.nextnode.fr for development
+      run-quality-checks: true
+      checkout-ref: develop
+      app-env: "DEV"
+      variables: |
+        {
+          "NODE_ENV": "development"
+        }
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  # Production deployment
+  deploy-prod:
+    if: github.ref_name == 'main'
+    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-prod.yml@main
+    with:
+      app-name: "${{ github.event.repository.name }}"  # Uses repository name
+      domain: "nextnode.fr"  # Will use nextnode.fr as-is for production
+      memory-mb: "1024"
+      app-env: "PROD"
+      variables: |
+        {
+          "NODE_ENV": "production"
+        }
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
