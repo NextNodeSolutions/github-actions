@@ -1,8 +1,7 @@
-name: Quality Checks Pack
+name: Quality Full
 
-# EXTERNAL WORKFLOW - Legacy wrapper for backward compatibility
-# This workflow now delegates to the modular quality-full.yml workflow
-# For new projects, use quality-full.yml or individual workflows directly
+# EXTERNAL WORKFLOW - Quality checks orchestrator
+# Calls individual quality check workflows in parallel
 
 on:
   workflow_call:
@@ -92,25 +91,83 @@ on:
         required: false
         default: 'high'
         type: string
+    outputs:
+      all-passed:
+        description: 'Whether all enabled checks passed'
+        value: ${{ jobs.summary.outputs.all-passed }}
 
 jobs:
-  # Delegate to the new modular orchestrator
-  quality-checks:
-    name: Quality Checks
-    uses: ./.github/workflows/quality-full.yml
+  lint:
+    name: Lint
+    if: inputs.run-lint
+    uses: ./.github/workflows/lint.yml
     with:
       working-directory: ${{ inputs.working-directory }}
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
-      run-lint: ${{ inputs.run-lint }}
-      run-typecheck: ${{ inputs.run-typecheck }}
-      run-tests: ${{ inputs.run-tests }}
-      run-build: ${{ inputs.run-build }}
-      run-security: ${{ inputs.run-security }}
-      test-coverage: ${{ inputs.test-coverage }}
-      coverage-threshold: ${{ inputs.coverage-threshold }}
       lint-fix: ${{ inputs.lint-fix }}
       fail-on-warning: ${{ inputs.fail-on-warning }}
+
+  typecheck:
+    name: Type Check
+    if: inputs.run-typecheck
+    uses: ./.github/workflows/typecheck.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      strict: true
+
+  test:
+    name: Test
+    if: inputs.run-tests
+    uses: ./.github/workflows/test.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      coverage: ${{ inputs.test-coverage }}
+      coverage-threshold: ${{ inputs.coverage-threshold }}
+      upload-coverage: ${{ inputs.test-coverage }}
+
+  build:
+    name: Build
+    if: inputs.run-build
+    uses: ./.github/workflows/build.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
       build-command: ${{ inputs.build-command }}
       output-directory: ${{ inputs.output-directory }}
+
+  security:
+    name: Security
+    if: inputs.run-security
+    uses: ./.github/workflows/security.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
       audit-level: ${{ inputs.audit-level }}
+
+  summary:
+    name: Quality Summary
+    needs: [lint, typecheck, test, build, security]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      all-passed: ${{ steps.check.outputs.all-passed }}
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/check-job-results@feat/railway-deployment-support
+        id: check
+        with:
+          job-results: |
+            [
+              "${{ needs.lint.result }}",
+              "${{ needs.typecheck.result }}",
+              "${{ needs.test.result }}",
+              "${{ needs.build.result }}",
+              "${{ needs.security.result }}"
+            ]
+          fail-on-error: true

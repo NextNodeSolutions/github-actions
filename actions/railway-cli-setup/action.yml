@@ -1,0 +1,51 @@
+name: 'Railway CLI Setup'
+description: 'Install and configure Railway CLI'
+author: 'NextNodeSolutions'
+
+inputs:
+  railway-token:
+    description: 'Railway API token'
+    required: true
+  version:
+    description: 'Railway CLI version (latest if not specified)'
+    required: false
+    default: 'latest'
+
+outputs:
+  cli-version:
+    description: 'Installed Railway CLI version'
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Railway CLI
+      id: install
+      shell: bash
+      run: |
+        echo "::group::🚂 Installing Railway CLI"
+        
+        START_TIME=$(date +%s)
+        
+        # Install Railway CLI globally
+        if [[ "${{ inputs.version }}" == "latest" ]]; then
+          echo "• Installing latest Railway CLI version..."
+          npm install -g @railway/cli
+        else
+          echo "• Installing Railway CLI version ${{ inputs.version }}..."
+          npm install -g @railway/cli@${{ inputs.version }}
+        fi
+        
+        # Verify installation
+        CLI_VERSION=$(railway --version)
+        echo "• Railway CLI installed: $CLI_VERSION"
+        echo "version=$CLI_VERSION" >> $GITHUB_OUTPUT
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        echo "• Installation completed in ${DURATION}s"
+        
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true

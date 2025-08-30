@@ -80,11 +80,19 @@ jobs:
           
           RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id')
           
+          # Clean target URL for CNAME records (remove https:// if present)
+          TARGET_VALUE="${{ inputs.target }}"
+          if [[ "${{ inputs.record-type }}" == "CNAME" ]]; then
+            # Remove protocol and trailing slash if present
+            TARGET_VALUE=$(echo "$TARGET_VALUE" | sed 's|^https\?://||' | sed 's|/$||')
+            echo "Cleaned CNAME target: $TARGET_VALUE"
+          fi
+          
           # Prepare record data
           RECORD_DATA=$(jq -n \
             --arg type "${{ inputs.record-type }}" \
             --arg name "${{ inputs.domain }}" \
-            --arg content "${{ inputs.target }}" \
+            --arg content "$TARGET_VALUE" \
             --argjson proxied "${{ inputs.proxied }}" \
             --argjson ttl "${{ inputs.ttl }}" \
             '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')

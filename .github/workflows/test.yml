@@ -52,14 +52,14 @@ jobs:
       passed: ${{ steps.test.outcome == 'success' }}
       coverage: ${{ steps.test.outputs.coverage || 'N/A' }}
     steps:
-      - uses: ./actions/node-setup-complete
+      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@feat/railway-deployment-support
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
           working-directory: ${{ inputs.working-directory }}
           
       - id: test
-        uses: ./actions/test
+        uses: NextNodeSolutions/github-actions/actions/test@feat/railway-deployment-support
         with:
           working-directory: ${{ inputs.working-directory }}
           coverage: ${{ inputs.coverage }}

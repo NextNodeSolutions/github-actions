@@ -57,7 +57,7 @@ jobs:
     steps:
       - name: Check health
         id: check
-        uses: ./actions/health-check
+        uses: NextNodeSolutions/github-actions/actions/health-check@feat/railway-deployment-support
         with:
           url: ${{ inputs.url }}
           max-attempts: ${{ inputs.max-attempts }}

@@ -118,12 +118,15 @@ runs:
         DURATION=$((END_TIME - START_TIME))
         
         # Parse output for errors and warnings
-        ERROR_COUNT=$(grep -c "error" "$OUTPUT_FILE" 2>/dev/null || echo "0")
-        WARNING_COUNT=$(grep -c "warning" "$OUTPUT_FILE" 2>/dev/null || echo "0")
+        ERROR_COUNT=$(grep -c "error" "$OUTPUT_FILE" 2>/dev/null || true)
+        ERROR_COUNT=${ERROR_COUNT:-0}
+        WARNING_COUNT=$(grep -c "warning" "$OUTPUT_FILE" 2>/dev/null || true)
+        WARNING_COUNT=${WARNING_COUNT:-0}
         
         # Count fixed issues if auto-fix was enabled
         if [[ "${{ inputs.fix }}" == "true" ]]; then
-          FIXED_COUNT=$(grep -c "fixed" "$OUTPUT_FILE" 2>/dev/null || echo "0")
+          FIXED_COUNT=$(grep -c "fixed" "$OUTPUT_FILE" 2>/dev/null || true)
+          FIXED_COUNT=${FIXED_COUNT:-0}
           echo "• Issues auto-fixed: $FIXED_COUNT"
           echo "fixed=$FIXED_COUNT" >> $GITHUB_OUTPUT
         else

@@ -36,7 +36,7 @@ runs:
       uses: actions/checkout@v4
       
     - name: Setup Node.js and pnpm
-      uses: ./actions/setup-node-pnpm
+      uses: NextNodeSolutions/github-actions/actions/setup-node-pnpm@feat/railway-deployment-support
       with:
         node-version: ${{ inputs.node-version }}
         pnpm-version: ${{ inputs.pnpm-version }}
@@ -44,7 +44,7 @@ runs:
         enable-cache: ${{ inputs.enable-cache }}
         
     - name: Install dependencies
-      uses: ./actions/install
+      uses: NextNodeSolutions/github-actions/actions/install@feat/railway-deployment-support
       with:
         working-directory: ${{ inputs.working-directory }}
         frozen-lockfile: ${{ inputs.frozen-lockfile }}

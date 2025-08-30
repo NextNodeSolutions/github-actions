@@ -1,0 +1,121 @@
+name: 'Railway Deployment Wait'
+description: 'Wait for Railway deployment to complete'
+author: 'NextNodeSolutions'
+
+inputs:
+  service-name:
+    description: 'Railway service name'
+    required: true
+  timeout-seconds:
+    description: 'Deployment timeout in seconds'
+    required: false
+    default: '300'
+  check-interval:
+    description: 'Check interval in seconds'
+    required: false
+    default: '10'
+  railway-token:
+    description: 'Railway API token'
+    required: true
+
+outputs:
+  status:
+    description: 'Deployment status (success/failed/timeout)'
+    value: ${{ steps.wait.outputs.status }}
+  deployment-id:
+    description: 'Railway deployment ID'
+    value: ${{ steps.wait.outputs.deployment-id }}
+  duration:
+    description: 'Time taken for deployment'
+    value: ${{ steps.wait.outputs.duration }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Wait for Deployment
+      id: wait
+      shell: bash
+      run: |
+        echo "::group::⏳ Monitoring Railway Deployment"
+        
+        # Configuration
+        MAX_WAIT=${{ inputs.timeout-seconds }}
+        CHECK_INTERVAL=${{ inputs.check-interval }}
+        SERVICE_NAME="${{ inputs.service-name }}"
+        ELAPSED=0
+        
+        echo "• Service: $SERVICE_NAME"
+        echo "• Timeout: ${MAX_WAIT}s"
+        echo "• Check interval: ${CHECK_INTERVAL}s"
+        echo ""
+        
+        # JQ selector for reuse
+        JQ_SERVICE_SELECTOR='.services.edges[] | .node | select(.name=="'"$SERVICE_NAME"'")'
+        
+        # Initial wait for deployment to start
+        sleep 10
+        
+        while [ $ELAPSED -lt $MAX_WAIT ]; do
+          # Get service info
+          SERVICE_INFO=$(railway status --json 2>/dev/null | jq -r "$JQ_SERVICE_SELECTOR" 2>/dev/null || echo "{}")
+          
+          if [ "$SERVICE_INFO" = "{}" ] || [ -z "$SERVICE_INFO" ]; then
+            echo "[${ELAPSED}s] ⚠️ Cannot retrieve service info - retrying..."
+            sleep $CHECK_INTERVAL
+            ELAPSED=$((ELAPSED + CHECK_INTERVAL))
+            continue
+          fi
+          
+          # Extract deployment info
+          DEPLOYMENT_STATUS=$(echo "$SERVICE_INFO" | jq -r '.serviceInstances.edges[].node.latestDeployment.status // "UNKNOWN"' 2>/dev/null)
+          DEPLOYMENT_ID=$(echo "$SERVICE_INFO" | jq -r '.serviceInstances.edges[].node.latestDeployment.id // "N/A"' 2>/dev/null)
+          
+          echo "[${ELAPSED}s] Status: $DEPLOYMENT_STATUS"
+          
+          case "$DEPLOYMENT_STATUS" in
+            "SUCCESS"|"LIVE")
+              echo ""
+              echo "✅ Deployment completed successfully!"
+              echo "• Status: $DEPLOYMENT_STATUS"
+              echo "• Deployment ID: ${DEPLOYMENT_ID:0:8}..."
+              echo "• Duration: ${ELAPSED}s"
+              echo "status=success" >> $GITHUB_OUTPUT
+              echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+              echo "duration=${ELAPSED}s" >> $GITHUB_OUTPUT
+              break
+              ;;
+            "FAILED"|"CRASHED"|"REMOVED")
+              echo ""
+              echo "❌ Deployment failed"
+              echo "• Status: $DEPLOYMENT_STATUS"
+              echo "• Deployment ID: ${DEPLOYMENT_ID:0:8}..."
+              echo "status=failed" >> $GITHUB_OUTPUT
+              echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+              echo "duration=${ELAPSED}s" >> $GITHUB_OUTPUT
+              echo "::endgroup::"
+              exit 1
+              ;;
+            "BUILDING"|"DEPLOYING"|"INITIALIZING"|"QUEUED")
+              echo "  → In progress..."
+              ;;
+            *)
+              echo "  ⚠️ Unknown status: $DEPLOYMENT_STATUS"
+              ;;
+          esac
+          
+          sleep $CHECK_INTERVAL
+          ELAPSED=$((ELAPSED + CHECK_INTERVAL))
+        done
+        
+        if [ $ELAPSED -ge $MAX_WAIT ]; then
+          echo ""
+          echo "⏰ Deployment timeout after ${MAX_WAIT}s"
+          echo "status=timeout" >> $GITHUB_OUTPUT
+          echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+          echo "duration=${MAX_WAIT}s" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true
