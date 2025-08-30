@@ -6,11 +6,8 @@
 
 ```
 github-actions/
-├── actions/           # Atomic reusable actions (external use)
-│   └── atomic/       # Single-purpose atomic actions
-├── packs/            # Reusable workflow combinations (external use)
-├── internal/         # Internal testing workflows (not accessible externally)
-└── config/           # Shared configuration files
+├── .github/workflows/  # Reusable workflows (external + internal)
+├── actions/           # Atomic reusable actions
 ```
 
 ## 🚀 Quick Start
@@ -157,22 +154,14 @@ jobs:
 
 ### Default Values
 
-Default configuration is stored in `config/defaults.yml`:
+Default values are defined directly in each action's `action.yml` file:
 
-```yaml
-node:
-  version: '20'
-  
-pnpm:
-  version: '10.12.4'
-  
-audit:
-  level: 'high'
-  
-railway:
-  memory_mb: '512'
-  memory_mb_prod: '1024'
-```
+- **Node.js version**: `20`
+- **pnpm version**: `10.12.4`
+- **Audit level**: `high`
+- **Working directory**: `.`
+- **Railway memory**: `512MB` (staging), `1024MB` (production)
+- **Timeouts**: 30s health checks, 15min deploys
 
 ### Environment-Based Settings
 

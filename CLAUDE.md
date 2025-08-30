@@ -30,8 +30,6 @@ github-actions/
 │   ├── set-env-vars/          # Environment management
 │   ├── run-command/           # Command wrapper
 │   └── check-command/         # Command availability check
-├── config/                     # Configuration defaults
-│   └── defaults.yml           # Shared default values
 └── README.md                   # User documentation
 ```
 
