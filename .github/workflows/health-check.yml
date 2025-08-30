@@ -1,0 +1,67 @@
+name: Health Check
+
+# EXTERNAL WORKFLOW - Atomic health check workflow
+# Verifies deployment health
+
+on:
+  workflow_call:
+    inputs:
+      url:
+        description: 'URL to check'
+        required: true
+        type: string
+      max-attempts:
+        description: 'Maximum number of attempts'
+        required: false
+        default: '10'
+        type: string
+      delay-seconds:
+        description: 'Delay between attempts in seconds'
+        required: false
+        default: '10'
+        type: string
+      expected-status:
+        description: 'Expected HTTP status code'
+        required: false
+        default: '200'
+        type: string
+      expected-text:
+        description: 'Expected text in response body'
+        required: false
+        default: ''
+        type: string
+      timeout-seconds:
+        description: 'Request timeout in seconds'
+        required: false
+        default: '30'
+        type: string
+    outputs:
+      health-status:
+        description: 'Health check status (healthy/unhealthy)'
+        value: ${{ jobs.health-check.outputs.status }}
+      response-time:
+        description: 'Response time in milliseconds'
+        value: ${{ jobs.health-check.outputs.response-time }}
+      http-status:
+        description: 'HTTP status code received'
+        value: ${{ jobs.health-check.outputs.http-status }}
+
+jobs:
+  health-check:
+    name: Health Check
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      response-time: ${{ steps.check.outputs.response-time }}
+      http-status: ${{ steps.check.outputs.http-status }}
+    steps:
+      - name: Check health
+        id: check
+        uses: ./actions/health-check
+        with:
+          url: ${{ inputs.url }}
+          max-attempts: ${{ inputs.max-attempts }}
+          delay-seconds: ${{ inputs.delay-seconds }}
+          expected-status: ${{ inputs.expected-status }}
+          expected-text: ${{ inputs.expected-text }}
+          timeout-seconds: ${{ inputs.timeout-seconds }}

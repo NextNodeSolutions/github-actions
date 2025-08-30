@@ -1,0 +1,248 @@
+name: Deploy Full
+
+# EXTERNAL WORKFLOW - Deployment orchestrator
+# Orchestrates the full deployment pipeline
+
+on:
+  workflow_call:
+    inputs:
+      # Core configuration
+      environment:
+        description: 'Deployment environment (development/staging/production)'
+        required: true
+        type: string
+      app-name:
+        description: 'Application name'
+        required: true
+        type: string
+        
+      # Pre-deployment checks
+      run-quality-checks:
+        description: 'Run quality checks before deployment'
+        required: false
+        default: true
+        type: boolean
+      test-coverage:
+        description: 'Run tests with coverage'
+        required: false
+        default: false
+        type: boolean
+      run-security:
+        description: 'Run security audit'
+        required: false
+        default: false
+        type: boolean
+        
+      # Build configuration
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '22'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      build-command:
+        description: 'Build command (default varies by environment)'
+        required: false
+        default: ''
+        type: string
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+        
+      # Docker configuration
+      use-docker:
+        description: 'Build and use Docker image'
+        required: false
+        default: false
+        type: boolean
+      dockerfile:
+        description: 'Dockerfile path'
+        required: false
+        default: 'Dockerfile'
+        type: string
+      docker-registry:
+        description: 'Docker registry URL'
+        required: false
+        default: 'docker.io'
+        type: string
+        
+      # Railway configuration
+      memory-mb:
+        description: 'Memory allocation in MB'
+        required: false
+        default: ''
+        type: string
+      railway-variables:
+        description: 'Railway environment variables as JSON'
+        required: false
+        default: '{}'
+        type: string
+        
+      # DNS configuration
+      domain:
+        description: 'Custom domain (optional)'
+        required: false
+        default: ''
+        type: string
+      dns-wait-seconds:
+        description: 'Seconds to wait for DNS propagation'
+        required: false
+        default: '30'
+        type: string
+        
+      # Health check configuration
+      health-check-url:
+        description: 'URL for post-deployment health check'
+        required: false
+        default: ''
+        type: string
+      health-max-attempts:
+        description: 'Maximum health check attempts'
+        required: false
+        default: '10'
+        type: string
+        
+    secrets:
+      RAILWAY_API_TOKEN:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: false
+      CLOUDFLARE_ZONE_ID:
+        required: false
+      DOCKER_USERNAME:
+        required: false
+      DOCKER_PASSWORD:
+        required: false
+        
+    outputs:
+      deployed-url:
+        description: 'Final deployed application URL'
+        value: ${{ jobs.finalize.outputs.deployed-url }}
+      deployment-id:
+        description: 'Railway deployment ID'
+        value: ${{ jobs.railway-deploy.outputs.deployment-id }}
+      deployment-status:
+        description: 'Overall deployment status'
+        value: ${{ jobs.finalize.outputs.status }}
+
+jobs:
+  # Quality checks (optional)
+  quality:
+    name: Quality Checks
+    if: inputs.run-quality-checks
+    uses: ./.github/workflows/quality-full.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      run-lint: true
+      run-typecheck: true
+      run-tests: true
+      run-build: true
+      run-security: ${{ inputs.run-security }}
+      test-coverage: ${{ inputs.test-coverage }}
+      build-command: ${{ inputs.build-command || (inputs.environment == 'production' && 'build' || 'build:dev') }}
+      fail-on-warning: ${{ inputs.environment == 'production' }}
+      audit-level: ${{ inputs.environment == 'production' && 'moderate' || 'high' }}
+
+  # Docker build (optional)
+  docker:
+    name: Docker Build
+    needs: [quality]
+    if: inputs.use-docker && !cancelled() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      dockerfile: ${{ inputs.dockerfile }}
+      image-name: ${{ inputs.app-name }}
+      tag: ${{ inputs.environment }}-${{ github.sha }}
+      build-args: |
+        {
+          "NODE_ENV": "${{ inputs.environment }}",
+          "APP_ENV": "${{ inputs.environment }}"
+        }
+      push: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
+      registry: ${{ inputs.docker-registry }}
+    secrets:
+      REGISTRY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      REGISTRY_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+  # Railway deployment
+  railway-deploy:
+    name: Railway Deploy
+    needs: [quality, docker]
+    if: !cancelled() && (needs.quality.result == 'success' || needs.quality.result == 'skipped') && (needs.docker.result == 'success' || needs.docker.result == 'skipped')
+    uses: ./.github/workflows/railway-deploy.yml
+    with:
+      environment: ${{ inputs.environment }}
+      app-name: ${{ inputs.app-name }}
+      working-directory: ${{ inputs.working-directory }}
+      memory-mb: ${{ inputs.memory-mb || (inputs.environment == 'production' && '1024' || '512') }}
+      variables: ${{ inputs.railway-variables }}
+      wait-for-deployment: true
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+
+  # DNS configuration (optional)
+  dns:
+    name: Configure DNS
+    needs: [railway-deploy]
+    if: inputs.domain != '' && secrets.CLOUDFLARE_API_TOKEN != '' && needs.railway-deploy.result == 'success'
+    uses: ./.github/workflows/dns-update.yml
+    with:
+      domain: ${{ inputs.domain }}
+      target: ${{ needs.railway-deploy.outputs.railway-url }}
+      record-type: 'CNAME'
+      proxied: true
+      wait-seconds: ${{ inputs.dns-wait-seconds }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+
+  # Health check
+  health:
+    name: Health Check
+    needs: [railway-deploy, dns]
+    if: needs.railway-deploy.result == 'success' && (needs.dns.result == 'success' || needs.dns.result == 'skipped')
+    uses: ./.github/workflows/health-check.yml
+    with:
+      url: ${{ inputs.health-check-url || (inputs.domain != '' && format('https://{0}', inputs.domain) || format('https://{0}', needs.railway-deploy.outputs.railway-url)) }}
+      max-attempts: ${{ inputs.health-max-attempts }}
+      delay-seconds: '10'
+      expected-status: '200'
+
+  # Final summary
+  finalize:
+    name: Deployment Summary
+    needs: [quality, docker, railway-deploy, dns, health]
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      deployed-url: ${{ steps.summary.outputs.url }}
+      status: ${{ steps.summary.outputs.status }}
+    steps:
+      - name: Generate summary
+        id: summary
+        run: |
+          # Determine final URL
+          URL="${{ inputs.domain != '' && format('https://{0}', inputs.domain) || needs.railway-deploy.outputs.railway-url }}"
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          
+          # Determine overall status
+          SUCCESS="${{ needs.railway-deploy.result == 'success' && needs.health.result == 'success' }}"
+          
+          if [[ "$SUCCESS" == "true" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ Deployment successful to $URL"
+            exit 0
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "❌ Deployment failed"
+            exit 1
+          fi

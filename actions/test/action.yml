@@ -1,0 +1,166 @@
+name: 'Run Tests'
+description: 'Atomic action to run tests using pnpm'
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  test-command:
+    description: 'Test command to run'
+    required: false
+    default: 'test'
+  coverage:
+    description: 'Enable coverage reporting'
+    required: false
+    default: 'false'
+  coverage-threshold:
+    description: 'Minimum coverage threshold percentage'
+    required: false
+    default: '80'
+  upload-coverage:
+    description: 'Upload coverage artifacts'
+    required: false
+    default: 'false'
+  junit-report:
+    description: 'Generate JUnit report'
+    required: false
+    default: 'false'
+
+outputs:
+  test-results:
+    description: 'Test results summary'
+    value: ${{ steps.test.outputs.results }}
+  coverage-percentage:
+    description: 'Coverage percentage'
+    value: ${{ steps.coverage.outputs.percentage }}
+  test-time:
+    description: 'Time taken to run tests'
+    value: ${{ steps.test.outputs.test-time }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup test environment
+      shell: bash
+      run: |
+        echo "::group::🧪 Test Setup"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Test command: pnpm ${{ inputs.test-command }}"
+        echo "• Coverage enabled: ${{ inputs.coverage }}"
+        echo "• Coverage threshold: ${{ inputs.coverage-threshold }}%"
+        echo "::endgroup::"
+
+    - name: Run tests
+      id: test
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🏃 Running Tests"
+        
+        START_TIME=$(date +%s)
+        
+        # Determine test command
+        if [[ "${{ inputs.coverage }}" == "true" ]]; then
+          TEST_CMD="pnpm test:coverage"
+        else
+          TEST_CMD="pnpm ${{ inputs.test-command }}"
+        fi
+        
+        echo "• Executing: $TEST_CMD"
+        
+        # Run tests and capture output
+        if $TEST_CMD 2>&1 | tee test-output.log; then
+          TEST_STATUS="✅ Passed"
+          TEST_EXIT=0
+        else
+          TEST_STATUS="❌ Failed"
+          TEST_EXIT=1
+        fi
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        echo "• Test status: $TEST_STATUS"
+        echo "• Duration: ${DURATION}s"
+        
+        echo "results=$TEST_STATUS" >> $GITHUB_OUTPUT
+        echo "test-time=${DURATION}s" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+        
+        # Exit with test status
+        exit $TEST_EXIT
+
+    - name: Analyze coverage
+      id: coverage
+      if: inputs.coverage == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📊 Coverage Analysis"
+        
+        # Look for coverage report
+        COVERAGE_FILE=""
+        if [[ -f "coverage/coverage-summary.json" ]]; then
+          COVERAGE_FILE="coverage/coverage-summary.json"
+        elif [[ -f "coverage/lcov.info" ]]; then
+          COVERAGE_FILE="coverage/lcov.info"
+        fi
+        
+        if [[ -n "$COVERAGE_FILE" ]]; then
+          echo "• Coverage report found: $COVERAGE_FILE"
+          
+          # Extract coverage percentage (simplified)
+          if [[ "$COVERAGE_FILE" == *".json" ]]; then
+            COVERAGE=$(jq -r '.total.lines.pct // 0' "$COVERAGE_FILE" 2>/dev/null || echo "0")
+          else
+            # Basic lcov parsing
+            COVERAGE=$(grep -oP 'LF:\K\d+' "$COVERAGE_FILE" | paste -sd+ | bc)
+            COVERED=$(grep -oP 'LH:\K\d+' "$COVERAGE_FILE" | paste -sd+ | bc)
+            if [[ $COVERAGE -gt 0 ]]; then
+              COVERAGE=$((COVERED * 100 / COVERAGE))
+            else
+              COVERAGE=0
+            fi
+          fi
+          
+          echo "• Coverage: ${COVERAGE}%"
+          echo "• Threshold: ${{ inputs.coverage-threshold }}%"
+          
+          echo "percentage=${COVERAGE}" >> $GITHUB_OUTPUT
+          
+          # Check threshold
+          if [[ ${COVERAGE%.*} -lt ${{ inputs.coverage-threshold }} ]]; then
+            echo "❌ Coverage ${COVERAGE}% is below threshold ${{ inputs.coverage-threshold }}%"
+            exit 1
+          else
+            echo "✅ Coverage meets threshold"
+          fi
+        else
+          echo "⚠️ No coverage report found"
+          echo "percentage=unknown" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Upload coverage artifacts
+      if: inputs.upload-coverage == 'true' && inputs.coverage == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report-${{ github.run_id }}
+        path: ${{ inputs.working-directory }}/coverage
+        retention-days: 7
+
+    - name: Test summary
+      if: always()
+      shell: bash
+      run: |
+        echo "### 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Status | ${{ steps.test.outputs.results }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Duration | ${{ steps.test.outputs.test-time }} |" >> $GITHUB_STEP_SUMMARY
+        if [[ "${{ inputs.coverage }}" == "true" ]]; then
+          echo "| Coverage | ${{ steps.coverage.outputs.percentage }}% |" >> $GITHUB_STEP_SUMMARY
+        fi

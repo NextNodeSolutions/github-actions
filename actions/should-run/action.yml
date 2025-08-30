@@ -1,0 +1,56 @@
+name: 'Should Run'
+description: 'Determine if a job should run based on dependencies and conditions'
+author: 'NextNodeSolutions'
+
+inputs:
+  condition:
+    description: 'Additional condition to check'
+    required: false
+    default: 'true'
+  required-jobs:
+    description: 'JSON array of required job results'
+    required: false
+    default: '[]'
+  optional-jobs:
+    description: 'JSON array of optional job results'
+    required: false
+    default: '[]'
+
+outputs:
+  should-run:
+    description: 'Whether the job should run'
+    value: ${{ steps.check.outputs.should-run }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check if should run
+      id: check
+      shell: bash
+      run: |
+        SHOULD_RUN=true
+        
+        # Check additional condition
+        if [[ "${{ inputs.condition }}" != "true" ]]; then
+          echo "Additional condition not met"
+          SHOULD_RUN=false
+        fi
+        
+        # Check required jobs
+        if [[ "${{ inputs.required-jobs }}" != "[]" ]]; then
+          echo "${{ inputs.required-jobs }}" | jq -r '.[]' | while read -r result; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "Required job failed: $result"
+              SHOULD_RUN=false
+              break
+            fi
+          done
+        fi
+        
+        # Optional jobs don't affect should-run, just log them
+        if [[ "${{ inputs.optional-jobs }}" != "[]" ]]; then
+          echo "Optional job results:"
+          echo "${{ inputs.optional-jobs }}" | jq -r '.[]'
+        fi
+        
+        echo "should-run=$SHOULD_RUN" >> $GITHUB_OUTPUT

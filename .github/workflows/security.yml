@@ -1,0 +1,51 @@
+name: Security
+
+# EXTERNAL WORKFLOW - Atomic security audit workflow
+# Performs security vulnerability checks
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      audit-level:
+        description: 'Security audit level (low, moderate, high, critical)'
+        required: false
+        default: 'high'
+        type: string
+    outputs:
+      security-passed:
+        description: 'Whether security audit passed'
+        value: ${{ jobs.security.outputs.passed }}
+
+jobs:
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.audit.outcome == 'success' }}
+    steps:
+      - uses: ./actions/node-setup-complete
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - id: audit
+        uses: ./actions/security-audit
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          audit-level: ${{ inputs.audit-level }}

@@ -1,0 +1,72 @@
+name: 'Check Command'
+description: 'Check if a command exists and is executable'
+inputs:
+  command:
+    description: 'Command to check'
+    required: true
+  install-command:
+    description: 'Command to run if check fails (optional)'
+    required: false
+    default: ''
+  fail-if-missing:
+    description: 'Fail the action if command is missing'
+    required: false
+    default: 'true'
+
+outputs:
+  exists:
+    description: 'Whether the command exists'
+    value: ${{ steps.check.outputs.exists }}
+  version:
+    description: 'Command version if available'
+    value: ${{ steps.check.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check Command
+      id: check
+      shell: bash
+      run: |
+        echo "🔍 Checking for command: ${{ inputs.command }}"
+        
+        if command -v "${{ inputs.command }}" &> /dev/null; then
+          echo "✅ Command '${{ inputs.command }}' is available"
+          echo "exists=true" >> $GITHUB_OUTPUT
+          
+          # Try to get version
+          VERSION=""
+          if ${{ inputs.command }} --version &> /dev/null; then
+            VERSION=$(${{ inputs.command }} --version 2>&1 | head -n1)
+          elif ${{ inputs.command }} -v &> /dev/null; then
+            VERSION=$(${{ inputs.command }} -v 2>&1 | head -n1)
+          elif ${{ inputs.command }} version &> /dev/null; then
+            VERSION=$(${{ inputs.command }} version 2>&1 | head -n1)
+          fi
+          
+          if [[ -n "$VERSION" ]]; then
+            echo "  Version: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "❌ Command '${{ inputs.command }}' not found"
+          echo "exists=false" >> $GITHUB_OUTPUT
+          
+          # Try to install if command provided
+          if [[ -n "${{ inputs.install-command }}" ]]; then
+            echo "📦 Attempting to install using: ${{ inputs.install-command }}"
+            eval "${{ inputs.install-command }}"
+            
+            # Re-check after installation
+            if command -v "${{ inputs.command }}" &> /dev/null; then
+              echo "✅ Command '${{ inputs.command }}' successfully installed"
+              echo "exists=true" >> $GITHUB_OUTPUT
+            elif [[ "${{ inputs.fail-if-missing }}" == "true" ]]; then
+              echo "❌ Failed to install '${{ inputs.command }}'"
+              exit 1
+            fi
+          elif [[ "${{ inputs.fail-if-missing }}" == "true" ]]; then
+            echo "❌ Command '${{ inputs.command }}' is required but not available"
+            exit 1
+          fi
+        fi

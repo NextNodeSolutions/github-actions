@@ -1,0 +1,51 @@
+name: Type Check
+
+# EXTERNAL WORKFLOW - Atomic type checking workflow
+# Performs TypeScript type checking only
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      strict:
+        description: 'Enable strict type checking'
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      typecheck-passed:
+        description: 'Whether type checking passed'
+        value: ${{ jobs.typecheck.outputs.passed }}
+
+jobs:
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.typecheck.outcome == 'success' }}
+    steps:
+      - uses: ./actions/node-setup-complete
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - id: typecheck
+        uses: ./actions/typecheck
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          strict: ${{ inputs.strict }}

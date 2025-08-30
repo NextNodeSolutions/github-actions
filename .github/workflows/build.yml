@@ -1,0 +1,75 @@
+name: Build
+
+# EXTERNAL WORKFLOW - Atomic build workflow
+# Builds the project
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      build-command:
+        description: 'Build command'
+        required: false
+        default: 'build'
+        type: string
+      output-directory:
+        description: 'Build output directory'
+        required: false
+        default: 'dist'
+        type: string
+      env-vars:
+        description: 'Environment variables as JSON object'
+        required: false
+        default: '{}'
+        type: string
+    outputs:
+      build-passed:
+        description: 'Whether build passed'
+        value: ${{ jobs.build.outputs.passed }}
+      build-size:
+        description: 'Build output size'
+        value: ${{ jobs.build.outputs.size }}
+
+jobs:
+  build:
+    name: Build Project
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.build.outcome == 'success' }}
+      size: ${{ steps.measure.outputs.size || 'unknown' }}
+    steps:
+      - uses: ./actions/node-setup-complete
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - id: build
+        uses: ./actions/build
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          build-command: ${{ inputs.build-command }}
+          output-directory: ${{ inputs.output-directory }}
+          env-vars: ${{ inputs.env-vars }}
+          
+      - id: measure
+        if: success()
+        run: |
+          if [[ -d "${{ inputs.working-directory }}/${{ inputs.output-directory }}" ]]; then
+            SIZE=$(du -sh "${{ inputs.working-directory }}/${{ inputs.output-directory }}" | cut -f1)
+            echo "size=$SIZE" >> $GITHUB_OUTPUT
+          fi

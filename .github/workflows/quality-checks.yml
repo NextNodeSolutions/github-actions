@@ -1,0 +1,116 @@
+name: Quality Checks Pack
+
+# EXTERNAL WORKFLOW - Legacy wrapper for backward compatibility
+# This workflow now delegates to the modular quality-full.yml workflow
+# For new projects, use quality-full.yml or individual workflows directly
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      
+      # Individual check toggles
+      run-lint:
+        description: 'Run linting'
+        required: false
+        default: true
+        type: boolean
+      run-typecheck:
+        description: 'Run type checking'
+        required: false
+        default: true
+        type: boolean
+      run-tests:
+        description: 'Run tests'
+        required: false
+        default: true
+        type: boolean
+      run-build:
+        description: 'Run build'
+        required: false
+        default: true
+        type: boolean
+      run-security:
+        description: 'Run security audit'
+        required: false
+        default: false
+        type: boolean
+        
+      # Test configuration
+      test-coverage:
+        description: 'Enable test coverage'
+        required: false
+        default: false
+        type: boolean
+      coverage-threshold:
+        description: 'Coverage threshold percentage'
+        required: false
+        default: '80'
+        type: string
+        
+      # Lint configuration
+      lint-fix:
+        description: 'Auto-fix lint issues'
+        required: false
+        default: false
+        type: boolean
+      fail-on-warning:
+        description: 'Fail on warnings'
+        required: false
+        default: false
+        type: boolean
+        
+      # Build configuration
+      build-command:
+        description: 'Build command'
+        required: false
+        default: 'build'
+        type: string
+      output-directory:
+        description: 'Build output directory'
+        required: false
+        default: 'dist'
+        type: string
+        
+      # Security configuration
+      audit-level:
+        description: 'Security audit level'
+        required: false
+        default: 'high'
+        type: string
+
+jobs:
+  # Delegate to the new modular orchestrator
+  quality-checks:
+    name: Quality Checks
+    uses: ./.github/workflows/quality-full.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      run-lint: ${{ inputs.run-lint }}
+      run-typecheck: ${{ inputs.run-typecheck }}
+      run-tests: ${{ inputs.run-tests }}
+      run-build: ${{ inputs.run-build }}
+      run-security: ${{ inputs.run-security }}
+      test-coverage: ${{ inputs.test-coverage }}
+      coverage-threshold: ${{ inputs.coverage-threshold }}
+      lint-fix: ${{ inputs.lint-fix }}
+      fail-on-warning: ${{ inputs.fail-on-warning }}
+      build-command: ${{ inputs.build-command }}
+      output-directory: ${{ inputs.output-directory }}
+      audit-level: ${{ inputs.audit-level }}

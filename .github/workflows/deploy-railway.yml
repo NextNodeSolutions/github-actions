@@ -1,0 +1,135 @@
+name: Unified Railway Deployment
+
+# EXTERNAL WORKFLOW - Legacy wrapper for backward compatibility
+# This workflow now delegates to the modular deploy-full.yml workflow
+# For new projects, use deploy-full.yml or individual deployment workflows directly
+
+on:
+  workflow_call:
+    inputs:
+      # Core configuration
+      environment:
+        description: 'Deployment environment (development/staging/production)'
+        required: true
+        type: string
+      app-name:
+        description: 'Application name for Railway project'
+        required: true
+        type: string
+        
+      # Environment-specific settings
+      domain:
+        description: 'Custom domain (optional)'
+        required: false
+        default: ''
+        type: string
+      memory-mb:
+        description: 'Memory allocation in MB (default: 512 for dev, 1024 for prod)'
+        required: false
+        default: ''
+        type: string
+      variables:
+        description: 'Environment variables as JSON object'
+        required: false
+        default: '{}'
+        type: string
+        
+      # Quality checks
+      run-quality-checks:
+        description: 'Run quality checks before deployment'
+        required: false
+        default: true
+        type: boolean
+      test-coverage:
+        description: 'Run tests with coverage'
+        required: false
+        default: false
+        type: boolean
+      run-security:
+        description: 'Run security audit'
+        required: false
+        default: false
+        type: boolean
+        
+      # Build configuration
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '22'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      build-command:
+        description: 'Build command (default: build for prod, build:dev for dev)'
+        required: false
+        default: ''
+        type: string
+        
+      # Advanced options
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      health-check-url:
+        description: 'URL for post-deployment health check'
+        required: false
+        default: ''
+        type: string
+      dns-wait-seconds:
+        description: 'Seconds to wait for DNS propagation'
+        required: false
+        default: '30'
+        type: string
+        
+    secrets:
+      RAILWAY_API_TOKEN:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: false
+        
+    outputs:
+      deployed-url:
+        description: 'Final deployed application URL'
+        value: ${{ jobs.deploy.outputs.final-url }}
+      railway-url:
+        description: 'Railway internal URL'
+        value: ${{ jobs.deploy.outputs.railway-url }}
+      deployment-id:
+        description: 'Railway deployment ID'
+        value: ${{ jobs.deploy.outputs.deployment-id }}
+
+env:
+  # Environment-based defaults
+  DEFAULT_MEMORY_DEV: '512'
+  DEFAULT_MEMORY_PROD: '1024'
+  DEFAULT_BUILD_DEV: 'build:dev'
+  DEFAULT_BUILD_PROD: 'build'
+
+jobs:
+  # Delegate to the new modular deployment orchestrator
+  deploy:
+    name: Deploy
+    uses: ./.github/workflows/deploy-full.yml
+    with:
+      environment: ${{ inputs.environment }}
+      app-name: ${{ inputs.app-name }}
+      run-quality-checks: ${{ inputs.run-quality-checks }}
+      test-coverage: ${{ inputs.test-coverage }}
+      run-security: ${{ inputs.run-security }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      build-command: ${{ inputs.build-command }}
+      working-directory: ${{ inputs.working-directory }}
+      use-docker: false  # Legacy workflow doesn't use Docker
+      memory-mb: ${{ inputs.memory-mb }}
+      railway-variables: ${{ inputs.variables }}
+      domain: ${{ inputs.domain }}
+      dns-wait-seconds: ${{ inputs.dns-wait-seconds }}
+      health-check-url: ${{ inputs.health-check-url }}
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -5,7 +5,7 @@ node:
   version: '20'
   
 pnpm:
-  version: '10.11.0'
+  version: '10.12.4'
   
 audit:
   level: 'high'
@@ -13,3 +13,11 @@ audit:
 environment:
   working_directory: '.'
   frozen_lockfile: true
+  
+railway:
+  memory_mb: '512'
+  memory_mb_prod: '1024'
+  
+timeouts:
+  health_check_seconds: 30
+  deploy_timeout_minutes: 15

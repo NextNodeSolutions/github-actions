@@ -1,0 +1,123 @@
+name: 'Build Project'
+description: 'Atomic action to build projects using pnpm'
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  build-command:
+    description: 'Build command to run'
+    required: false
+    default: 'build'
+  output-directory:
+    description: 'Expected output directory'
+    required: false
+    default: 'dist'
+  env-vars:
+    description: 'Environment variables as JSON'
+    required: false
+    default: '{}'
+  enable-timing:
+    description: 'Show timing information'
+    required: false
+    default: 'true'
+
+outputs:
+  build-time:
+    description: 'Time taken to build'
+    value: ${{ steps.build.outputs.build-time }}
+  output-size:
+    description: 'Size of build output'
+    value: ${{ steps.analyze.outputs.output-size }}
+  success:
+    description: 'Whether build succeeded'
+    value: ${{ steps.build.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup environment
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🏗️ Build Setup"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Build command: pnpm ${{ inputs.build-command }}"
+        echo "• Output directory: ${{ inputs.output-directory }}"
+        
+        # Set environment variables if provided
+        if [[ '${{ inputs.env-vars }}' != '{}' ]]; then
+          echo "• Setting environment variables:"
+          echo '${{ inputs.env-vars }}' | jq -r 'to_entries[] | "  - \(.key)=\(.value)"'
+          echo '${{ inputs.env-vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Execute build
+      id: build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::⚙️ Building Project"
+        
+        START_TIME=$(date +%s)
+        
+        # Run build command
+        echo "• Executing: pnpm ${{ inputs.build-command }}"
+        if pnpm ${{ inputs.build-command }}; then
+          BUILD_SUCCESS="true"
+          echo "✅ Build completed successfully"
+        else
+          BUILD_SUCCESS="false"
+          echo "❌ Build failed"
+          exit 1
+        fi
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        echo "• Build time: ${DURATION}s"
+        echo "build-time=${DURATION}s" >> $GITHUB_OUTPUT
+        echo "success=$BUILD_SUCCESS" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+
+    - name: Analyze build output
+      id: analyze
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📊 Build Analysis"
+        
+        # Check if output directory exists
+        if [[ -d "${{ inputs.output-directory }}" ]]; then
+          # Calculate output size
+          OUTPUT_SIZE=$(du -sh "${{ inputs.output-directory }}" | cut -f1)
+          echo "• Output size: $OUTPUT_SIZE"
+          echo "output-size=$OUTPUT_SIZE" >> $GITHUB_OUTPUT
+          
+          # Count files
+          FILE_COUNT=$(find "${{ inputs.output-directory }}" -type f | wc -l | tr -d ' ')
+          echo "• Files generated: $FILE_COUNT"
+          
+          # List largest files
+          echo "• Largest files:"
+          find "${{ inputs.output-directory }}" -type f -exec du -h {} \; | sort -rh | head -5 | while read size file; do
+            echo "  - $size $(basename $file)"
+          done
+        else
+          echo "⚠️ Output directory '${{ inputs.output-directory }}' not found"
+          echo "output-size=N/A" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Summary
+      shell: bash
+      run: |
+        echo "::group::📝 Build Summary"
+        echo "• Status: ${{ steps.build.outputs.success == 'true' && '✅ Success' || '❌ Failed' }}"
+        echo "• Duration: ${{ steps.build.outputs.build-time }}"
+        echo "• Output size: ${{ steps.analyze.outputs.output-size }}"
+        echo "::endgroup::"

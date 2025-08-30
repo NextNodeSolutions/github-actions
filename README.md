@@ -1,488 +1,277 @@
 # NextNode GitHub Actions
 
-Reusable GitHub Actions workflows and composite actions for NextNode projects, providing consistent CI/CD automation with Railway deployment support.
-
-## 🎯 Design Principles
-
-- **DRY (Don't Repeat Yourself)**: Shared logic centralized in composite actions
-- **KISS (Keep It Simple)**: Minimal complexity, maximum clarity
-- **Single Responsibility**: Each action has one clear purpose
-- **Composability**: Actions can be combined for complex workflows
-- **Performance Optimized**: Fast CI/CD execution with smart caching
+> Reusable GitHub Actions and workflows for NextNode projects - **pnpm only**
 
 ## 📁 Repository Structure
 
 ```
 github-actions/
-├── actions/                    # Composite actions (building blocks)
-│   ├── setup-environment/     # Complete environment setup
-│   ├── composite-pipeline/    # All-in-one pipeline with setup + quality
-│   └── quality-pipeline/      # Optimized quality checks
-├── config/                     # Configuration defaults
-│   └── defaults.yml
-├── workflow-templates/         # Template workflows
-│   └── railway-cd.yml         # Railway CD template
-└── .github/workflows/         # Reusable workflows
-    ├── job-*.yml             # Individual job workflows
-    └── pack-*.yml            # Workflow packs (combined jobs)
+├── actions/           # Atomic reusable actions (external use)
+│   └── atomic/       # Single-purpose atomic actions
+├── packs/            # Reusable workflow combinations (external use)
+├── internal/         # Internal testing workflows (not accessible externally)
+└── config/           # Shared configuration files
 ```
-
-## ⚙️ Repository Setup
-
-**No setup required!** This repository is public and workflows are immediately accessible to all repositories.
-
-### Repository Status:
-- ✅ **Public repository** - No access restrictions
-- ✅ **Immediately usable** - No configuration needed
-- ✅ **Community friendly** - Others can learn from your workflow patterns
 
 ## 🚀 Quick Start
 
-### Railway Deployment (Recommended)
+### Using Atomic Actions
 
-Copy the [railway-cd.yml](workflow-templates/railway-cd.yml) template to your project's `.github/workflows/` directory:
-
-```bash
-mkdir -p .github/workflows
-curl -o .github/workflows/railway-cd.yml https://raw.githubusercontent.com/NextNodeSolutions/github-actions/main/workflow-templates/railway-cd.yml
-```
-
-### Required Secrets
-
-Add these secrets to your repository or organization:
-
-- **RAILWAY_API_TOKEN** - Your Railway account token for deployments
-
-Optional secrets:
-- **CLOUDFLARE_API_TOKEN** - For custom domain DNS management
-
-### Example Usage
+Atomic actions are small, focused, reusable components that perform a single task.
 
 ```yaml
-# Development deployment
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
-with:
-  app-name: "my-app"  # Creates: dev-my-app
-  app-env: "DEV"
-secrets:
-  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-
-# Production deployment
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-prod.yml@main
-with:
-  app-name: "my-app"  # Creates: prod-my-app
-  domain: "myapp.com"
-  app-env: "PROD"
-secrets:
-  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-## 📦 Available Workflows
-
-### Railway Deployment Packs
-
-#### Development Deployment
-```yaml
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
-with:
-  app-name: "my-app"  # Creates: dev-my-app
-  app-env: "DEV"
-  variables: '{"NODE_ENV": "development"}'
-secrets:
-  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-#### Production Deployment
-```yaml
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-prod.yml@main
-with:
-  app-name: "my-app"  # Creates: prod-my-app
-  domain: "myapp.com"
-  app-env: "PROD"
-  memory-mb: "1024"
-  variables: '{"NODE_ENV": "production"}'
-secrets:
-  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-### Quality Checks
-```yaml
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
-with:
-  run-lint: true
-  run-typecheck: true
-  run-test: true
-```
-
-## 📋 Composite Actions
-
-### `setup-environment`
-Complete environment setup with Node.js, pnpm, and optional dependency installation.
-
-```yaml
-- uses: ./.github-actions/actions/setup-environment
+# In your workflow file
+- name: Setup Node.js and pnpm
+  uses: nextnodesolutions/github-actions/actions/atomic/setup-node-pnpm@main
   with:
-    node-version: '20'        # default: '20'
-    pnpm-version: '10.11.0'   # default: '10.11.0'
-    install-deps: 'true'      # default: 'true'
-    frozen-lockfile: 'true'   # default: 'true'
-    working-directory: '.'    # default: '.'
-```
-
-### Railway Deployment
-Use the reusable workflows instead of composite actions for Railway deployment:
-
-```yaml
-# Development deployment
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-railway-dev.yml@main
-with:
-  app-name: "my-app"
-  variables: '{"NODE_ENV": "development"}'
-secrets:
-  RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-### `quality-pipeline`
-Comprehensive quality checks including lint, type-check, test, and build.
-
-```yaml
-- uses: ./.github-actions/actions/quality-pipeline
+    node-version: '20'
+    pnpm-version: '10.12.4'
+    
+- name: Install Dependencies
+  uses: nextnodesolutions/github-actions/actions/atomic/install@main
   with:
-    node-version: '20'        # default: '20'
-    pnpm-version: '10.11.0'   # default: '10.11.0'
-    skip-tests: 'false'       # default: 'false'
-    skip-build: 'false'       # default: 'false'
-    skip-audit: 'false'       # default: 'false'
-    audit-level: 'high'       # default: 'high'
-    working-directory: '.'    # default: '.'
+    frozen-lockfile: true
+    
+- name: Run Tests
+  uses: nextnodesolutions/github-actions/actions/atomic/test@main
+  with:
+    coverage: true
+    coverage-threshold: '80'
 ```
 
-## 📋 Legacy Workflow Reference
+### Using Workflow Packs
 
-### Individual Jobs
-
-#### `job-lint.yml`
-Runs linting checks on your codebase.
-
-**Inputs:**
-- `node-version` (default: '22')
-- `pnpm-version` (default: '10.11.0')
-- `working-directory` (default: '.')
-- `command` (default: 'pnpm lint')
-
-#### `job-typecheck.yml`
-Runs TypeScript type checking.
-
-**Inputs:**
-- `node-version` (default: '22')
-- `pnpm-version` (default: '10.11.0')
-- `working-directory` (default: '.')
-- `command` (default: 'pnpm type-check')
-
-#### `job-test.yml`
-Runs tests with optional coverage.
-
-**Inputs:**
-- `node-version` (default: '22')
-- `pnpm-version` (default: '10.11.0')
-- `working-directory` (default: '.')
-- `coverage` (default: false)
-- `command` (default: automatic based on coverage)
-
-#### `job-build.yml`
-Builds the project with optional artifact upload.
-
-**Inputs:**
-- `node-version` (default: '22')
-- `pnpm-version` (default: '10.11.0')
-- `working-directory` (default: '.')
-- `command` (default: 'pnpm build')
-- `upload-artifact` (default: false)
-- `artifact-name` (default: 'build-output')
-- `artifact-path` (default: 'dist')
-
-#### `job-security.yml`
-Runs security audits and Docker scans.
-
-**Inputs:**
-- `node-version` (default: '22')
-- `pnpm-version` (default: '10.11.0')
-- `working-directory` (default: '.')
-- `audit-level` (default: 'high')
-- `docker-scan` (default: true)
-
-#### `job-deploy-fly.yml`
-Deploys to Fly.io with health checks and rollback.
-
-**Inputs:**
-- `environment` (required: 'development' or 'production')
-- `app-name` (required)
-- `fly-org` (required)
-- `fly-config` (default: 'fly.toml')
-- `health-check-url` (optional)
-- `strategy` (default: 'rolling', options: 'rolling', 'bluegreen')
-- `min-machines` (default: '1')
-- `memory-mb` (default: '512')
-- `checkout-ref` (optional)
-
-**Secrets:**
-- `FLY_API_TOKEN` (required)
-
-**Outputs:**
-- `fly-url`: Deployed application URL
-- `deployed`: Deployment status
-
-#### `job-deploy-railway.yml`
-Deploys to Railway with project/service management and health checks.
-
-**Inputs:**
-- `environment` (required: 'development' or 'production')
-- `app-name` (required) - Creates `${environment}-${app-name}` project
-- `service-name` (optional, defaults to app-name)
-- `health-check-url` (optional)
-- `memory-mb` (default: '512')
-- `app-env` (optional: LOCAL/DEV/PROD)
-- `variables` (optional: JSON object for environment variables)
-- `working-directory` (default: '.')
-
-**Secrets:**
-- `RAILWAY_API_TOKEN` (required)
-
-**Outputs:**
-- `railway-url`: Deployed application URL
-- `project-id`: Railway project ID
-- `service-id`: Railway service ID
-- `deployed`: Deployment status
-
-#### `job-dns-cloudflare.yml`
-Manages DNS records via Cloudflare API.
-
-**Inputs:**
-- `domain` (required)
-- `subdomain` (default: '', empty for root)
-- `app-name` (required)
-- `proxied` (default: true)
-- `ttl` (default: 1)
-
-**Secrets:**
-- `FLY_API_TOKEN` (required)
-- `CLOUDFLARE_API_TOKEN` (required)
-- `CLOUDFLARE_ZONE_ID` (required)
-
-**Outputs:**
-- `dns-updated`: DNS update status
-- `custom-url`: Custom domain URL
-
-### Workflow Packs
-
-#### `pack-quality-checks.yml`
-Combined quality checks workflow.
-
-**Inputs:**
-- `run-lint` (default: true)
-- `run-typecheck` (default: true)
-- `run-test` (default: true)
-- `run-build` (default: false)
-- `run-security` (default: false)
-- `test-coverage` (default: false)
-- Plus all individual job inputs
-
-#### `pack-deploy-dev.yml`
-Complete development deployment to Fly.io.
-
-**Features:**
-- Quality checks (optional)
-- Fly.io deployment
-- Cloudflare DNS setup
-- Deployment summary
-
-**Inputs:**
-- `app-name` (required)
-- `fly-org` (required)
-- `domain` (optional)
-- `run-quality-checks` (default: true)
-- Plus standard Node.js/pnpm inputs
-
-#### `pack-deploy-prod.yml`
-Complete production deployment to Fly.io.
-
-**Features:**
-- Full quality checks with security
-- Blue-green deployment
-- Production-grade settings
-- DNS configuration
-
-**Inputs:**
-- Same as deploy-dev plus:
-- `min-machines` (default: '2')
-- `memory-mb` (default: '1024')
-
-#### `pack-deploy-railway-dev.yml`
-Complete development deployment to Railway.
-
-**Features:**
-- Quality checks (optional)
-- Railway deployment with auto project/service creation
-- Cloudflare DNS setup
-- Deployment summary
-
-**Inputs:**
-- `app-name` (required) - Creates `dev-${app-name}` project
-- `service-name` (optional, defaults to app-name)
-- `domain` (optional)
-- `run-quality-checks` (default: true)
-- `variables` (optional: JSON object for environment variables)
-- Plus standard Node.js/pnpm inputs
-
-#### `pack-deploy-railway-prod.yml`
-Complete production deployment to Railway.
-
-**Features:**
-- Full quality checks with security and coverage
-- Railway deployment with enhanced health checks
-- Production-grade settings
-- DNS configuration
-
-**Inputs:**
-- Same as railway-dev plus:
-- `memory-mb` (default: '1024')
-- `max-wait-minutes` (default: '15')
-
-## 🎯 Common Use Cases
-
-### 1. PR Quality Checks (No Noise on develop→main)
+Workflow packs combine multiple atomic actions into complete workflows.
 
 ```yaml
-name: PR Checks
-on:
-  pull_request:
-    branches: [main, develop]
+# Quality checks workflow
+name: CI
+
+on: [push, pull_request]
 
 jobs:
   quality:
-    # Skip redundant checks on develop→main PRs
-    if: !(github.base_ref == 'main' && github.head_ref == 'develop')
-    uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
+    uses: nextnodesolutions/github-actions/packs/quality-checks.yml@main
     with:
-      run-build: false
+      node-version: '20'
+      test-coverage: true
+      run-security: true
 ```
 
-### 2. Automated Development Deployment
-
 ```yaml
-name: Deploy Dev
-on:
-  push:
-    branches: [develop]
+# Deployment workflow
+name: Deploy
 
-jobs:
-  deploy:
-    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-dev.yml@main
-    with:
-      app-name: 'dev-myapp'
-      fly-org: 'nextnode'
-      domain: 'myapp.com'
-    secrets: inherit
-```
-
-### 3. Manual Production Deployment
-
-```yaml
-name: Deploy Production
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 jobs:
   deploy:
-    uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@main
+    uses: nextnodesolutions/github-actions/packs/deploy-railway.yml@main
     with:
-      app-name: 'prod-myapp'
-      fly-org: 'nextnode'
-      domain: 'myapp.com'
-      min-machines: '3'
-      memory-mb: '2048'
-    secrets: inherit
+      environment: production
+      app-name: my-app
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
 ```
 
-### 4. Scheduled Security Scans
+## 📦 Available Atomic Actions
 
+### Core Actions
+
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `setup-node-pnpm` | Setup Node.js and pnpm with caching | `node-version`, `pnpm-version` |
+| `install` | Install dependencies with pnpm | `frozen-lockfile`, `working-directory` |
+| `lint` | Run ESLint with optional auto-fix | `fix`, `fail-on-warning` |
+| `typecheck` | Run TypeScript type checking | `strict`, `tsconfig-path` |
+| `test` | Run tests with optional coverage | `coverage`, `coverage-threshold` |
+| `build` | Build project with pnpm | `build-command`, `output-directory` |
+| `security-audit` | Run security audit | `audit-level`, `fix` |
+
+### Utility Actions
+
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `health-check` | Check URL health status | `url`, `max-attempts`, `expected-status` |
+| `log-step` | Enhanced logging with groups | `title`, `message`, `level` |
+| `set-env-vars` | Set environment variables | `variables`, `prefix` |
+| `run-command` | Run shell commands | `command`, `working-directory` |
+| `check-command` | Check if command exists | `command`, `fail-if-missing` |
+
+## 🔧 Available Workflow Packs
+
+### Quality Checks Pack
+**File:** `packs/quality-checks.yml`
+
+Complete quality assurance workflow including:
+- Linting
+- Type checking
+- Testing (with optional coverage)
+- Building
+- Security audit
+
+**Example:**
 ```yaml
-name: Security Scan
-on:
-  schedule:
-    - cron: '0 0 * * 1' # Weekly on Monday
-
 jobs:
-  security:
-    uses: NextNodeSolutions/github-actions/.github/workflows/job-security.yml@main
+  quality:
+    uses: nextnodesolutions/github-actions/packs/quality-checks.yml@main
     with:
-      audit-level: 'moderate'
+      run-lint: true
+      run-typecheck: true
+      run-tests: true
+      run-build: true
+      run-security: false
+      test-coverage: true
+      coverage-threshold: '80'
 ```
 
-## 🔑 Required Secrets
+### Railway Deployment Pack
+**File:** `packs/deploy-railway.yml`
 
-Configure these secrets in your repository settings:
+Unified deployment workflow for Railway supporting both development and production environments.
 
-### Railway Deployments (Recommended)
-- **`RAILWAY_API_TOKEN`**: Railway account token for deployments
-- **`CLOUDFLARE_API_TOKEN`**: Cloudflare API token (optional, for custom domains)
+**Features:**
+- Environment-based configuration
+- Quality checks before deployment
+- Health checks after deployment
+- DNS configuration support
 
-### Fly.io Deployments (Legacy)
-- **`FLY_API_TOKEN`**: Fly.io API token for deployments
-- **`CLOUDFLARE_API_TOKEN`**: Cloudflare API token (if using custom domains)
-- **`CLOUDFLARE_ZONE_ID`**: Cloudflare zone ID (if using custom domains)
+**Example:**
+```yaml
+jobs:
+  deploy:
+    uses: nextnodesolutions/github-actions/packs/deploy-railway.yml@main
+    with:
+      environment: production
+      app-name: nextnode-app
+      memory-mb: '1024'
+      run-quality-checks: true
+      test-coverage: true
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
 
-## 🔒 Access & Security
+## ⚙️ Configuration
 
-### Public Repository Benefits
-This repository is **public** for maximum accessibility and ease of use:
-- ✅ **Zero configuration** required for any repository to use these workflows
-- ✅ **Works immediately** without access restrictions
-- ✅ **Community contribution** - others can learn from and contribute to your workflows
-- ✅ **No maintenance overhead** for access permissions
+### Default Values
 
-### Access Requirements
-- ✅ **Any repository** can use these workflows (public or private)
-- ✅ **No organization restrictions** - works across different organizations
-- ✅ Secrets are inherited using `secrets: inherit`
-- ✅ Workflows run with appropriate permissions
-
-## 📌 Version Pinning
-
-For production use, pin to specific versions:
+Default configuration is stored in `config/defaults.yml`:
 
 ```yaml
-# Use specific tag
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@v1.0.0
-
-# Use commit SHA
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@abc123
-
-# Use main branch (latest)
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-deploy-prod.yml@main
+node:
+  version: '20'
+  
+pnpm:
+  version: '10.12.4'
+  
+audit:
+  level: 'high'
+  
+railway:
+  memory_mb: '512'
+  memory_mb_prod: '1024'
 ```
+
+### Environment-Based Settings
+
+The deployment workflow automatically adjusts settings based on environment:
+
+| Setting | Development | Production |
+|---------|------------|------------|
+| Memory | 512MB | 1024MB |
+| Build Command | `build:dev` | `build` |
+| Coverage Threshold | 60% | 80% |
+| Fail on Warning | No | Yes |
 
 ## 🧪 Testing
 
-This repository includes comprehensive tests:
+Internal testing workflows are located in the `internal/` directory and are not accessible from external repositories.
+
+To test the actions locally:
 
 ```bash
-# Run all tests locally
-act push
-
-# Test specific workflow
-act -W .github/workflows/test-actions.yml
+# Run internal tests (only from this repository)
+gh workflow run internal/test-workflows.yml
 ```
+
+## 📋 Requirements
+
+- **Node.js:** v20+ recommended
+- **pnpm:** v10.12.4+ required (npm and yarn are not supported)
+- **GitHub Actions:** All workflows use GitHub-hosted runners
+
+## 🔒 Security
+
+- All workflows use `pnpm audit` for security scanning
+- Production deployments require passing security checks
+- Automated dependency updates via Dependabot
+- Secrets are never logged or exposed
 
 ## 🤝 Contributing
 
-1. Create a feature branch
-2. Make your changes
-3. Ensure all tests pass
-4. Submit a PR with clear description
+1. Create atomic actions for single responsibilities
+2. Use pnpm exclusively (no npm/yarn support)
+3. Add comprehensive logging with GitHub Actions groups
+4. Include timing information for performance tracking
+5. Write clear documentation with examples
+6. Test internally before external use
+
+## 📝 Migration Guide
+
+### From npm/yarn to pnpm
+
+All workflows now use pnpm exclusively. Update your projects:
+
+1. Remove `package-lock.json` or `yarn.lock`
+2. Run `pnpm import` to generate `pnpm-lock.yaml`
+3. Update all workflow files to use these actions
+4. Remove any npm/yarn specific configurations
+
+### From Old Workflow Structure
+
+Replace individual job workflows with atomic actions:
+
+```yaml
+# Old
+- uses: nextnodesolutions/github-actions/.github/workflows/job-lint.yml@main
+
+# New
+- uses: nextnodesolutions/github-actions/actions/atomic/lint@main
+```
+
+## 📚 Best Practices
+
+1. **Use Atomic Actions:** Build workflows from small, reusable pieces
+2. **Enable Caching:** Always use cache for dependencies
+3. **Set Appropriate Timeouts:** Prevent hung workflows
+4. **Use Groups for Logging:** Improve readability with `::group::`
+5. **Fail Fast:** Exit early on errors
+6. **Document Inputs:** Provide clear descriptions for all inputs
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Issue:** Dependencies not installing
+- **Solution:** Ensure `pnpm-lock.yaml` exists and is committed
+
+**Issue:** Type check failing
+- **Solution:** Verify `tsconfig.json` has `strict: true`
+
+**Issue:** Coverage threshold not met
+- **Solution:** Adjust threshold or improve test coverage
+
+**Issue:** Deployment failing
+- **Solution:** Check Railway API token and project configuration
 
 ## 📄 License
 
-MIT License - see LICENSE file for details
+MIT © NextNode Solutions
+
+## 🔗 Links
+
+- [NextNode](https://nextnode.dev)
+- [GitHub Actions Documentation](https://docs.github.com/en/actions)
+- [pnpm Documentation](https://pnpm.io)

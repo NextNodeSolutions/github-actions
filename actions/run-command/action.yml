@@ -1,0 +1,74 @@
+name: 'Run Command'
+description: 'Atomic action to run any command with proper logging and error handling'
+inputs:
+  command:
+    description: 'Command to run'
+    required: true
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  name:
+    description: 'Human readable name for the command'
+    required: false
+    default: ''
+  continue-on-error:
+    description: 'Continue workflow even if command fails'
+    required: false
+    default: 'false'
+  timeout-minutes:
+    description: 'Timeout for command execution in minutes'
+    required: false
+    default: '10'
+
+outputs:
+  exit-code:
+    description: 'Exit code of the command'
+    value: ${{ steps.run.outputs.exit-code }}
+  success:
+    description: 'Whether the command succeeded'
+    value: ${{ steps.run.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Log command execution
+      shell: bash
+      run: |
+        DISPLAY_NAME="${{ inputs.name }}"
+        if [[ -z "$DISPLAY_NAME" ]]; then
+          DISPLAY_NAME="${{ inputs.command }}"
+        fi
+        echo "::group::🔨 Running: $DISPLAY_NAME"
+        echo "• Command: ${{ inputs.command }}"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Timeout: ${{ inputs.timeout-minutes }} minutes"
+        echo "• Continue on error: ${{ inputs.continue-on-error }}"
+        echo "::endgroup::"
+        
+    - name: Execute command
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      timeout-minutes: ${{ fromJson(inputs.timeout-minutes) }}
+      continue-on-error: ${{ inputs.continue-on-error == 'true' }}
+      run: |
+        echo "::group::⚡ Executing command"
+        set +e
+        ${{ inputs.command }}
+        EXIT_CODE=$?
+        set -e
+        
+        echo "exit-code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        
+        if [[ $EXIT_CODE -eq 0 ]]; then
+          echo "✅ Command completed successfully"
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Command failed with exit code: $EXIT_CODE"
+          echo "success=false" >> $GITHUB_OUTPUT
+          if [[ "${{ inputs.continue-on-error }}" != "true" ]]; then
+            exit $EXIT_CODE
+          fi
+        fi
+        echo "::endgroup::"

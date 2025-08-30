@@ -1,0 +1,114 @@
+name: DNS Cloudflare
+
+# EXTERNAL WORKFLOW - Atomic Cloudflare DNS update workflow
+# Configures DNS records via Cloudflare API
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        description: 'Domain to configure'
+        required: true
+        type: string
+      target:
+        description: 'Target URL or IP address'
+        required: true
+        type: string
+      record-type:
+        description: 'DNS record type (A, AAAA, CNAME)'
+        required: false
+        default: 'CNAME'
+        type: string
+      proxied:
+        description: 'Enable Cloudflare proxy'
+        required: false
+        default: true
+        type: boolean
+      ttl:
+        description: 'DNS TTL in seconds (1 = automatic)'
+        required: false
+        default: '1'
+        type: string
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ZONE_ID:
+        required: false
+    outputs:
+      dns-updated:
+        description: 'Whether DNS was successfully updated'
+        value: ${{ jobs.update.outputs.success }}
+      record-id:
+        description: 'Cloudflare DNS record ID'
+        value: ${{ jobs.update.outputs.record-id }}
+
+jobs:
+  update:
+    name: Update DNS
+    runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.cloudflare.outputs.success == 'true' }}
+      record-id: ${{ steps.cloudflare.outputs.record-id }}
+    steps:
+      - name: Update Cloudflare DNS
+        id: cloudflare
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          # Get zone ID if not provided
+          if [[ -z "$CF_ZONE_ID" ]]; then
+            # Extract root domain from full domain
+            ROOT_DOMAIN=$(echo "${{ inputs.domain }}" | awk -F. '{print $(NF-1)"."$NF}')
+            
+            ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json")
+            
+            CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id')
+            
+            if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+          
+          # Check if record exists
+          EXISTING=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}&type=${{ inputs.record-type }}" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+          
+          RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id')
+          
+          # Prepare record data
+          RECORD_DATA=$(jq -n \
+            --arg type "${{ inputs.record-type }}" \
+            --arg name "${{ inputs.domain }}" \
+            --arg content "${{ inputs.target }}" \
+            --argjson proxied "${{ inputs.proxied }}" \
+            --argjson ttl "${{ inputs.ttl }}" \
+            '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
+          
+          # Create or update record
+          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" ]]; then
+            RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$RECORD_DATA")
+          else
+            RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$RECORD_DATA")
+            RECORD_ID=$(echo "$RESPONSE" | jq -r '.result.id')
+          fi
+          
+          # Check success
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+          echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+          
+          if [[ "$SUCCESS" != "true" ]]; then
+            echo "$RESPONSE" | jq '.errors'
+            exit 1
+          fi

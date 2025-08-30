@@ -1,0 +1,57 @@
+name: Lint
+
+# EXTERNAL WORKFLOW - Atomic linting workflow
+# Performs code linting checks only
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      lint-fix:
+        description: 'Auto-fix lint issues'
+        required: false
+        default: false
+        type: boolean
+      fail-on-warning:
+        description: 'Fail on warnings'
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      lint-passed:
+        description: 'Whether linting passed'
+        value: ${{ jobs.lint.outputs.passed }}
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.lint.outcome == 'success' }}
+    steps:
+      - uses: ./actions/node-setup-complete
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - id: lint
+        uses: ./actions/lint
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          fix: ${{ inputs.lint-fix }}
+          fail-on-warning: ${{ inputs.fail-on-warning }}
