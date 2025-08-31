@@ -38,14 +38,14 @@ jobs:
     outputs:
       passed: ${{ steps.audit.outcome == 'success' }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+      - uses: NextNodeSolutions/github-actions/actions/build/node-setup-complete@main
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
           working-directory: ${{ inputs.working-directory }}
           
       - id: audit
-        uses: NextNodeSolutions/github-actions/actions/security-audit@main
+        uses: NextNodeSolutions/github-actions/actions/quality/security-audit@main
         with:
           working-directory: ${{ inputs.working-directory }}
           audit-level: ${{ inputs.audit-level }}

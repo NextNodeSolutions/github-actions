@@ -15,34 +15,68 @@ This is a **reusable GitHub Actions repository** for NextNode projects. It provi
 github-actions/
 ├── .github/workflows/          # Reusable workflows (external + internal)
 │   ├── quality-checks.yml     # Full quality pipeline (workflow_call)
-│   ├── deploy-railway.yml     # Railway deployment (workflow_call)
+│   ├── deploy.yml             # Railway deployment (workflow_call)
+│   ├── dns.yml                # DNS Cloudflare management (workflow_call)
 │   └── internal-tests.yml     # Internal tests (workflow_dispatch only)
-├── actions/                    # Atomic reusable actions
-│   ├── setup-node-pnpm/       # Node.js and pnpm setup
-│   ├── install/               # Dependency installation
-│   ├── lint/                  # ESLint checks
-│   ├── typecheck/             # TypeScript validation
-│   ├── test/                  # Test execution
-│   ├── build/                 # Project building
-│   ├── security-audit/        # Security scanning
-│   ├── health-check/          # URL health monitoring
-│   ├── log-step/              # Enhanced logging
-│   ├── set-env-vars/          # Environment management
-│   ├── run-command/           # Command wrapper
-│   └── check-command/         # Command availability check
+├── actions/                    # Domain-organized atomic actions
+│   ├── build/                 # 🏗️ Build & Setup domain
+│   │   ├── setup-node-pnpm/   # Node.js and pnpm setup
+│   │   ├── install/           # Dependency installation
+│   │   ├── build-project/     # Project building
+│   │   ├── node-setup-complete/ # Complete Node setup
+│   │   └── smart-cache/       # Intelligent caching
+│   ├── quality/               # 🔍 Code Quality domain
+│   │   ├── lint/              # ESLint checks
+│   │   ├── typecheck/         # TypeScript validation
+│   │   └── security-audit/    # Security scanning
+│   ├── deploy/                # 🚀 Railway Deployment domain
+│   │   ├── railway-cli-setup/ # Railway CLI configuration
+│   │   ├── railway-project-setup/ # Railway project management
+│   │   ├── railway-service-setup/ # Railway service configuration
+│   │   ├── railway-deploy/    # Main deployment action
+│   │   ├── railway-deploy-trigger/ # Deployment triggering
+│   │   ├── railway-deployment-wait/ # Deployment monitoring
+│   │   ├── railway-variables/ # Environment variables
+│   │   └── railway-url-generate/ # URL generation
+│   ├── domain/                # 🌐 Domain Management domain
+│   │   └── railway-domain-setup/ # Domain configuration
+│   ├── monitoring/            # 🔍 Monitoring domain
+│   │   └── check-job-results/ # Job result verification
+│   ├── utilities/             # 🛠️ Generic Utilities domain
+│   │   ├── log-step/          # Enhanced logging
+│   │   ├── run-command/       # Command wrapper
+│   │   ├── check-command/     # Command availability check
+│   │   ├── set-env-vars/      # Environment management
+│   │   └── should-run/        # Conditional logic
+│   ├── test/                  # ✅ Global: Test execution (used externally)
+│   └── health-check/          # ✅ Global: URL health monitoring (used externally)
 └── README.md                   # User documentation
 ```
 
 ### Design Principles
 
-1. **Atomic Actions**: Each action in `/actions/` does ONE thing well
-2. **No Package Manager Conditionals**: pnpm is hardcoded everywhere - no switches or alternatives
-3. **Workflow Isolation**: 
+1. **Domain Organization**: Actions are grouped by functional domain for better navigation
+2. **Atomic Actions**: Each action in `/actions/` does ONE thing well
+3. **Global Actions Preservation**: `test/` and `health-check/` remain at root for external compatibility
+4. **No Package Manager Conditionals**: pnpm is hardcoded everywhere - no switches or alternatives
+5. **Workflow Isolation**: 
    - External workflows use `workflow_call` trigger only
    - Internal tests use `workflow_dispatch` to prevent recursion
-4. **Maximum Reusability**: Actions can be used individually or composed
-5. **DRY Principle**: No code duplication, shared logic in atomic actions
-6. **Clean Logging**: All actions use GitHub groups and timing metrics
+6. **Maximum Reusability**: Actions can be used individually or composed
+7. **DRY Principle**: No code duplication, shared logic in atomic actions
+8. **Clean Logging**: All actions use GitHub groups and timing metrics
+
+### Domain Organization Philosophy
+
+The actions are organized into logical domains to improve maintainability and discoverability:
+
+- **🏗️ build/**: Everything related to project setup, dependency installation, and building
+- **🔍 quality/**: Code quality checks including linting, type checking, and security
+- **🚀 deploy/**: Railway platform deployment and infrastructure management  
+- **🌐 domain/**: Domain and DNS management (separate from deployment)
+- **🔍 monitoring/**: Health checks and job result verification
+- **🛠️ utilities/**: Generic helper actions used across domains
+- **Root level**: Only globally-used actions that external projects depend on
 
 ## Usage Patterns
 
@@ -53,13 +87,29 @@ External projects can call workflows in two ways:
 1. **Full pipelines** (workflow packs):
 ```yaml
 uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
-uses: nextnodesolutions/github-actions/.github/workflows/deploy-railway.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
 ```
 
 2. **Individual actions**:
+
+**Global actions (root level - always accessible):**
 ```yaml
-uses: nextnodesolutions/github-actions/actions/lint@main
 uses: nextnodesolutions/github-actions/actions/test@main
+uses: nextnodesolutions/github-actions/actions/health-check@main
+```
+
+**Domain-specific actions (internal use only):**
+```yaml
+# Build domain
+uses: nextnodesolutions/github-actions/actions/build/setup-node-pnpm@main
+uses: nextnodesolutions/github-actions/actions/build/install@main
+
+# Quality domain  
+uses: nextnodesolutions/github-actions/actions/quality/lint@main
+uses: nextnodesolutions/github-actions/actions/quality/typecheck@main
+
+# Deploy domain
+uses: nextnodesolutions/github-actions/actions/deploy/railway-deploy@main
 ```
 
 ### For This Repository
@@ -69,12 +119,14 @@ Internal testing uses `internal-tests.yml` with manual trigger only to avoid rec
 ## Important Notes for Development
 
 ### When Adding New Actions
-1. Create a new folder in `/actions/` with descriptive name
-2. Add `action.yml` (not `action.yaml`)
-3. Use inputs with sensible defaults
-4. Add logging with `::group::` and `::endgroup::`
-5. Include timing information
-6. Document inputs/outputs clearly
+1. **Choose appropriate domain**: Place in correct domain folder (`build/`, `quality/`, `deploy/`, `domain/`, `monitoring/`, `utilities/`)
+2. Create a new folder in `/actions/{domain}/` with descriptive name
+3. Add `action.yml` (not `action.yaml`)
+4. Use inputs with sensible defaults
+5. Add logging with `::group::` and `::endgroup::`
+6. Include timing information  
+7. Document inputs/outputs clearly
+8. **Never add to root level** unless it's globally used by external projects
 
 ### When Modifying Workflows
 1. External workflows must use `workflow_call` trigger
@@ -91,10 +143,19 @@ Internal testing uses `internal-tests.yml` with manual trigger only to avoid rec
 
 ### Adding a New Atomic Action
 ```bash
-mkdir actions/my-new-action
-touch actions/my-new-action/action.yml
+# Choose appropriate domain first
+mkdir actions/utilities/my-new-action
+touch actions/utilities/my-new-action/action.yml
 # Add action logic using existing patterns
 ```
+
+### Domain Selection Guide
+- **build/**: Setup, installation, building, caching
+- **quality/**: Linting, type checking, testing, security audits  
+- **deploy/**: Railway deployment and infrastructure
+- **domain/**: Domain and DNS management
+- **monitoring/**: Health checks, job verification
+- **utilities/**: Generic helpers and tools
 
 ### Testing Actions Locally
 ```bash
@@ -104,14 +165,22 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ### Debugging Workflow Issues
 1. Check workflow syntax
-2. Verify action paths (remember: no `/atomic/` subdirectory)
-3. Ensure proper trigger configuration
-4. Review logs with expanded groups
+2. **Verify action paths**: Use domain-based paths (e.g., `actions/build/install`, not `actions/install`)
+3. **Global actions**: Only `test/` and `health-check/` are at root level
+4. Ensure proper trigger configuration
+5. Review logs with expanded groups
 
 ## Migration Notes
 
-This repository was refactored from a complex structure to a simpler, more maintainable one:
-- Removed: workflow-templates/, packs/, internal/ directories
+### Latest Migration: Domain Organization (2025)
+This repository was reorganized by domain for better maintainability:
+- **Organized**: Actions grouped into logical domains (`build/`, `quality/`, `deploy/`, etc.)
+- **Preserved**: Global actions `test/` and `health-check/` at root for external compatibility
+- **Separated**: Deploy vs Domain management (Railway deployment vs DNS/domain setup)
+- **Updated**: All internal workflow references to use new paths
+
+### Previous Migrations
+- Removed: workflow-templates/, packs/, internal/ directories  
 - Removed: Fly.io deployment support
 - Removed: npm/yarn support
 - Simplified: Action paths (removed unnecessary nesting)
@@ -142,10 +211,11 @@ This repository was refactored from a complex structure to a simpler, more maint
 
 ### Common Issues
 
-1. **"Action not found"**: Check path - should be `actions/name`, not `actions/atomic/name`
-2. **"Workflow not accessible"**: Ensure using `workflow_call` trigger
-3. **"pnpm not found"**: Always use `setup-node-pnpm` action first
+1. **"Action not found"**: Check path - use domain-based paths like `actions/build/install`, not `actions/install`
+2. **"Workflow not accessible"**: Ensure using `workflow_call` trigger  
+3. **"pnpm not found"**: Always use `actions/build/setup-node-pnpm` action first
 4. **"Recursion detected"**: Check triggers - no push/PR triggers on this repo
+5. **"Global action moved"**: Only `test/` and `health-check/` remain at root level
 
 ### Debug Mode
 
