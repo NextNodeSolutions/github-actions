@@ -1,0 +1,68 @@
+name: 'Setup Node.js & pnpm'
+description: 'Atomic action to setup Node.js and pnpm with caching support'
+inputs:
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  pnpm-version:
+    description: 'pnpm version'
+    required: false
+    default: '10.12.4'
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  enable-cache:
+    description: 'Enable pnpm cache'
+    required: false
+    default: 'true'
+
+outputs:
+  node-version:
+    description: 'Installed Node.js version'
+    value: ${{ steps.setup.outputs.node-version }}
+  pnpm-version:
+    description: 'Installed pnpm version'
+    value: ${{ steps.setup.outputs.pnpm-version }}
+  cache-hit:
+    description: 'Whether cache was hit'
+    value: ${{ steps.setup.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Log environment setup
+      shell: bash
+      run: |
+        echo "::group::🔧 Setting up Node.js & pnpm environment"
+        echo "• Node.js version: ${{ inputs.node-version }}"
+        echo "• pnpm version: ${{ inputs.pnpm-version }}"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Cache enabled: ${{ inputs.enable-cache }}"
+        echo "::endgroup::"
+        
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+        
+    - name: Setup Node.js
+      id: setup
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: ${{ inputs.enable-cache == 'true' && 'pnpm' || '' }}
+        cache-dependency-path: ${{ inputs.enable-cache == 'true' && format('{0}/pnpm-lock.yaml', inputs.working-directory) || '' }}
+        
+    - name: Verify installation
+      shell: bash
+      run: |
+        echo "::group::✅ Verification"
+        NODE_VER=$(node --version)
+        PNPM_VER=$(pnpm --version)
+        echo "• Installed Node.js: $NODE_VER"
+        echo "• Installed pnpm: $PNPM_VER"
+        echo "node-version=$NODE_VER" >> $GITHUB_OUTPUT
+        echo "pnpm-version=$PNPM_VER" >> $GITHUB_OUTPUT
+        echo "::endgroup::"

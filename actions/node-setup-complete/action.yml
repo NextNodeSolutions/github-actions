@@ -1,0 +1,50 @@
+name: 'Complete Node.js Setup'
+description: 'Complete setup for Node.js projects including checkout, pnpm setup, and dependency installation'
+author: 'NextNodeSolutions'
+
+inputs:
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  pnpm-version:
+    description: 'pnpm version'
+    required: false
+    default: '10.12.4'
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  enable-cache:
+    description: 'Enable dependency caching'
+    required: false
+    default: 'true'
+  frozen-lockfile:
+    description: 'Use frozen lockfile for installation'
+    required: false
+    default: 'true'
+  checkout:
+    description: 'Run checkout step'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout code
+      if: inputs.checkout == 'true'
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js and pnpm
+      uses: NextNodeSolutions/github-actions/actions/setup-node-pnpm@feat/railway-deployment-support
+      with:
+        node-version: ${{ inputs.node-version }}
+        pnpm-version: ${{ inputs.pnpm-version }}
+        working-directory: ${{ inputs.working-directory }}
+        enable-cache: ${{ inputs.enable-cache }}
+        
+    - name: Install dependencies
+      uses: NextNodeSolutions/github-actions/actions/install@feat/railway-deployment-support
+      with:
+        working-directory: ${{ inputs.working-directory }}
+        frozen-lockfile: ${{ inputs.frozen-lockfile }}

@@ -1,0 +1,93 @@
+name: 'Railway URL Generate'
+description: 'Generate or retrieve Railway service URL'
+author: 'NextNodeSolutions'
+
+inputs:
+  service-name:
+    description: 'Railway service name'
+    required: true
+  railway-token:
+    description: 'Railway API token'
+    required: true
+
+outputs:
+  railway-url:
+    description: 'Railway service URL'
+    value: ${{ steps.generate.outputs.url }}
+  domain:
+    description: 'Railway domain (without protocol)'
+    value: ${{ steps.generate.outputs.domain }}
+  generated:
+    description: 'Whether URL was generated (true) or retrieved (false)'
+    value: ${{ steps.generate.outputs.generated }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate Railway URL
+      id: generate
+      shell: bash
+      run: |
+        echo "::group::🔗 Getting Railway URL"
+        
+        START_TIME=$(date +%s)
+        SERVICE_NAME="${{ inputs.service-name }}"
+        
+        echo "• Service: $SERVICE_NAME"
+        
+        # JQ selector for reuse
+        JQ_SERVICE_SELECTOR='.services.edges[] | .node | select(.name=="'"$SERVICE_NAME"'")'
+        
+        # Check if a Railway domain already exists
+        echo "• Checking for existing domain..."
+        SERVICE_DOMAIN=$(railway status --json 2>/dev/null | jq -r "$JQ_SERVICE_SELECTOR | .serviceInstances.edges[].node.domains.serviceDomains[0].domain // empty" 2>/dev/null)
+        
+        if [ -n "$SERVICE_DOMAIN" ] && [ "$SERVICE_DOMAIN" != "empty" ]; then
+          RAILWAY_URL="https://$SERVICE_DOMAIN"
+          echo "• Found existing domain: $SERVICE_DOMAIN"
+          echo "url=$RAILWAY_URL" >> $GITHUB_OUTPUT
+          echo "domain=$SERVICE_DOMAIN" >> $GITHUB_OUTPUT
+          echo "generated=false" >> $GITHUB_OUTPUT
+        else
+          echo "• No existing domain found, generating new one..."
+          
+          # Generate Railway domain
+          DOMAIN_OUTPUT=$(railway domain --json --service "$SERVICE_NAME" 2>/dev/null || echo "{}")
+          
+          if [ "$DOMAIN_OUTPUT" != "{}" ]; then
+            RAILWAY_DOMAIN=$(echo "$DOMAIN_OUTPUT" | jq -r '.domain // empty' 2>/dev/null)
+            
+            if [ -n "$RAILWAY_DOMAIN" ] && [ "$RAILWAY_DOMAIN" != "empty" ]; then
+              RAILWAY_URL="https://$RAILWAY_DOMAIN"
+              echo "• Generated new domain: $RAILWAY_DOMAIN"
+              echo "url=$RAILWAY_URL" >> $GITHUB_OUTPUT
+              echo "domain=$RAILWAY_DOMAIN" >> $GITHUB_OUTPUT
+              echo "generated=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Failed to generate Railway domain"
+              echo "url=" >> $GITHUB_OUTPUT
+              echo "domain=" >> $GITHUB_OUTPUT
+              echo "generated=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ Failed to generate Railway domain"
+            echo "url=" >> $GITHUB_OUTPUT
+            echo "domain=" >> $GITHUB_OUTPUT
+            echo "generated=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        if [ -n "$RAILWAY_URL" ]; then
+          echo "✅ Railway URL: $RAILWAY_URL"
+          echo "• Retrieved in ${DURATION}s"
+        else
+          echo "❌ No Railway URL available"
+        fi
+        
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true

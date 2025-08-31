@@ -1,0 +1,127 @@
+name: 'Install Dependencies'
+description: 'Atomic action to install dependencies using pnpm exclusively'
+inputs:
+  working-directory:
+    description: 'Working directory for installation'
+    required: false
+    default: '.'
+  frozen-lockfile:
+    description: 'Use frozen lockfile for CI builds'
+    required: false
+    default: 'true'
+  store-dir:
+    description: 'Custom pnpm store directory'
+    required: false
+    default: ''
+  enable-timing:
+    description: 'Show timing information'
+    required: false
+    default: 'true'
+
+outputs:
+  install-time:
+    description: 'Time taken to install dependencies'
+    value: ${{ steps.install.outputs.install-time }}
+  package-count:
+    description: 'Number of packages installed'
+    value: ${{ steps.analyze.outputs.package-count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Start timing
+      id: timer
+      shell: bash
+      run: |
+        echo "::group::📦 Installing Dependencies with pnpm"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Frozen lockfile: ${{ inputs.frozen-lockfile }}"
+        echo "• Store directory: ${{ inputs.store-dir || 'default' }}"
+        START_TIME=$(date +%s)
+        echo "start-time=$START_TIME" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+
+    - name: Install dependencies
+      id: install
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::⚡ Running pnpm install"
+        
+        # Build install command
+        INSTALL_CMD="pnpm install"
+        
+        # Add frozen lockfile flag for CI
+        if [[ "${{ inputs.frozen-lockfile }}" == "true" ]]; then
+          INSTALL_CMD="$INSTALL_CMD --frozen-lockfile"
+        fi
+        
+        # Add custom store directory if provided
+        if [[ -n "${{ inputs.store-dir }}" ]]; then
+          INSTALL_CMD="$INSTALL_CMD --store-dir=${{ inputs.store-dir }}"
+        fi
+        
+        # Execute installation
+        echo "• Command: $INSTALL_CMD"
+        eval $INSTALL_CMD
+        
+        # Calculate timing
+        END_TIME=$(date +%s)
+        START_TIME=${{ steps.timer.outputs.start-time }}
+        DURATION=$((END_TIME - START_TIME))
+        echo "• Installation completed in ${DURATION}s"
+        echo "install-time=${DURATION}s" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+
+    - name: Analyze installation
+      id: analyze
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📊 Installation Analysis"
+        
+        # Count packages
+        if [[ -f "node_modules/.modules.yaml" ]]; then
+          PACKAGE_COUNT=$(find node_modules -maxdepth 2 -name "package.json" 2>/dev/null | wc -l | tr -d ' ')
+          echo "• Packages installed: $PACKAGE_COUNT"
+          echo "package-count=$PACKAGE_COUNT" >> $GITHUB_OUTPUT
+        else
+          echo "• Unable to count packages"
+          echo "package-count=unknown" >> $GITHUB_OUTPUT
+        fi
+        
+        # Show disk usage
+        NODE_MODULES_SIZE=$(du -sh node_modules 2>/dev/null | cut -f1 || echo "N/A")
+        echo "• Node modules size: $NODE_MODULES_SIZE"
+        
+        # Show pnpm store info if available
+        if command -v pnpm &> /dev/null; then
+          echo "• pnpm store status:"
+          pnpm store status 2>/dev/null || echo "  Store status unavailable"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Verification
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::✅ Verification"
+        
+        # Verify node_modules exists
+        if [[ ! -d "node_modules" ]]; then
+          echo "❌ Error: node_modules directory not found!"
+          exit 1
+        fi
+        
+        # Verify pnpm-lock.yaml exists
+        if [[ ! -f "pnpm-lock.yaml" ]]; then
+          echo "⚠️ Warning: pnpm-lock.yaml not found"
+        fi
+        
+        echo "✅ Dependencies installed successfully"
+        echo "• Time taken: ${{ steps.install.outputs.install-time }}"
+        echo "• Packages: ${{ steps.analyze.outputs.package-count }}"
+        
+        echo "::endgroup::"

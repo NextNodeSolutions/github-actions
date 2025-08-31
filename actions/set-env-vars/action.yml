@@ -1,0 +1,110 @@
+name: 'Set Environment Variables'
+description: 'Atomic action to set environment variables from JSON or key-value pairs'
+inputs:
+  variables:
+    description: 'Environment variables as JSON object or multiline key=value pairs'
+    required: false
+    default: '{}'
+  prefix:
+    description: 'Prefix to add to all variable names'
+    required: false
+    default: ''
+  export-to-env:
+    description: 'Export variables to GITHUB_ENV'
+    required: false
+    default: 'true'
+  export-to-output:
+    description: 'Export variables as outputs'
+    required: false
+    default: 'false'
+  mask-values:
+    description: 'Mask sensitive values in logs'
+    required: false
+    default: 'false'
+
+outputs:
+  variables-set:
+    description: 'Number of variables set'
+    value: ${{ steps.set-vars.outputs.count }}
+  variables-json:
+    description: 'All variables as JSON object'
+    value: ${{ steps.set-vars.outputs.json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set Environment Variables
+      id: set-vars
+      shell: bash
+      run: |
+        echo "::group::🔧 Setting Environment Variables"
+        
+        PREFIX="${{ inputs.prefix }}"
+        VARS_INPUT='${{ inputs.variables }}'
+        COUNT=0
+        VARS_JSON="{}"
+        
+        # Function to set a variable
+        set_variable() {
+          local key="$1"
+          local value="$2"
+          
+          # Add prefix if specified
+          if [[ -n "$PREFIX" ]]; then
+            key="${PREFIX}_${key}"
+          fi
+          
+          # Mask value if requested
+          if [[ "${{ inputs.mask-values }}" == "true" ]]; then
+            echo "::add-mask::$value"
+          fi
+          
+          # Export to environment
+          if [[ "${{ inputs.export-to-env }}" == "true" ]]; then
+            echo "$key=$value" >> $GITHUB_ENV
+            echo "  ✅ Set $key"
+          fi
+          
+          # Export to output
+          if [[ "${{ inputs.export-to-output }}" == "true" ]]; then
+            echo "$key=$value" >> $GITHUB_OUTPUT
+          fi
+          
+          # Add to JSON object
+          VARS_JSON=$(echo "$VARS_JSON" | jq --arg k "$key" --arg v "$value" '. + {($k): $v}')
+          
+          ((COUNT++))
+        }
+        
+        # Check if input is JSON
+        if echo "$VARS_INPUT" | jq -e . >/dev/null 2>&1; then
+          echo "📋 Processing JSON input"
+          # Parse JSON object
+          while IFS= read -r line; do
+            key=$(echo "$line" | cut -d'=' -f1)
+            value=$(echo "$line" | cut -d'=' -f2-)
+            set_variable "$key" "$value"
+          done < <(echo "$VARS_INPUT" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"')
+        else
+          echo "📋 Processing key-value pairs"
+          # Parse key=value pairs (one per line)
+          while IFS= read -r line; do
+            # Skip empty lines and comments
+            [[ -z "$line" || "$line" =~ ^# ]] && continue
+            
+            if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+              set_variable "$key" "$value"
+            fi
+          done <<< "$VARS_INPUT"
+        fi
+        
+        echo ""
+        echo "📊 Summary: Set $COUNT environment variable(s)"
+        
+        # Output results
+        echo "count=$COUNT" >> $GITHUB_OUTPUT
+        echo "json=$VARS_JSON" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"

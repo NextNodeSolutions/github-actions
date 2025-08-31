@@ -1,0 +1,199 @@
+name: 'Lint Code'
+description: 'Atomic action to lint code using pnpm'
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  lint-command:
+    description: 'Lint command to run'
+    required: false
+    default: 'lint'
+  fix:
+    description: 'Auto-fix issues'
+    required: false
+    default: 'false'
+  fail-on-warning:
+    description: 'Fail on warnings'
+    required: false
+    default: 'false'
+  eslint-config:
+    description: 'ESLint config file'
+    required: false
+    default: 'eslint.config.mjs'
+
+outputs:
+  errors:
+    description: 'Number of linting errors'
+    value: ${{ steps.lint.outputs.errors }}
+  warnings:
+    description: 'Number of linting warnings'
+    value: ${{ steps.lint.outputs.warnings }}
+  fixed:
+    description: 'Number of auto-fixed issues'
+    value: ${{ steps.lint.outputs.fixed }}
+  duration:
+    description: 'Time taken'
+    value: ${{ steps.lint.outputs.duration }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup
+      shell: bash
+      run: |
+        echo "::group::🔍 Lint Setup"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Lint command: pnpm ${{ inputs.lint-command }}"
+        echo "• Auto-fix: ${{ inputs.fix }}"
+        echo "• Fail on warning: ${{ inputs.fail-on-warning }}"
+        echo "• Config file: ${{ inputs.eslint-config }}"
+        echo "::endgroup::"
+
+    - name: Verify lint configuration
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📋 Verifying Lint Configuration"
+        
+        # Check for ESLint config
+        if [[ -f "${{ inputs.eslint-config }}" ]]; then
+          echo "✅ Found ESLint config: ${{ inputs.eslint-config }}"
+        elif [[ -f ".eslintrc.js" ]] || [[ -f ".eslintrc.json" ]] || [[ -f ".eslintrc.yml" ]]; then
+          echo "✅ Found ESLint config (legacy format)"
+        else
+          echo "⚠️ No ESLint configuration found"
+        fi
+        
+        # Check for @nextnode/eslint-plugin
+        if grep -q "@nextnode/eslint-plugin" package.json 2>/dev/null; then
+          echo "✅ Using @nextnode/eslint-plugin"
+        fi
+        
+        # Check for prettier config
+        if [[ -f ".prettierrc" ]] || [[ -f "prettier.config.js" ]] || [[ -f ".prettierrc.json" ]]; then
+          echo "✅ Found Prettier configuration"
+        fi
+        
+        # Check for biome config
+        if [[ -f "biome.json" ]]; then
+          echo "✅ Found Biome configuration"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Run linting
+      id: lint
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🧹 Running Linter"
+        
+        START_TIME=$(date +%s)
+        
+        # Build lint command
+        LINT_CMD="pnpm ${{ inputs.lint-command }}"
+        
+        # Add fix flag if requested
+        if [[ "${{ inputs.fix }}" == "true" ]]; then
+          LINT_CMD="$LINT_CMD --fix"
+          echo "• Auto-fix enabled"
+        fi
+        
+        echo "• Executing: $LINT_CMD"
+        
+        # Create temp file for output
+        OUTPUT_FILE=$(mktemp)
+        
+        # Run linting and capture output
+        if $LINT_CMD 2>&1 | tee "$OUTPUT_FILE"; then
+          LINT_STATUS="success"
+          echo "✅ Linting passed"
+        else
+          LINT_STATUS="failed"
+          echo "❌ Linting failed"
+        fi
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        # Parse output for errors and warnings
+        ERROR_COUNT=$(grep -c "error" "$OUTPUT_FILE" 2>/dev/null || true)
+        ERROR_COUNT=${ERROR_COUNT:-0}
+        WARNING_COUNT=$(grep -c "warning" "$OUTPUT_FILE" 2>/dev/null || true)
+        WARNING_COUNT=${WARNING_COUNT:-0}
+        
+        # Count fixed issues if auto-fix was enabled
+        if [[ "${{ inputs.fix }}" == "true" ]]; then
+          FIXED_COUNT=$(grep -c "fixed" "$OUTPUT_FILE" 2>/dev/null || true)
+          FIXED_COUNT=${FIXED_COUNT:-0}
+          echo "• Issues auto-fixed: $FIXED_COUNT"
+          echo "fixed=$FIXED_COUNT" >> $GITHUB_OUTPUT
+        else
+          echo "fixed=0" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "• Errors found: $ERROR_COUNT"
+        echo "• Warnings found: $WARNING_COUNT"
+        echo "• Duration: ${DURATION}s"
+        
+        echo "errors=$ERROR_COUNT" >> $GITHUB_OUTPUT
+        echo "warnings=$WARNING_COUNT" >> $GITHUB_OUTPUT
+        echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+        
+        # Clean up
+        rm -f "$OUTPUT_FILE"
+        
+        echo "::endgroup::"
+        
+        # Handle failure conditions
+        if [[ "$LINT_STATUS" == "failed" ]]; then
+          exit 1
+        fi
+        
+        if [[ "${{ inputs.fail-on-warning }}" == "true" ]] && [[ "$WARNING_COUNT" -gt 0 ]]; then
+          echo "❌ Failing due to warnings (fail-on-warning is enabled)"
+          exit 1
+        fi
+
+    - name: Check for uncommitted fixes
+      if: inputs.fix == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📝 Checking for Uncommitted Fixes"
+        
+        if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+          echo "⚠️ Auto-fix created changes:"
+          git diff --stat
+          echo ""
+          echo "Please review and commit these changes."
+        else
+          echo "✅ No uncommitted changes after auto-fix"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Lint summary
+      if: always()
+      shell: bash
+      run: |
+        echo "::group::📊 Lint Summary"
+        echo "• Errors: ${{ steps.lint.outputs.errors }}"
+        echo "• Warnings: ${{ steps.lint.outputs.warnings }}"
+        if [[ "${{ inputs.fix }}" == "true" ]]; then
+          echo "• Fixed: ${{ steps.lint.outputs.fixed }}"
+        fi
+        echo "• Duration: ${{ steps.lint.outputs.duration }}"
+        
+        if [[ "${{ steps.lint.outputs.errors }}" == "0" ]]; then
+          if [[ "${{ steps.lint.outputs.warnings }}" == "0" ]]; then
+            echo "✅ Code is clean - no issues found"
+          else
+            echo "⚠️ Code has ${{ steps.lint.outputs.warnings }} warning(s)"
+          fi
+        else
+          echo "❌ Fix ${{ steps.lint.outputs.errors }} error(s) before proceeding"
+        fi
+        
+        echo "::endgroup::"

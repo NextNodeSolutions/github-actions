@@ -1,0 +1,67 @@
+name: Test
+
+# EXTERNAL WORKFLOW - Atomic testing workflow
+# Runs tests with optional coverage
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      coverage:
+        description: 'Enable test coverage'
+        required: false
+        default: false
+        type: boolean
+      coverage-threshold:
+        description: 'Coverage threshold percentage'
+        required: false
+        default: '80'
+        type: string
+      upload-coverage:
+        description: 'Upload coverage reports'
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      tests-passed:
+        description: 'Whether tests passed'
+        value: ${{ jobs.test.outputs.passed }}
+      coverage-percentage:
+        description: 'Coverage percentage if enabled'
+        value: ${{ jobs.test.outputs.coverage }}
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.test.outcome == 'success' }}
+      coverage: ${{ steps.test.outputs.coverage || 'N/A' }}
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@feat/railway-deployment-support
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          
+      - id: test
+        uses: NextNodeSolutions/github-actions/actions/test@feat/railway-deployment-support
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          coverage: ${{ inputs.coverage }}
+          coverage-threshold: ${{ inputs.coverage-threshold }}
+          upload-coverage: ${{ inputs.upload-coverage }}

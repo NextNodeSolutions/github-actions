@@ -1,0 +1,132 @@
+name: 'Health Check'
+description: 'Perform health check on a URL with retries'
+inputs:
+  url:
+    description: 'URL to check'
+    required: true
+  max-attempts:
+    description: 'Maximum number of attempts'
+    required: false
+    default: '30'
+  delay-seconds:
+    description: 'Delay between attempts in seconds'
+    required: false
+    default: '10'
+  expected-status:
+    description: 'Expected HTTP status code (comma-separated for multiple)'
+    required: false
+    default: '200,201,204,301,302'
+  timeout-seconds:
+    description: 'Request timeout in seconds'
+    required: false
+    default: '30'
+  fail-on-error:
+    description: 'Fail the action if health check fails'
+    required: false
+    default: 'true'
+  headers:
+    description: 'Additional headers as JSON object'
+    required: false
+    default: '{}'
+
+outputs:
+  healthy:
+    description: 'Whether the health check passed'
+    value: ${{ steps.check.outputs.healthy }}
+  status-code:
+    description: 'Final HTTP status code'
+    value: ${{ steps.check.outputs.status-code }}
+  response-time:
+    description: 'Response time in milliseconds'
+    value: ${{ steps.check.outputs.response-time }}
+  attempts:
+    description: 'Number of attempts made'
+    value: ${{ steps.check.outputs.attempts }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Perform Health Check
+      id: check
+      shell: bash
+      run: |
+        echo "::group::🏥 Health Check for ${{ inputs.url }}"
+        
+        URL="${{ inputs.url }}"
+        MAX_ATTEMPTS=${{ inputs.max-attempts }}
+        DELAY=${{ inputs.delay-seconds }}
+        TIMEOUT=${{ inputs.timeout-seconds }}
+        EXPECTED_STATUS="${{ inputs.expected-status }}"
+        HEADERS='${{ inputs.headers }}'
+        
+        # Build curl headers
+        CURL_HEADERS=""
+        if [[ "$HEADERS" != "{}" ]] && echo "$HEADERS" | jq -e . >/dev/null 2>&1; then
+          while IFS= read -r header; do
+            CURL_HEADERS="$CURL_HEADERS -H '$header'"
+          done < <(echo "$HEADERS" | jq -r 'to_entries | .[] | "\(.key): \(.value)"')
+        fi
+        
+        echo "📋 Configuration:"
+        echo "  • Max attempts: $MAX_ATTEMPTS"
+        echo "  • Delay: ${DELAY}s"
+        echo "  • Timeout: ${TIMEOUT}s"
+        echo "  • Expected status: $EXPECTED_STATUS"
+        echo ""
+        
+        ATTEMPT=0
+        HEALTHY=false
+        FINAL_STATUS=""
+        RESPONSE_TIME=""
+        
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          ((ATTEMPT++))
+          echo "🔄 Attempt $ATTEMPT/$MAX_ATTEMPTS..."
+          
+          # Perform the health check
+          START_TIME=$(date +%s%3N)
+          if RESPONSE=$(eval "curl -s -o /dev/null -w '%{http_code}' --max-time $TIMEOUT $CURL_HEADERS '$URL'" 2>&1); then
+            END_TIME=$(date +%s%3N)
+            RESPONSE_TIME=$((END_TIME - START_TIME))
+            
+            echo "  Response: HTTP $RESPONSE (${RESPONSE_TIME}ms)"
+            
+            # Check if status is in expected list
+            if echo "$EXPECTED_STATUS" | grep -q "$RESPONSE"; then
+              echo "✅ Health check passed!"
+              HEALTHY=true
+              FINAL_STATUS=$RESPONSE
+              break
+            else
+              echo "  ⚠️  Unexpected status code: $RESPONSE"
+            fi
+          else
+            echo "  ❌ Request failed: $RESPONSE"
+          fi
+          
+          if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+            echo "  Waiting ${DELAY}s before retry..."
+            sleep $DELAY
+          fi
+        done
+        
+        echo ""
+        if [[ "$HEALTHY" == "true" ]]; then
+          echo "✅ Health check successful after $ATTEMPT attempt(s)"
+          echo "  • Status: HTTP $FINAL_STATUS"
+          echo "  • Response time: ${RESPONSE_TIME}ms"
+        else
+          echo "❌ Health check failed after $ATTEMPT attempt(s)"
+          if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then
+            echo "::endgroup::"
+            exit 1
+          fi
+        fi
+        
+        # Set outputs
+        echo "healthy=$HEALTHY" >> $GITHUB_OUTPUT
+        echo "status-code=$FINAL_STATUS" >> $GITHUB_OUTPUT
+        echo "response-time=$RESPONSE_TIME" >> $GITHUB_OUTPUT
+        echo "attempts=$ATTEMPT" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"

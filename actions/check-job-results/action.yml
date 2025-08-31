@@ -1,0 +1,73 @@
+name: 'Check Job Results'
+description: 'Check if all required jobs passed'
+author: 'NextNodeSolutions'
+
+inputs:
+  job-results:
+    description: 'JSON array of job results to check'
+    required: true
+  fail-on-error:
+    description: 'Exit with error if any job failed'
+    required: false
+    default: 'true'
+
+outputs:
+  all-passed:
+    description: 'Whether all non-skipped jobs passed'
+    value: ${{ steps.check.outputs.all-passed }}
+  failed-jobs:
+    description: 'List of failed jobs'
+    value: ${{ steps.check.outputs.failed-jobs }}
+  summary:
+    description: 'Summary of job results'
+    value: ${{ steps.check.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check job results
+      id: check
+      shell: bash
+      run: |
+        # Parse job results
+        RESULTS='${{ inputs.job-results }}'
+        ALL_PASSED=true
+        FAILED_JOBS=""
+        PASSED_COUNT=0
+        FAILED_COUNT=0
+        SKIPPED_COUNT=0
+        
+        # Process each result
+        echo "$RESULTS" | jq -r '.[]' | while read -r result; do
+          case "$result" in
+            success)
+              PASSED_COUNT=$((PASSED_COUNT + 1))
+              ;;
+            skipped)
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              ;;
+            failure|cancelled)
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              ALL_PASSED=false
+              ;;
+          esac
+        done
+        
+        # Generate summary
+        SUMMARY="✅ Passed: $PASSED_COUNT | ❌ Failed: $FAILED_COUNT | ⏭️ Skipped: $SKIPPED_COUNT"
+        
+        # Set outputs
+        echo "all-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
+        echo "failed-jobs=$FAILED_JOBS" >> $GITHUB_OUTPUT
+        echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+        
+        # Exit based on results
+        if [[ "$ALL_PASSED" == "true" ]]; then
+          echo "✅ All required jobs passed!"
+          exit 0
+        else
+          echo "❌ Some jobs failed!"
+          if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then
+            exit 1
+          fi
+        fi

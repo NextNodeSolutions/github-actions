@@ -1,0 +1,126 @@
+name: Railway Deploy
+
+# EXTERNAL WORKFLOW - Atomic Railway deployment workflow
+# Deploys to Railway platform only
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Deployment environment (development/staging/production)'
+        required: true
+        type: string
+      app-name:
+        description: 'Application name for Railway project'
+        required: true
+        type: string
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      memory-mb:
+        description: 'Memory allocation in MB'
+        required: false
+        default: '512'
+        type: string
+      variables:
+        description: 'Environment variables as JSON object'
+        required: false
+        default: '{}'
+        type: string
+      wait-for-deployment:
+        description: 'Wait for deployment to complete'
+        required: false
+        default: true
+        type: boolean
+      timeout-seconds:
+        description: 'Deployment timeout in seconds'
+        required: false
+        default: '300'
+        type: string
+    secrets:
+      RAILWAY_API_TOKEN:
+        required: true
+    outputs:
+      deployment-id:
+        description: 'Railway deployment ID'
+        value: ${{ jobs.deploy.outputs.deployment-id }}
+      railway-url:
+        description: 'Railway internal URL'
+        value: ${{ jobs.deploy.outputs.railway-url }}
+      deployment-status:
+        description: 'Deployment status'
+        value: ${{ jobs.deploy.outputs.status }}
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    outputs:
+      deployment-id: ${{ steps.wait.outputs.deployment-id }}
+      railway-url: ${{ steps.url.outputs.railway-url }}
+      status: ${{ steps.wait.outputs.status }}
+      service-name: ${{ steps.service.outputs.service-name }}
+      project-id: ${{ steps.project.outputs.project-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Railway CLI
+        id: cli
+        uses: NextNodeSolutions/github-actions/actions/railway-cli-setup@feat/railway-deployment-support
+        with:
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Setup Project
+        id: project
+        uses: NextNodeSolutions/github-actions/actions/railway-project-setup@feat/railway-deployment-support
+        with:
+          app-name: ${{ inputs.app-name }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Setup Service
+        id: service
+        uses: NextNodeSolutions/github-actions/actions/railway-service-setup@feat/railway-deployment-support
+        with:
+          app-name: ${{ inputs.app-name }}
+          environment: ${{ inputs.environment }}
+          project-id: ${{ steps.project.outputs.project-id }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Configure Variables
+        id: vars
+        if: inputs.variables != '{}'
+        uses: NextNodeSolutions/github-actions/actions/railway-variables@feat/railway-deployment-support
+        with:
+          service-name: ${{ steps.service.outputs.service-name }}
+          environment: ${{ inputs.environment }}
+          variables: ${{ inputs.variables }}
+          memory-mb: ${{ inputs.memory-mb }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Deploy Application
+        id: trigger
+        uses: NextNodeSolutions/github-actions/actions/railway-deploy-trigger@feat/railway-deployment-support
+        with:
+          service-name: ${{ steps.service.outputs.service-name }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Wait for Deployment
+        id: wait
+        if: inputs.wait-for-deployment
+        uses: NextNodeSolutions/github-actions/actions/railway-deployment-wait@feat/railway-deployment-support
+        with:
+          service-name: ${{ steps.service.outputs.service-name }}
+          timeout-seconds: ${{ inputs.timeout-seconds }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Generate URL
+        id: url
+        uses: NextNodeSolutions/github-actions/actions/railway-url-generate@feat/railway-deployment-support
+        with:
+          service-name: ${{ steps.service.outputs.service-name }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}

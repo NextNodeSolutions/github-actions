@@ -1,0 +1,61 @@
+name: 'Smart Cache'
+description: 'Intelligent caching for dependencies and build artifacts'
+author: 'NextNodeSolutions'
+
+inputs:
+  cache-key:
+    description: 'Base cache key'
+    required: true
+  paths:
+    description: 'Paths to cache (newline-separated)'
+    required: true
+  restore-keys:
+    description: 'Restore keys (newline-separated)'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+
+outputs:
+  cache-hit:
+    description: 'Whether cache was hit'
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-key-used:
+    description: 'The actual cache key used'
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate cache key
+      id: key
+      shell: bash
+      run: |
+        # Generate a smart cache key based on lock files
+        BASE_KEY="${{ inputs.cache-key }}"
+        HASH=""
+        
+        # Check for various lock files
+        for lockfile in "pnpm-lock.yaml" "package-lock.json" "yarn.lock" "Cargo.lock"; do
+          FILE_PATH="${{ inputs.working-directory }}/$lockfile"
+          if [[ -f "$FILE_PATH" ]]; then
+            FILE_HASH=$(sha256sum "$FILE_PATH" | cut -d' ' -f1)
+            HASH="${HASH}-${FILE_HASH:0:16}"
+          fi
+        done
+        
+        # Final cache key
+        CACHE_KEY="${BASE_KEY}${HASH}"
+        echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
+        
+    - name: Cache dependencies
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ inputs.restore-keys }}
+          ${{ inputs.cache-key }}

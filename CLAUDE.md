@@ -6,138 +6,149 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **reusable GitHub Actions repository** for NextNode projects. It provides centralized CI/CD workflows and composite actions for consistent automation across all NextNode repositories.
 
+**Key principle**: **pnpm only** - This repository exclusively uses pnpm as the package manager. No npm or yarn support.
+
 ## Architecture
 
-### Repository Structure
+### Current Repository Structure
 ```
 github-actions/
-├── actions/                    # Composite actions (building blocks)
-│   ├── setup-environment/     # Complete environment setup
-│   ├── composite-pipeline/    # All-in-one pipeline with setup + quality
-│   └── quality-pipeline/      # Optimized quality checks
-├── config/                     # Configuration defaults
-│   └── defaults.yml
-├── workflow-templates/         # Template workflows
-│   └── library-ci.yml
-└── .github/workflows/         # Reusable workflows
-    ├── job-*.yml             # Individual job workflows
-    └── pack-*.yml            # Workflow packs (combined jobs)
+├── .github/workflows/          # Reusable workflows (external + internal)
+│   ├── quality-checks.yml     # Full quality pipeline (workflow_call)
+│   ├── deploy-railway.yml     # Railway deployment (workflow_call)
+│   └── internal-tests.yml     # Internal tests (workflow_dispatch only)
+├── actions/                    # Atomic reusable actions
+│   ├── setup-node-pnpm/       # Node.js and pnpm setup
+│   ├── install/               # Dependency installation
+│   ├── lint/                  # ESLint checks
+│   ├── typecheck/             # TypeScript validation
+│   ├── test/                  # Test execution
+│   ├── build/                 # Project building
+│   ├── security-audit/        # Security scanning
+│   ├── health-check/          # URL health monitoring
+│   ├── log-step/              # Enhanced logging
+│   ├── set-env-vars/          # Environment management
+│   ├── run-command/           # Command wrapper
+│   └── check-command/         # Command availability check
+└── README.md                   # User documentation
 ```
 
 ### Design Principles
-- **Zero Logic in Templates**: Project templates only import actions, no logic
-- **Modular Design**: Import individual jobs or complete workflow packs
-- **Branch-aware**: Smart behavior to reduce noise in PRs
-- **Fully Parameterized**: Extensive configuration options for flexibility
 
-## Development Commands
-
-### Testing Workflows Locally
-```bash
-# Test all workflows
-act push
-
-# Test specific workflow
-act -W .github/workflows/test-actions.yml
-
-# Test with specific runner
-act -P ubuntu-latest=nektos/act-environments-ubuntu:18.04
-```
-
-### Validation
-```bash
-# Validate YAML syntax
-find . -name "*.yml" -o -name "*.yaml" | while read file; do
-  python3 -c "import yaml; yaml.safe_load(open('$file'))"
-done
-```
-
-## Workflow Categories
-
-### Individual Jobs (`job-*.yml`)
-- `job-lint.yml` - Linting checks (default: `pnpm lint`)
-- `job-typecheck.yml` - TypeScript checking (default: `pnpm type-check`)
-- `job-test.yml` - Testing with optional coverage
-- `job-build.yml` - Build with optional artifact upload
-- `job-security.yml` - Security audits and Docker scans
-- `job-deploy-fly.yml` - Fly.io deployment with health checks
-- `job-dns-cloudflare.yml` - DNS management via Cloudflare
-
-### Workflow Packs (`pack-*.yml`)
-- `pack-quality-checks.yml` - Combined QA (lint + typecheck + test + build)
-- `pack-deploy-dev.yml` - Complete development deployment
-- `pack-deploy-prod.yml` - Production deployment with blue-green strategy
-
-## Key Implementation Details
-
-### Composite Actions
-
-#### `setup-environment/`
-Basic environment setup with Node.js, pnpm, and dependency installation:
-- Configurable Node.js/pnpm versions (default: Node 20, pnpm 10.11.0)
-- Optional dependency installation with frozen lockfile
-- Working directory support
-
-#### `composite-pipeline/`
-All-in-one pipeline combining environment setup and quality checks:
-- JSON array of commands to run (e.g., `["lint", "type-check", "test", "build"]`)
-- Built-in security audit with configurable severity levels
-- Single action for complete CI pipeline
-
-#### `quality-pipeline/`
-Optimized quality checks with parallel execution support:
-- Core checks: lint and type-check (always run)
-- Optional: tests and build (can be skipped)
-- Non-blocking security audit with warnings
-- Grouped output for better readability
-
-### Workflow Parameters
-All workflows accept standard parameters:
-- `node-version` (default: '20')
-- `pnpm-version` (default: '10.11.0')
-- `working-directory` (default: '.')
-- Custom command overrides for each job type
-
-#### Additional Parameters for Composite Actions:
-- `composite-pipeline`: `commands` (JSON array), `audit-level`, `skip-audit`
-- `quality-pipeline`: `skip-tests`, `skip-build`, `skip-audit`, `audit-level`
-
-### Security Requirements
-When using deployment workflows, these secrets must be configured:
-- `FLY_API_TOKEN` - Required for Fly.io deployments
-- `CLOUDFLARE_API_TOKEN` - Required for DNS management
-- `CLOUDFLARE_ZONE_ID` - Required for DNS management
+1. **Atomic Actions**: Each action in `/actions/` does ONE thing well
+2. **No Package Manager Conditionals**: pnpm is hardcoded everywhere - no switches or alternatives
+3. **Workflow Isolation**: 
+   - External workflows use `workflow_call` trigger only
+   - Internal tests use `workflow_dispatch` to prevent recursion
+4. **Maximum Reusability**: Actions can be used individually or composed
+5. **DRY Principle**: No code duplication, shared logic in atomic actions
+6. **Clean Logging**: All actions use GitHub groups and timing metrics
 
 ## Usage Patterns
 
-### Referencing Workflows
-```yaml
-# Use latest from main branch
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
+### For External Projects
 
-# Pin to specific version (recommended for production)
-uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@v1.0.0
+External projects can call workflows in two ways:
+
+1. **Full pipelines** (workflow packs):
+```yaml
+uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/deploy-railway.yml@main
 ```
 
-### Common Integration
-Most NextNode projects use this pattern:
+2. **Individual actions**:
 ```yaml
-jobs:
-  quality:
-    uses: NextNodeSolutions/github-actions/.github/workflows/pack-quality-checks.yml@main
-    with:
-      run-lint: true
-      run-typecheck: true
-      run-test: true
-      test-coverage: true
+uses: nextnodesolutions/github-actions/actions/lint@main
+uses: nextnodesolutions/github-actions/actions/test@main
 ```
 
-## Testing Strategy
+### For This Repository
 
-The repository includes comprehensive self-testing via `test-actions.yml`:
-- Tests all composite actions independently
-- Validates YAML syntax across all workflow files
-- Creates mock projects to test workflow execution
-- Runs on push to main/develop and PRs to main
+Internal testing uses `internal-tests.yml` with manual trigger only to avoid recursion.
 
-This ensures all workflows are functional before being used by consuming repositories.
+## Important Notes for Development
+
+### When Adding New Actions
+1. Create a new folder in `/actions/` with descriptive name
+2. Add `action.yml` (not `action.yaml`)
+3. Use inputs with sensible defaults
+4. Add logging with `::group::` and `::endgroup::`
+5. Include timing information
+6. Document inputs/outputs clearly
+
+### When Modifying Workflows
+1. External workflows must use `workflow_call` trigger
+2. Internal workflows must use `workflow_dispatch` or manual triggers
+3. Never add push/pull_request triggers to avoid recursion
+4. Use atomic actions from `/actions/` - don't duplicate logic
+
+### Testing Changes
+1. Use `internal-tests.yml` for testing within this repo
+2. Test with `workflow_dispatch` event
+3. Never commit test workflows that trigger on push
+
+## Common Tasks
+
+### Adding a New Atomic Action
+```bash
+mkdir actions/my-new-action
+touch actions/my-new-action/action.yml
+# Add action logic using existing patterns
+```
+
+### Testing Actions Locally
+```bash
+# Use act or similar tools
+act workflow_dispatch -W .github/workflows/internal-tests.yml
+```
+
+### Debugging Workflow Issues
+1. Check workflow syntax
+2. Verify action paths (remember: no `/atomic/` subdirectory)
+3. Ensure proper trigger configuration
+4. Review logs with expanded groups
+
+## Migration Notes
+
+This repository was refactored from a complex structure to a simpler, more maintainable one:
+- Removed: workflow-templates/, packs/, internal/ directories
+- Removed: Fly.io deployment support
+- Removed: npm/yarn support
+- Simplified: Action paths (removed unnecessary nesting)
+- Unified: Deployment workflows (single file for all environments)
+
+## Dependencies
+
+- **pnpm**: Version 10.12.4+ required
+- **Node.js**: Version 20+ recommended
+- **Railway CLI**: For deployment workflows
+- **Docker**: For containerized deployments
+
+## Security Considerations
+
+1. All secrets must be passed explicitly - no hardcoded values
+2. Use environment-specific secrets
+3. Security audit runs on all quality checks
+4. Docker images use non-root users
+
+## Performance Optimizations
+
+1. Dependency caching enabled by default
+2. Parallel job execution where possible
+3. Conditional steps to skip unnecessary work
+4. Artifact compression for faster uploads
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"Action not found"**: Check path - should be `actions/name`, not `actions/atomic/name`
+2. **"Workflow not accessible"**: Ensure using `workflow_call` trigger
+3. **"pnpm not found"**: Always use `setup-node-pnpm` action first
+4. **"Recursion detected"**: Check triggers - no push/PR triggers on this repo
+
+### Debug Mode
+
+Enable debug logging by setting repository secret:
+- `ACTIONS_RUNNER_DEBUG: true`
+- `ACTIONS_STEP_DEBUG: true`

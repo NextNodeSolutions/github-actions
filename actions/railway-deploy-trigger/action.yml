@@ -1,0 +1,61 @@
+name: 'Railway Deploy Trigger'
+description: 'Trigger Railway deployment'
+author: 'NextNodeSolutions'
+
+inputs:
+  service-name:
+    description: 'Railway service name'
+    required: true
+  railway-token:
+    description: 'Railway API token'
+    required: true
+  detach:
+    description: 'Run deployment in detached mode'
+    required: false
+    default: 'true'
+
+outputs:
+  triggered:
+    description: 'Whether deployment was triggered successfully'
+    value: ${{ steps.deploy.outputs.triggered }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Trigger Deployment
+      id: deploy
+      shell: bash
+      run: |
+        echo "::group::🚀 Triggering Railway Deployment"
+        
+        START_TIME=$(date +%s)
+        
+        echo "• Service: ${{ inputs.service-name }}"
+        echo "• Mode: ${{ inputs.detach == 'true' && 'Detached' || 'Attached' }}"
+        
+        # Trigger deployment
+        if [[ "${{ inputs.detach }}" == "true" ]]; then
+          echo "• Executing: railway up --service \"${{ inputs.service-name }}\" --detach"
+          railway up --service "${{ inputs.service-name }}" --detach
+        else
+          echo "• Executing: railway up --service \"${{ inputs.service-name }}\""
+          railway up --service "${{ inputs.service-name }}"
+        fi
+        
+        if [ $? -eq 0 ]; then
+          echo "triggered=true" >> $GITHUB_OUTPUT
+          echo "✅ Deployment triggered successfully"
+        else
+          echo "triggered=false" >> $GITHUB_OUTPUT
+          echo "❌ Failed to trigger deployment"
+          exit 1
+        fi
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        echo "• Triggered in ${DURATION}s"
+        
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true

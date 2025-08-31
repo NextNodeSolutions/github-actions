@@ -1,0 +1,140 @@
+name: 'TypeScript Type Check'
+description: 'Atomic action to run TypeScript type checking'
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  command:
+    description: 'Type check command'
+    required: false
+    default: 'type-check'
+  tsconfig-path:
+    description: 'Path to tsconfig.json'
+    required: false
+    default: 'tsconfig.json'
+  strict:
+    description: 'Enforce strict mode'
+    required: false
+    default: 'true'
+
+outputs:
+  errors:
+    description: 'Number of type errors'
+    value: ${{ steps.typecheck.outputs.errors }}
+  warnings:
+    description: 'Number of warnings'
+    value: ${{ steps.typecheck.outputs.warnings }}
+  duration:
+    description: 'Time taken'
+    value: ${{ steps.typecheck.outputs.duration }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup
+      shell: bash
+      run: |
+        echo "::group::📝 TypeScript Type Check Setup"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Command: pnpm ${{ inputs.command }}"
+        echo "• Config: ${{ inputs.tsconfig-path }}"
+        echo "• Strict mode: ${{ inputs.strict }}"
+        echo "::endgroup::"
+
+    - name: Verify TypeScript config
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔍 Verifying TypeScript Configuration"
+        
+        # Check if tsconfig exists
+        if [[ -f "${{ inputs.tsconfig-path }}" ]]; then
+          echo "✅ Found ${{ inputs.tsconfig-path }}"
+          
+          # Check strict mode setting
+          if [[ "${{ inputs.strict }}" == "true" ]]; then
+            if grep -q '"strict":\s*true' "${{ inputs.tsconfig-path }}"; then
+              echo "✅ Strict mode is enabled"
+            else
+              echo "⚠️ Strict mode is not enabled in tsconfig"
+            fi
+          fi
+          
+          # Show compiler options
+          echo "• Compiler options:"
+          grep -A 10 '"compilerOptions"' "${{ inputs.tsconfig-path }}" | head -15 || true
+        else
+          echo "❌ TypeScript config not found at ${{ inputs.tsconfig-path }}"
+          exit 1
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Run type check
+      id: typecheck
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔧 Running Type Check"
+        
+        START_TIME=$(date +%s)
+        
+        # Run type check and capture output
+        echo "• Executing: pnpm ${{ inputs.command }}"
+        
+        # Create temp file for output
+        OUTPUT_FILE=$(mktemp)
+        
+        # Run command and capture output
+        if pnpm ${{ inputs.command }} 2>&1 | tee "$OUTPUT_FILE"; then
+          CHECK_STATUS="success"
+          echo "✅ Type check passed"
+        else
+          CHECK_STATUS="failed"
+          echo "❌ Type check failed"
+        fi
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        # Count errors and warnings
+        ERROR_COUNT=$(grep -c "error TS" "$OUTPUT_FILE" 2>/dev/null || true)
+        ERROR_COUNT=${ERROR_COUNT:-0}
+        WARNING_COUNT=$(grep -c "warning" "$OUTPUT_FILE" 2>/dev/null || true)
+        WARNING_COUNT=${WARNING_COUNT:-0}
+        
+        echo "• Errors found: $ERROR_COUNT"
+        echo "• Warnings found: $WARNING_COUNT"
+        echo "• Duration: ${DURATION}s"
+        
+        echo "errors=$ERROR_COUNT" >> $GITHUB_OUTPUT
+        echo "warnings=$WARNING_COUNT" >> $GITHUB_OUTPUT
+        echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+        
+        # Clean up
+        rm -f "$OUTPUT_FILE"
+        
+        echo "::endgroup::"
+        
+        # Fail if errors found
+        if [[ "$CHECK_STATUS" == "failed" ]]; then
+          exit 1
+        fi
+
+    - name: Type check summary
+      if: always()
+      shell: bash
+      run: |
+        echo "::group::📊 Type Check Summary"
+        echo "• Errors: ${{ steps.typecheck.outputs.errors }}"
+        echo "• Warnings: ${{ steps.typecheck.outputs.warnings }}"
+        echo "• Duration: ${{ steps.typecheck.outputs.duration }}"
+        
+        if [[ "${{ steps.typecheck.outputs.errors }}" == "0" ]]; then
+          echo "✅ No type errors found"
+        else
+          echo "❌ Fix ${{ steps.typecheck.outputs.errors }} type error(s) before proceeding"
+        fi
+        
+        echo "::endgroup::"

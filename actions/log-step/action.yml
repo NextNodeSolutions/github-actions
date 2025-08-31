@@ -1,0 +1,93 @@
+name: 'Log Step'
+description: 'Atomic action for consistent logging across workflows'
+inputs:
+  title:
+    description: 'Log title/header'
+    required: true
+  message:
+    description: 'Log message content'
+    required: false
+    default: ''
+  level:
+    description: 'Log level (info/warning/error/success/debug)'
+    required: false
+    default: 'info'
+  group:
+    description: 'Whether to group the log output'
+    required: false
+    default: 'false'
+  details:
+    description: 'Additional details as JSON array or multiline string'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Log Output
+      shell: bash
+      run: |
+        # Define colors and emojis for different levels
+        case "${{ inputs.level }}" in
+          "error")
+            EMOJI="❌"
+            COLOR="\033[31m"  # Red
+            ;;
+          "warning")
+            EMOJI="⚠️"
+            COLOR="\033[33m"  # Yellow
+            ;;
+          "success")
+            EMOJI="✅"
+            COLOR="\033[32m"  # Green
+            ;;
+          "debug")
+            EMOJI="🔍"
+            COLOR="\033[36m"  # Cyan
+            ;;
+          *)
+            EMOJI="ℹ️"
+            COLOR="\033[34m"  # Blue
+            ;;
+        esac
+        
+        RESET="\033[0m"
+        
+        # Start group if requested
+        if [[ "${{ inputs.group }}" == "true" ]]; then
+          echo "::group::$EMOJI ${{ inputs.title }}"
+        else
+          echo -e "${COLOR}$EMOJI ${{ inputs.title }}${RESET}"
+        fi
+        
+        # Output message if provided
+        if [[ -n "${{ inputs.message }}" ]]; then
+          echo "${{ inputs.message }}"
+        fi
+        
+        # Output details if provided
+        if [[ -n "${{ inputs.details }}" ]]; then
+          echo ""
+          # Check if details is JSON array or multiline string
+          if [[ "${{ inputs.details }}" =~ ^\[.*\]$ ]]; then
+            # Parse JSON array
+            echo "${{ inputs.details }}" | jq -r '.[]' | while read -r line; do
+              echo "  • $line"
+            done
+          else
+            # Output multiline string
+            echo "${{ inputs.details }}" | while read -r line; do
+              [[ -n "$line" ]] && echo "  • $line"
+            done
+          fi
+        fi
+        
+        # End group if started
+        if [[ "${{ inputs.group }}" == "true" ]]; then
+          echo "::endgroup::"
+        fi
+        
+        # Set appropriate exit code for error level
+        if [[ "${{ inputs.level }}" == "error" ]]; then
+          exit 1
+        fi

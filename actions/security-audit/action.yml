@@ -1,0 +1,211 @@
+name: 'Security Audit'
+description: 'Atomic action to run security audit using pnpm'
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  audit-level:
+    description: 'Minimum severity level to report (low, moderate, high, critical)'
+    required: false
+    default: 'high'
+  fix:
+    description: 'Attempt to auto-fix vulnerabilities'
+    required: false
+    default: 'false'
+  production-only:
+    description: 'Only audit production dependencies'
+    required: false
+    default: 'false'
+  fail-on-vulnerability:
+    description: 'Fail if vulnerabilities are found'
+    required: false
+    default: 'true'
+
+outputs:
+  vulnerabilities:
+    description: 'Number of vulnerabilities found'
+    value: ${{ steps.audit.outputs.vulnerabilities }}
+  critical:
+    description: 'Number of critical vulnerabilities'
+    value: ${{ steps.audit.outputs.critical }}
+  high:
+    description: 'Number of high severity vulnerabilities'
+    value: ${{ steps.audit.outputs.high }}
+  moderate:
+    description: 'Number of moderate severity vulnerabilities'
+    value: ${{ steps.audit.outputs.moderate }}
+  low:
+    description: 'Number of low severity vulnerabilities'
+    value: ${{ steps.audit.outputs.low }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup
+      shell: bash
+      run: |
+        echo "::group::🔒 Security Audit Setup"
+        echo "• Working directory: ${{ inputs.working-directory }}"
+        echo "• Audit level: ${{ inputs.audit-level }}"
+        echo "• Auto-fix: ${{ inputs.fix }}"
+        echo "• Production only: ${{ inputs.production-only }}"
+        echo "• Fail on vulnerability: ${{ inputs.fail-on-vulnerability }}"
+        echo "::endgroup::"
+
+    - name: Run pnpm audit
+      id: audit
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔍 Running Security Audit"
+        
+        # Build audit command
+        AUDIT_CMD="pnpm audit"
+        
+        # Add audit level
+        AUDIT_CMD="$AUDIT_CMD --audit-level ${{ inputs.audit-level }}"
+        
+        # Add production flag if needed
+        if [[ "${{ inputs.production-only }}" == "true" ]]; then
+          AUDIT_CMD="$AUDIT_CMD --prod"
+        fi
+        
+        echo "• Executing: $AUDIT_CMD"
+        
+        # Create temp file for output
+        OUTPUT_FILE=$(mktemp)
+        
+        # Run audit and capture output
+        if $AUDIT_CMD 2>&1 | tee "$OUTPUT_FILE"; then
+          AUDIT_STATUS="success"
+          echo "✅ No vulnerabilities found at ${{ inputs.audit-level }} level or higher"
+          VULNERABILITIES=0
+        else
+          AUDIT_STATUS="failed"
+          echo "⚠️ Vulnerabilities detected"
+          
+          # Parse vulnerability counts from output
+          VULNERABILITIES=$(grep -oP '\d+(?= vulnerabilities)' "$OUTPUT_FILE" | head -1 || echo "0")
+        fi
+        
+        # Extract vulnerability counts by severity
+        CRITICAL=$(grep -oP '\d+(?= critical)' "$OUTPUT_FILE" | head -1 || echo "0")
+        HIGH=$(grep -oP '\d+(?= high)' "$OUTPUT_FILE" | head -1 || echo "0")
+        MODERATE=$(grep -oP '\d+(?= moderate)' "$OUTPUT_FILE" | head -1 || echo "0")
+        LOW=$(grep -oP '\d+(?= low)' "$OUTPUT_FILE" | head -1 || echo "0")
+        
+        # If no specific counts found but vulnerabilities exist, estimate
+        if [[ "$VULNERABILITIES" -gt 0 ]] && [[ "$CRITICAL" == "0" ]] && [[ "$HIGH" == "0" ]]; then
+          # Assume they're at the audit level specified
+          case "${{ inputs.audit-level }}" in
+            critical) CRITICAL=$VULNERABILITIES ;;
+            high) HIGH=$VULNERABILITIES ;;
+            moderate) MODERATE=$VULNERABILITIES ;;
+            low) LOW=$VULNERABILITIES ;;
+          esac
+        fi
+        
+        echo "• Vulnerabilities found: $VULNERABILITIES"
+        echo "  - Critical: $CRITICAL"
+        echo "  - High: $HIGH"
+        echo "  - Moderate: $MODERATE"
+        echo "  - Low: $LOW"
+        
+        # Set outputs
+        echo "vulnerabilities=$VULNERABILITIES" >> $GITHUB_OUTPUT
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "high=$HIGH" >> $GITHUB_OUTPUT
+        echo "moderate=$MODERATE" >> $GITHUB_OUTPUT
+        echo "low=$LOW" >> $GITHUB_OUTPUT
+        
+        # Clean up
+        rm -f "$OUTPUT_FILE"
+        
+        echo "::endgroup::"
+        
+        # Handle auto-fix if requested
+        if [[ "${{ inputs.fix }}" == "true" ]] && [[ "$VULNERABILITIES" -gt 0 ]]; then
+          echo "::group::🔧 Attempting Auto-fix"
+          echo "• Running: pnpm audit fix"
+          
+          if pnpm audit fix; then
+            echo "✅ Some vulnerabilities were auto-fixed"
+            echo "• Re-running audit to check remaining issues..."
+            
+            # Re-run audit to check what's left
+            if $AUDIT_CMD; then
+              echo "✅ All fixable vulnerabilities resolved"
+              AUDIT_STATUS="success"
+              VULNERABILITIES=0
+            else
+              echo "⚠️ Some vulnerabilities could not be auto-fixed"
+            fi
+          else
+            echo "⚠️ Auto-fix failed or no fixable vulnerabilities"
+          fi
+          
+          echo "::endgroup::"
+        fi
+        
+        # Fail if vulnerabilities found and fail-on-vulnerability is true
+        if [[ "${{ inputs.fail-on-vulnerability }}" == "true" ]] && [[ "$VULNERABILITIES" -gt 0 ]]; then
+          echo "❌ Failing due to $VULNERABILITIES vulnerabilities found"
+          exit 1
+        fi
+
+    - name: Check for outdated packages
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📦 Checking for Outdated Packages"
+        
+        echo "• Running: pnpm outdated"
+        pnpm outdated || true
+        
+        echo "::endgroup::"
+
+    - name: Security summary
+      if: always()
+      shell: bash
+      run: |
+        echo "::group::📊 Security Audit Summary"
+        
+        TOTAL="${{ steps.audit.outputs.vulnerabilities }}"
+        
+        if [[ "$TOTAL" == "0" ]]; then
+          echo "✅ No security vulnerabilities found!"
+        else
+          echo "⚠️ Found $TOTAL vulnerabilities:"
+          echo "• Critical: ${{ steps.audit.outputs.critical }}"
+          echo "• High: ${{ steps.audit.outputs.high }}"
+          echo "• Moderate: ${{ steps.audit.outputs.moderate }}"
+          echo "• Low: ${{ steps.audit.outputs.low }}"
+          
+          echo ""
+          echo "Recommendations:"
+          echo "1. Run 'pnpm audit' locally for detailed information"
+          echo "2. Update dependencies with 'pnpm update'"
+          echo "3. Check for breaking changes before updating"
+          
+          if [[ "${{ inputs.fix }}" == "false" ]]; then
+            echo "4. Consider enabling auto-fix with 'fix: true'"
+          fi
+        fi
+        
+        echo "::endgroup::"
+        
+        # Add to GitHub summary
+        echo "### 🔒 Security Audit Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [[ "$TOTAL" == "0" ]]; then
+          echo "✅ **No vulnerabilities found**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | ${{ steps.audit.outputs.critical }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | ${{ steps.audit.outputs.high }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Moderate | ${{ steps.audit.outputs.moderate }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Low | ${{ steps.audit.outputs.low }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total** | **$TOTAL** |" >> $GITHUB_STEP_SUMMARY
+        fi
