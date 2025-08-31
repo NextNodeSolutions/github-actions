@@ -56,6 +56,12 @@ on:
       custom-domain:
         description: 'Custom domain calculated from environment and base-domain'
         value: ${{ jobs.deploy.outputs.custom-domain }}
+      domain-configured:
+        description: 'Whether custom domain was successfully configured on Railway'
+        value: ${{ jobs.deploy.outputs.domain-configured }}
+      cname-target:
+        description: 'CNAME target from Railway for DNS configuration'
+        value: ${{ jobs.deploy.outputs.cname-target }}
       deployment-status:
         description: 'Deployment status'
         value: ${{ jobs.deploy.outputs.status }}
@@ -70,6 +76,8 @@ jobs:
       deployment-id: ${{ steps.wait.outputs.deployment-id }}
       railway-url: ${{ steps.url.outputs.railway-url }}
       custom-domain: ${{ steps.domain.outputs.custom-domain }}
+      domain-configured: ${{ steps.railway-domain.outputs.domain-configured }}
+      cname-target: ${{ steps.railway-domain.outputs.cname-target }}
       status: ${{ steps.wait.outputs.status }}
       service-name: ${{ steps.service.outputs.service-name }}
       project-id: ${{ steps.project.outputs.project-id }}
@@ -161,3 +169,13 @@ jobs:
         with:
           service-name: ${{ steps.service.outputs.service-name }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Configure Custom Domain
+        id: railway-domain
+        if: inputs.base-domain != ''
+        uses: NextNodeSolutions/github-actions/actions/railway-domain-setup@main
+        with:
+          service-name: ${{ steps.service.outputs.service-name }}
+          custom-domain: ${{ steps.domain.outputs.custom-domain }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          remove-existing: true
