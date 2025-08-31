@@ -73,23 +73,51 @@ jobs:
             fi
           fi
           
-          # Check if record exists
-          EXISTING=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}&type=${{ inputs.record-type }}" \
+          # Check if ANY record exists for this domain (A, AAAA, CNAME)
+          # First check for the exact type we want
+          EXISTING_EXACT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}&type=${{ inputs.record-type }}" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json")
           
-          echo "DEBUG: API Response for existing records:"
-          echo "$EXISTING" | jq '.'
+          # Then check for any conflicting record types (A, AAAA, CNAME)
+          EXISTING_ANY=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
           
-          RECORD_COUNT=$(echo "$EXISTING" | jq -r '.result | length')
-          echo "DEBUG: Found $RECORD_COUNT existing records"
+          echo "DEBUG: API Response for exact type (${{ inputs.record-type }}):"
+          echo "$EXISTING_EXACT" | jq '.'
           
-          RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
-          CURRENT_CONTENT=$(echo "$EXISTING" | jq -r '.result[0].content // empty')
-          CURRENT_PROXIED=$(echo "$EXISTING" | jq -r '.result[0].proxied // empty')
+          echo "DEBUG: API Response for any record type:"
+          echo "$EXISTING_ANY" | jq '.'
+          
+          # Filter for A, AAAA, CNAME records only
+          CONFLICTING_RECORDS=$(echo "$EXISTING_ANY" | jq '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")]')
+          RECORD_COUNT=$(echo "$CONFLICTING_RECORDS" | jq -r 'length')
+          echo "DEBUG: Found $RECORD_COUNT conflicting records (A/AAAA/CNAME)"
+          
+          # Use exact match if available, otherwise use first conflicting record
+          if [[ $(echo "$EXISTING_EXACT" | jq -r '.result | length') -gt 0 ]]; then
+            echo "DEBUG: Using exact type match"
+            RECORD_ID=$(echo "$EXISTING_EXACT" | jq -r '.result[0].id // empty')
+            CURRENT_CONTENT=$(echo "$EXISTING_EXACT" | jq -r '.result[0].content // empty')
+            CURRENT_PROXIED=$(echo "$EXISTING_EXACT" | jq -r '.result[0].proxied // empty')
+            CURRENT_TYPE=$(echo "$EXISTING_EXACT" | jq -r '.result[0].type // empty')
+          elif [[ $RECORD_COUNT -gt 0 ]]; then
+            echo "DEBUG: Using first conflicting record for replacement"
+            RECORD_ID=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].id // empty')
+            CURRENT_CONTENT=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].content // empty')
+            CURRENT_PROXIED=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].proxied // empty')
+            CURRENT_TYPE=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].type // empty')
+          else
+            RECORD_ID=""
+            CURRENT_CONTENT=""
+            CURRENT_PROXIED=""
+            CURRENT_TYPE=""
+          fi
           
           echo "DEBUG: Extracted values:"
           echo "  • RECORD_ID: '$RECORD_ID'"
+          echo "  • CURRENT_TYPE: '$CURRENT_TYPE'"
           echo "  • CURRENT_CONTENT: '$CURRENT_CONTENT'"
           echo "  • CURRENT_PROXIED: '$CURRENT_PROXIED'"
           
@@ -106,21 +134,26 @@ jobs:
           if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" && "$RECORD_ID" != "" ]]; then
             echo "Existing record found:"
             echo "  • Record ID: $RECORD_ID"
+            echo "  • Current type: $CURRENT_TYPE"
             echo "  • Current content: $CURRENT_CONTENT"
+            echo "  • New type: ${{ inputs.record-type }}"
             echo "  • New content: $TARGET_VALUE"
             echo "  • Current proxied: $CURRENT_PROXIED"
             echo "  • New proxied: ${{ inputs.proxied }}"
             
             # Convert boolean values for comparison
             EXPECTED_PROXIED="${{ inputs.proxied }}"
-            if [[ "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "$EXPECTED_PROXIED" ]]; then
+            EXPECTED_TYPE="${{ inputs.record-type }}"
+            
+            if [[ "$CURRENT_TYPE" == "$EXPECTED_TYPE" && "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "$EXPECTED_PROXIED" ]]; then
               echo "✅ DNS record already up to date - no changes needed"
               echo "success=true" >> $GITHUB_OUTPUT
               echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
               exit 0
             else
-              echo "📝 DNS record needs to be updated"
+              echo "📝 DNS record needs to be updated/replaced"
               echo "  Differences:"
+              [[ "$CURRENT_TYPE" != "$EXPECTED_TYPE" ]] && echo "    - Type: '$CURRENT_TYPE' → '$EXPECTED_TYPE'"
               [[ "$CURRENT_CONTENT" != "$TARGET_VALUE" ]] && echo "    - Content: '$CURRENT_CONTENT' → '$TARGET_VALUE'"
               [[ "$CURRENT_PROXIED" != "$EXPECTED_PROXIED" ]] && echo "    - Proxied: '$CURRENT_PROXIED' → '$EXPECTED_PROXIED'"
             fi
