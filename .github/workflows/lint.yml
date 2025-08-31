@@ -43,14 +43,14 @@ jobs:
     outputs:
       passed: ${{ steps.lint.outcome == 'success' }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@feat/railway-deployment-support
+      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
           working-directory: ${{ inputs.working-directory }}
           
       - id: lint
-        uses: NextNodeSolutions/github-actions/actions/lint@feat/railway-deployment-support
+        uses: NextNodeSolutions/github-actions/actions/lint@main
         with:
           working-directory: ${{ inputs.working-directory }}
           fix: ${{ inputs.lint-fix }}

@@ -71,14 +71,14 @@ runs:
           # Check if details is JSON array or multiline string
           if [[ "${{ inputs.details }}" =~ ^\[.*\]$ ]]; then
             # Parse JSON array
-            echo "${{ inputs.details }}" | jq -r '.[]' | while read -r line; do
+            while IFS= read -r line; do
               echo "  • $line"
-            done
+            done < <(echo "${{ inputs.details }}" | jq -r '.[]')
           else
             # Output multiline string
-            echo "${{ inputs.details }}" | while read -r line; do
+            while IFS= read -r line; do
               [[ -n "$line" ]] && echo "  • $line"
-            done
+            done <<< "${{ inputs.details }}"
           fi
         fi
         
@@ -90,4 +90,6 @@ runs:
         # Set appropriate exit code for error level
         if [[ "${{ inputs.level }}" == "error" ]]; then
           exit 1
+        else
+          exit 0
         fi

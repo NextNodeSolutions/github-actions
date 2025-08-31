@@ -2,9 +2,12 @@ name: Internal Test Workflows
 
 # INTERNAL WORKFLOW - For testing GitHub Actions within this repository only
 # This workflow is NOT accessible from external repositories
-# Only runs on manual trigger to prevent recursion
+# Runs automatically on every push and can be triggered manually
 
 on:
+  push:
+    branches:
+      - '**'  # All branches including main
   workflow_dispatch:
     inputs:
       test-scope:
@@ -35,7 +38,7 @@ jobs:
   # Test atomic actions
   test-atomic-actions:
     name: Test Atomic Actions
-    if: inputs.test-scope == 'all' || inputs.test-scope == 'atomic'
+    if: github.event_name == 'push' || inputs.test-scope == 'all' || inputs.test-scope == 'atomic'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -144,7 +147,7 @@ jobs:
       - name: Test health-check action
         uses: ./actions/health-check
         with:
-          url: 'https://api.github.com'
+          url: 'https://httpbin.org/status/200'
           max-attempts: 3
           delay-seconds: 2
           
@@ -163,7 +166,7 @@ jobs:
   # Test pack workflows
   test-pack-workflows:
     name: Test Pack Workflows
-    if: inputs.test-scope == 'all' || inputs.test-scope == 'packs'
+    if: github.event_name == 'push' || inputs.test-scope == 'all' || inputs.test-scope == 'packs'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -256,7 +259,7 @@ jobs:
   # Integration tests
   test-integration:
     name: Integration Tests
-    if: inputs.test-scope == 'all' || inputs.test-scope == 'integration'
+    if: github.event_name == 'push' || inputs.test-scope == 'all' || inputs.test-scope == 'integration'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -288,8 +291,8 @@ jobs:
           
           # Create build script
           cat > build.js << 'EOF'
+          import fs from 'fs';
           console.log('Building project...');
-          const fs = require('fs');
           fs.mkdirSync('dist', { recursive: true });
           fs.writeFileSync('dist/index.js', 'console.log("Built");');
           console.log('Build complete!');
@@ -309,10 +312,10 @@ jobs:
           
           # Create test script
           cat > test.js << 'EOF'
+          import fs from 'fs';
           console.log('Running tests...');
           const coverage = process.argv.includes('--coverage');
           if (coverage) {
-            const fs = require('fs');
             fs.mkdirSync('coverage', { recursive: true });
             fs.writeFileSync('coverage/coverage-summary.json', JSON.stringify({
               total: { lines: { pct: 92 } }
@@ -454,7 +457,11 @@ jobs:
              [[ "${{ needs.validate-yaml.result }}" == "success" ]]; then
             echo "✅ **All tests passed successfully!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Debug mode: ${{ inputs.debug }}" >> $GITHUB_STEP_SUMMARY
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              echo "Debug mode: ${{ inputs.debug }}" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "Triggered by: ${{ github.event_name }} on ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "❌ **Some tests failed. Please review the results above.**" >> $GITHUB_STEP_SUMMARY
             exit 1

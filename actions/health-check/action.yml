@@ -79,20 +79,40 @@ runs:
         FINAL_STATUS=""
         RESPONSE_TIME=""
         
+        echo "DEBUG: Starting health check loop..."
+        echo "DEBUG: ATTEMPT=$ATTEMPT, MAX_ATTEMPTS=$MAX_ATTEMPTS"
+        
         while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-          ((ATTEMPT++))
+          echo "DEBUG: Before increment, ATTEMPT=$ATTEMPT"
+          ATTEMPT=$((ATTEMPT + 1))
+          echo "DEBUG: After increment, ATTEMPT=$ATTEMPT"
           echo "🔄 Attempt $ATTEMPT/$MAX_ATTEMPTS..."
           
           # Perform the health check
-          START_TIME=$(date +%s%3N)
-          if RESPONSE=$(eval "curl -s -o /dev/null -w '%{http_code}' --max-time $TIMEOUT $CURL_HEADERS '$URL'" 2>&1); then
-            END_TIME=$(date +%s%3N)
+          echo "  DEBUG: About to get start time..."
+          # Use seconds for timing (milliseconds not always supported)
+          START_TIME=$(date +%s)
+          echo "  DEBUG: Start time: $START_TIME"
+          echo "  DEBUG: About to execute curl command for URL: $URL"
+          echo "  DEBUG: Timeout: $TIMEOUT seconds"
+          
+          set +e  # Don't exit on curl failure
+          RESPONSE=$(curl -s -o /dev/null -w '%{http_code}' --max-time $TIMEOUT "$URL" 2>&1)
+          CURL_EXIT_CODE=$?
+          set -e
+          
+          echo "  DEBUG: Curl exit code: $CURL_EXIT_CODE"
+          echo "  DEBUG: Curl response: '$RESPONSE'"
+          
+          if [ $CURL_EXIT_CODE -eq 0 ]; then
+            END_TIME=$(date +%s)
             RESPONSE_TIME=$((END_TIME - START_TIME))
             
-            echo "  Response: HTTP $RESPONSE (${RESPONSE_TIME}ms)"
+            echo "  Response: HTTP $RESPONSE (${RESPONSE_TIME}s)"
+            echo "  DEBUG: Checking if '$RESPONSE' is in '$EXPECTED_STATUS'"
             
             # Check if status is in expected list
-            if echo "$EXPECTED_STATUS" | grep -q "$RESPONSE"; then
+            if [[ ",$EXPECTED_STATUS," == *",$RESPONSE,"* ]]; then
               echo "✅ Health check passed!"
               HEALTHY=true
               FINAL_STATUS=$RESPONSE
@@ -101,7 +121,7 @@ runs:
               echo "  ⚠️  Unexpected status code: $RESPONSE"
             fi
           else
-            echo "  ❌ Request failed: $RESPONSE"
+            echo "  ❌ Request failed: $RESPONSE (exit code: $CURL_EXIT_CODE)"
           fi
           
           if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
@@ -114,7 +134,7 @@ runs:
         if [[ "$HEALTHY" == "true" ]]; then
           echo "✅ Health check successful after $ATTEMPT attempt(s)"
           echo "  • Status: HTTP $FINAL_STATUS"
-          echo "  • Response time: ${RESPONSE_TIME}ms"
+          echo "  • Response time: ${RESPONSE_TIME}s"
         else
           echo "❌ Health check failed after $ATTEMPT attempt(s)"
           if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then

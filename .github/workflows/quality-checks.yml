@@ -159,7 +159,7 @@ jobs:
     outputs:
       all-passed: ${{ steps.check.outputs.all-passed }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/check-job-results@feat/railway-deployment-support
+      - uses: NextNodeSolutions/github-actions/actions/check-job-results@main
         id: check
         with:
           job-results: |
