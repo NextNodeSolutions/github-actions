@@ -78,9 +78,20 @@ jobs:
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json")
           
-          RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id')
-          CURRENT_CONTENT=$(echo "$EXISTING" | jq -r '.result[0].content')
-          CURRENT_PROXIED=$(echo "$EXISTING" | jq -r '.result[0].proxied')
+          echo "DEBUG: API Response for existing records:"
+          echo "$EXISTING" | jq '.'
+          
+          RECORD_COUNT=$(echo "$EXISTING" | jq -r '.result | length')
+          echo "DEBUG: Found $RECORD_COUNT existing records"
+          
+          RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+          CURRENT_CONTENT=$(echo "$EXISTING" | jq -r '.result[0].content // empty')
+          CURRENT_PROXIED=$(echo "$EXISTING" | jq -r '.result[0].proxied // empty')
+          
+          echo "DEBUG: Extracted values:"
+          echo "  • RECORD_ID: '$RECORD_ID'"
+          echo "  • CURRENT_CONTENT: '$CURRENT_CONTENT'"
+          echo "  • CURRENT_PROXIED: '$CURRENT_PROXIED'"
           
           # Clean target URL for CNAME records (remove https:// if present)
           TARGET_VALUE="${{ inputs.target }}"
@@ -92,7 +103,7 @@ jobs:
           fi
           
           # Check if record already has the correct values
-          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" ]]; then
+          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" && "$RECORD_ID" != "" ]]; then
             echo "Existing record found:"
             echo "  • Record ID: $RECORD_ID"
             echo "  • Current content: $CURRENT_CONTENT"
@@ -100,14 +111,21 @@ jobs:
             echo "  • Current proxied: $CURRENT_PROXIED"
             echo "  • New proxied: ${{ inputs.proxied }}"
             
-            if [[ "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "${{ inputs.proxied }}" ]]; then
+            # Convert boolean values for comparison
+            EXPECTED_PROXIED="${{ inputs.proxied }}"
+            if [[ "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "$EXPECTED_PROXIED" ]]; then
               echo "✅ DNS record already up to date - no changes needed"
               echo "success=true" >> $GITHUB_OUTPUT
               echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
               exit 0
             else
               echo "📝 DNS record needs to be updated"
+              echo "  Differences:"
+              [[ "$CURRENT_CONTENT" != "$TARGET_VALUE" ]] && echo "    - Content: '$CURRENT_CONTENT' → '$TARGET_VALUE'"
+              [[ "$CURRENT_PROXIED" != "$EXPECTED_PROXIED" ]] && echo "    - Proxied: '$CURRENT_PROXIED' → '$EXPECTED_PROXIED'"
             fi
+          else
+            echo "No existing record found - will create new record"
           fi
           
           # Prepare record data
