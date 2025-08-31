@@ -14,6 +14,10 @@ on:
         description: 'Application name for Railway project'
         required: true
         type: string
+      base-domain:
+        description: 'Base domain for custom domain calculation (e.g. nextnode.fr)'
+        required: true
+        type: string
       working-directory:
         description: 'Working directory'
         required: false
@@ -49,6 +53,9 @@ on:
       railway-url:
         description: 'Railway internal URL'
         value: ${{ jobs.deploy.outputs.railway-url }}
+      custom-domain:
+        description: 'Custom domain calculated from environment and base-domain'
+        value: ${{ jobs.deploy.outputs.custom-domain }}
       deployment-status:
         description: 'Deployment status'
         value: ${{ jobs.deploy.outputs.status }}
@@ -62,12 +69,42 @@ jobs:
     outputs:
       deployment-id: ${{ steps.wait.outputs.deployment-id }}
       railway-url: ${{ steps.url.outputs.railway-url }}
+      custom-domain: ${{ steps.domain.outputs.custom-domain }}
       status: ${{ steps.wait.outputs.status }}
       service-name: ${{ steps.service.outputs.service-name }}
       project-id: ${{ steps.project.outputs.project-id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
+      - name: Calculate Custom Domain
+        id: domain
+        shell: bash
+        run: |
+          echo "::group::🌐 Calculating Custom Domain"
+          
+          BASE_DOMAIN="${{ inputs.base-domain }}"
+          ENVIRONMENT="${{ inputs.environment }}"
+          
+          echo "• Base domain: $BASE_DOMAIN"
+          echo "• Environment: $ENVIRONMENT"
+          
+          # Calculate custom domain based on environment
+          if [[ "$ENVIRONMENT" == "production" ]]; then
+            CUSTOM_DOMAIN="$BASE_DOMAIN"
+          elif [[ "$ENVIRONMENT" == "staging" ]]; then
+            CUSTOM_DOMAIN="test.$BASE_DOMAIN"
+          elif [[ "$ENVIRONMENT" == "development" ]]; then
+            CUSTOM_DOMAIN="dev.$BASE_DOMAIN"
+          else
+            echo "⚠️ Warning: Unknown environment '$ENVIRONMENT'. DNS setup may fail."
+            CUSTOM_DOMAIN="unknown.$BASE_DOMAIN"
+          fi
+          
+          echo "• Calculated domain: $CUSTOM_DOMAIN"
+          echo "custom-domain=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
+          
+          echo "::endgroup::"
       
       - name: Setup Railway CLI
         id: cli
