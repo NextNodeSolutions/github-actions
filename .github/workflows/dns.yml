@@ -84,7 +84,8 @@ jobs:
           TARGET_VALUE="${{ inputs.target }}"
           if [[ "${{ inputs.record-type }}" == "CNAME" ]]; then
             # Remove protocol and trailing slash if present
-            TARGET_VALUE=$(echo "$TARGET_VALUE" | sed 's|^https\?://||' | sed 's|/$||')
+            TARGET_VALUE=$(echo "$TARGET_VALUE" | sed 's|^https\?://||g' | sed 's|/$||g')
+            echo "Original target: ${{ inputs.target }}"
             echo "Cleaned CNAME target: $TARGET_VALUE"
           fi
           
