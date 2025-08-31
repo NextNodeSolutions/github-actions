@@ -79,6 +79,8 @@ jobs:
             -H "Content-Type: application/json")
           
           RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id')
+          CURRENT_CONTENT=$(echo "$EXISTING" | jq -r '.result[0].content')
+          CURRENT_PROXIED=$(echo "$EXISTING" | jq -r '.result[0].proxied')
           
           # Clean target URL for CNAME records (remove https:// if present)
           TARGET_VALUE="${{ inputs.target }}"
@@ -87,6 +89,25 @@ jobs:
             TARGET_VALUE=$(echo "$TARGET_VALUE" | sed 's|^https\?://||g' | sed 's|/$||g')
             echo "Original target: ${{ inputs.target }}"
             echo "Cleaned CNAME target: $TARGET_VALUE"
+          fi
+          
+          # Check if record already has the correct values
+          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" ]]; then
+            echo "Existing record found:"
+            echo "  • Record ID: $RECORD_ID"
+            echo "  • Current content: $CURRENT_CONTENT"
+            echo "  • New content: $TARGET_VALUE"
+            echo "  • Current proxied: $CURRENT_PROXIED"
+            echo "  • New proxied: ${{ inputs.proxied }}"
+            
+            if [[ "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "${{ inputs.proxied }}" ]]; then
+              echo "✅ DNS record already up to date - no changes needed"
+              echo "success=true" >> $GITHUB_OUTPUT
+              echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "📝 DNS record needs to be updated"
+            fi
           fi
           
           # Prepare record data
