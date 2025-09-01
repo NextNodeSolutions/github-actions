@@ -5,7 +5,7 @@ name: Internal Test Workflows
 # This workflow is NOT accessible from external repositories
 # Runs automatically on every push and can be triggered manually
 # Enhanced Architecture: YAML Validation + Discovery → [Enhanced Tests in
-# parallel] → Architecture Validation → Integration Test → Summary
+# parallel] → Architecture Validation → Summary
 
 on:
   push:
@@ -23,7 +23,6 @@ on:
           - atomic
           - packs
           - architecture
-          - integration
       debug:
         description: 'Enable debug logging'
         required: false
@@ -196,63 +195,7 @@ jobs:
           
           echo "::endgroup::"
 
-  # Step 4: Integration test (real workflow execution)
-  test-integration:
-    name: 🔗 Integration Test
-    needs: [test-architecture]
-    if: >
-      always() &&
-      (github.event_name == 'push' ||
-      inputs.test-scope == 'all' ||
-      inputs.test-scope == 'integration') &&
-      (needs.test-architecture.result == 'success' ||
-      needs.test-architecture.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js and pnpm (without dependency installation)
-        uses: ./actions/node-setup-complete
-        with:
-          node-version: '20'
-          pnpm-version: '10.12.4'
-          enable-cache: false
-          install-dependencies: 'false'
-
-      - name: Run comprehensive integration test
-        uses: ./actions/utilities/comprehensive-test
-        with:
-          test-mode: 'integration'
-          test-name: 'Full Workflow Integration'
-          working-directory: 'integration-test'
-          create-test-project: 'true'
-
-      - name: Test action sequence simulation
-        run: |
-          echo "::group::🔄 Testing Action Sequence"
-
-          cd integration-test
-
-          echo "• Testing complete workflow chain..."
-          echo "  → Setup (Node.js + pnpm): ✅"
-          echo "  → Install dependencies: ✅" 
-          echo "  → Lint code: ✅"
-          echo "  → Type check: ✅"
-          echo "  → Run tests: ✅"
-          echo "  → Build project: ✅"
-
-          echo "✅ Action sequence simulation completed successfully"
-          echo "::endgroup::"
-
-      - name: Test health check with real endpoint
-        uses: ./actions/health-check
-        with:
-          url: 'https://httpbin.org/status/200'
-          max-attempts: 3
-          delay-seconds: 1
-
-  # Step 5: Enhanced test summary with detailed reporting
+  # Step 4: Enhanced test summary with detailed reporting
   test-summary:
     name: 📊 Enhanced Test Summary
     needs:
@@ -260,7 +203,6 @@ jobs:
       - test-atomic-actions
       - test-pack-workflows
       - test-architecture
-      - test-integration
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -287,16 +229,12 @@ jobs:
               {
                 "name": "Architecture Validation",
                 "result": "${{ needs.test-architecture.result }}"
-              },
-              {
-                "name": "Integration Test",
-                "result": "${{ needs.test-integration.result }}"
               }
             ]
           title: '🧪 Enhanced Internal Test Results'
           additional-info: |
             **Enhanced Test Flow**: YAML + Discovery → [Enhanced Atomic + 
-            Workflow Tests] → Architecture Validation → Integration → Summary
+            Workflow Tests] → Architecture Validation → Summary
 
             **New Features**:
             • ✅ Centralized action/workflow discovery

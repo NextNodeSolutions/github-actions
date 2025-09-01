@@ -43,6 +43,10 @@ runs:
         log_success() { echo "✅ $1"; }
         log_error() { echo "❌ $1"; }
         
+        # Use project ID directly
+        PROJECT_ID="${{ inputs.project-id }}"
+        log_info "Project ID: ${PROJECT_ID:0:8}..."
+        
         # Generate service name based on environment
         if [[ "${{ inputs.environment }}" == "production" ]]; then
           SERVICE_PREFIX="prod"
@@ -65,9 +69,9 @@ runs:
         log_info "Setting up environment: $ENVIRONMENT"
         
         # Link to project and environment
-        if ! railway link --project "${{ inputs.project-id }}" --environment "$ENVIRONMENT" 2>/dev/null; then
+        if ! railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT" 2>/dev/null; then
           log_info "Creating new environment: $ENVIRONMENT"
-          railway link --project "${{ inputs.project-id }}"
+          railway link --project "$PROJECT_ID"
           railway environment new "$ENVIRONMENT" || true  # May already exist
           railway environment "$ENVIRONMENT"
         fi
@@ -83,7 +87,11 @@ runs:
         
         if [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ]; then
           log_success "Service found: $SERVICE_NAME (ID: ${SERVICE_ID:0:8}...)"
-          echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
+          {
+          echo 'service-id<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
         else
           log_info "Creating new service: $SERVICE_NAME"
           
@@ -91,7 +99,7 @@ runs:
             # Wait and retry to get service ID
             sleep 3
             for attempt in 1 2 3; do
-              SERVICE_ID=$(railway status --json 2>/dev/null | jq -r '.services.edges[]? | .node | select(.name=="'"$SERVICE_NAME"'") | .id // empty' 2>/dev/null || echo "")
+              SERVICE_ID=$(railway status --json 2>/dev/null | jq -r '.services.edges[]? | .node | select(.name=="'"$SERVICE_NAME"'") | .id // empty' 2>/dev/null | head -1 || echo "")
               [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ] && break
               log_info "Waiting for service creation (attempt $attempt/3)..."
               sleep 2
@@ -99,7 +107,11 @@ runs:
             
             if [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ]; then
               log_success "Service created: $SERVICE_NAME (ID: ${SERVICE_ID:0:8}...)"
-              echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
+              {
+          echo 'service-id<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
             else
               log_error "Failed to retrieve service ID after creation"
               exit 1
@@ -115,7 +127,11 @@ runs:
         railway service "$SERVICE_NAME"
         
         # Export for subsequent steps in same job
-        echo "SERVICE_ID=$SERVICE_ID" >> $GITHUB_ENV
+        {
+          echo 'SERVICE_ID<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_ENV
         echo "SERVICE_NAME=$SERVICE_NAME" >> $GITHUB_ENV
         
         END_TIME=$(date +%s)

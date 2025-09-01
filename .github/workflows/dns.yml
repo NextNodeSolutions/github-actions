@@ -148,7 +148,11 @@ jobs:
             if [[ "$CURRENT_TYPE" == "$EXPECTED_TYPE" && "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "$EXPECTED_PROXIED" ]]; then
               echo "✅ DNS record already up to date - no changes needed"
               echo "success=true" >> $GITHUB_OUTPUT
-              echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+              {
+              echo 'record-id<<EOF'
+              echo "$RECORD_ID"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
               exit 0
             else
               echo "📝 DNS record needs to be updated/replaced"
@@ -187,7 +191,11 @@ jobs:
           # Check success
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
           echo "success=$SUCCESS" >> $GITHUB_OUTPUT
-          echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+          {
+              echo 'record-id<<EOF'
+              echo "$RECORD_ID"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
           
           if [[ "$SUCCESS" != "true" ]]; then
             echo "$RESPONSE" | jq '.errors'

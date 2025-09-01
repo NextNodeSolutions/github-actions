@@ -70,20 +70,36 @@ runs:
         # Check if project exists
         if railway list --json | jq -r '.[].name' | grep -q "^$PROJECT_NAME$"; then
           echo "Project $PROJECT_NAME exists, linking..."
-          PROJECT_ID=$(railway list --json | jq -r ".[] | select(.name==\"$PROJECT_NAME\") | .id")
-          echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
-          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
+          PROJECT_ID=$(railway list --json | jq -r ".[] | select(.name==\"$PROJECT_NAME\") | .id" | head -1)
+          {
+          echo 'PROJECT_ID<<EOF'
+          echo "$PROJECT_ID"
+          echo 'EOF'
+        } >> $GITHUB_ENV
+          {
+          echo 'project-id<<EOF'
+          echo "$PROJECT_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
         else
           echo "Creating new project $PROJECT_NAME..."
           railway init --name "$PROJECT_NAME"
           
           # Get the created project ID
           sleep 2  # Wait for project creation to propagate
-          PROJECT_ID=$(railway list --json | jq -r ".[] | select(.name==\"$PROJECT_NAME\") | .id")
+          PROJECT_ID=$(railway list --json | jq -r ".[] | select(.name==\"$PROJECT_NAME\") | .id" | head -1)
           
           if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "null" ]; then
-            echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
-            echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
+            {
+          echo 'PROJECT_ID<<EOF'
+          echo "$PROJECT_ID"
+          echo 'EOF'
+        } >> $GITHUB_ENV
+            {
+          echo 'project-id<<EOF'
+          echo "$PROJECT_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
             echo "Created project with ID: $PROJECT_ID"
           else
             echo "Failed to create or find project $PROJECT_NAME"
@@ -142,8 +158,16 @@ runs:
         
         if [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ]; then
           log_success "Service found: $SERVICE_NAME (ID: ${SERVICE_ID:0:8}...)"
-          echo "SERVICE_ID=$SERVICE_ID" >> $GITHUB_ENV
-          echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
+          {
+          echo 'SERVICE_ID<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_ENV
+          {
+          echo 'service-id<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
         else
           log_info "Creating new service: $SERVICE_NAME"
           
@@ -151,7 +175,7 @@ runs:
             # Wait and retry to get service ID
             sleep 3
             for attempt in 1 2 3; do
-              SERVICE_ID=$(railway status --json 2>/dev/null | jq -r '.services.edges[]? | .node | select(.name=="'"$SERVICE_NAME"'") | .id // empty' 2>/dev/null || echo "")
+              SERVICE_ID=$(railway status --json 2>/dev/null | jq -r '.services.edges[]? | .node | select(.name=="'"$SERVICE_NAME"'") | .id // empty' 2>/dev/null | head -1 || echo "")
               [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ] && break
               log_info "Waiting for service creation (attempt $attempt/3)..."
               sleep 2
@@ -159,8 +183,16 @@ runs:
             
             if [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ]; then
               log_success "Service created: $SERVICE_NAME (ID: ${SERVICE_ID:0:8}...)"
-              echo "SERVICE_ID=$SERVICE_ID" >> $GITHUB_ENV
-              echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
+              {
+          echo 'SERVICE_ID<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_ENV
+              {
+          echo 'service-id<<EOF'
+          echo "$SERVICE_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
             else
               log_error "Failed to retrieve service ID after creation"
               exit 1
@@ -269,7 +301,11 @@ runs:
               echo "🆔 Deployment ID: $DEPLOYMENT_ID"
               echo "⏱️  Total time: ${ELAPSED}s"
               echo "status=success" >> $GITHUB_OUTPUT
-              echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+              {
+          echo 'deployment-id<<EOF'
+          echo "$DEPLOYMENT_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
               break
               ;;
             "FAILED"|"CRASHED"|"REMOVED")
@@ -341,7 +377,11 @@ runs:
         echo "railway-internal-url=$RAILWAY_INTERNAL_URL" >> $GITHUB_OUTPUT
         
         # Also set deployment info output
-        echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+        {
+          echo 'deployment-id<<EOF'
+          echo "$DEPLOYMENT_ID"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
       env:
         RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
         SERVICE_NAME: ${{ env.SERVICE_NAME }}

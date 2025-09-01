@@ -80,7 +80,11 @@ runs:
               echo "• Deployment ID: ${DEPLOYMENT_ID:0:8}..."
               echo "• Duration: ${ELAPSED}s"
               echo "status=success" >> $GITHUB_OUTPUT
-              echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+              {
+              echo 'deployment-id<<EOF'
+              echo "$DEPLOYMENT_ID"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
               echo "duration=${ELAPSED}s" >> $GITHUB_OUTPUT
               break
               ;;
@@ -90,7 +94,11 @@ runs:
               echo "• Status: $DEPLOYMENT_STATUS"
               echo "• Deployment ID: ${DEPLOYMENT_ID:0:8}..."
               echo "status=failed" >> $GITHUB_OUTPUT
-              echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+              {
+              echo 'deployment-id<<EOF'
+              echo "$DEPLOYMENT_ID"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
               echo "duration=${ELAPSED}s" >> $GITHUB_OUTPUT
               echo "::endgroup::"
               exit 1
@@ -111,7 +119,11 @@ runs:
           echo ""
           echo "⏰ Deployment timeout after ${MAX_WAIT}s"
           echo "status=timeout" >> $GITHUB_OUTPUT
-          echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+          {
+              echo 'deployment-id<<EOF'
+              echo "$DEPLOYMENT_ID"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
           echo "duration=${MAX_WAIT}s" >> $GITHUB_OUTPUT
         fi
         
