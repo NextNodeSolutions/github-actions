@@ -35,7 +35,7 @@ runs:
         # Use app-name as project name
         PROJECT_NAME="${{ inputs.app-name }}"
         echo "• Project name: $PROJECT_NAME"
-        echo "project-name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+        echo "project-name=$PROJECT_NAME" >> "$GITHUB_OUTPUT"
         
         # Check if project exists
         echo "• Checking for existing project..."
@@ -43,8 +43,8 @@ runs:
           echo "• Project $PROJECT_NAME already exists, linking..."
           PROJECT_ID=$(railway list --json | jq -r ".[] | select(.name==\"$PROJECT_NAME\") | .id")
           echo "• Linked to existing project ID: ${PROJECT_ID:0:8}..."
-          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
-          echo "created=false" >> $GITHUB_OUTPUT
+          echo "project-id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "created=false" >> "$GITHUB_OUTPUT"
         else
           echo "• Creating new project: $PROJECT_NAME"
           railway init --name "$PROJECT_NAME"
@@ -57,8 +57,8 @@ runs:
           
           if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "null" ]; then
             echo "• Created project with ID: ${PROJECT_ID:0:8}..."
-            echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
-            echo "created=true" >> $GITHUB_OUTPUT
+            echo "project-id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+            echo "created=true" >> "$GITHUB_OUTPUT"
           else
             echo "❌ Failed to create or find project $PROJECT_NAME"
             exit 1
@@ -66,8 +66,8 @@ runs:
         fi
         
         # Export for subsequent steps in same job
-        echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
-        echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+        echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+        echo "PROJECT_NAME=$PROJECT_NAME" >> "$GITHUB_ENV"
         
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
