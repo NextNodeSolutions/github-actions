@@ -15,8 +15,9 @@ on:
         required: true
         type: string
       base-domain:
-        description: 'Base domain for custom domain calculation (e.g. nextnode.fr)'
-        required: true
+        description: 'Base domain for custom domain calculation (e.g. nextnode.fr). Leave empty to skip custom domain setup.'
+        required: false
+        default: ''
         type: string
       working-directory:
         description: 'Working directory'
@@ -97,19 +98,28 @@ jobs:
           echo "• Base domain: $BASE_DOMAIN"
           echo "• Environment: $ENVIRONMENT"
           
-          # Calculate custom domain based on environment
-          if [[ "$ENVIRONMENT" == "production" ]]; then
-            CUSTOM_DOMAIN="$BASE_DOMAIN"
-          elif [[ "$ENVIRONMENT" == "staging" ]]; then
-            CUSTOM_DOMAIN="test.$BASE_DOMAIN"
-          elif [[ "$ENVIRONMENT" == "development" ]]; then
-            CUSTOM_DOMAIN="dev.$BASE_DOMAIN"
+          # Calculate custom domain only if base-domain is provided
+          if [[ -n "$BASE_DOMAIN" ]]; then
+            echo "• Custom domain configuration enabled"
+            
+            if [[ "$ENVIRONMENT" == "production" ]]; then
+              CUSTOM_DOMAIN="$BASE_DOMAIN"
+            elif [[ "$ENVIRONMENT" == "staging" ]]; then
+              CUSTOM_DOMAIN="test.$BASE_DOMAIN"
+            elif [[ "$ENVIRONMENT" == "development" ]]; then
+              CUSTOM_DOMAIN="dev.$BASE_DOMAIN"
+            else
+              echo "⚠️ Warning: Unknown environment '$ENVIRONMENT'. DNS setup may fail."
+              CUSTOM_DOMAIN="unknown.$BASE_DOMAIN"
+            fi
+            
+            echo "• Calculated domain: $CUSTOM_DOMAIN"
           else
-            echo "⚠️ Warning: Unknown environment '$ENVIRONMENT'. DNS setup may fail."
-            CUSTOM_DOMAIN="unknown.$BASE_DOMAIN"
+            echo "• No base domain provided - skipping custom domain setup"
+            CUSTOM_DOMAIN=""
+            echo "• Custom domain: (none - will use Railway URLs)"
           fi
           
-          echo "• Calculated domain: $CUSTOM_DOMAIN"
           echo "custom-domain=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
           
           echo "::endgroup::"
