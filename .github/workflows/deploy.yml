@@ -15,8 +15,9 @@ on:
         required: true
         type: string
       base-domain:
-        description: 'Base domain for custom domain calculation (e.g. nextnode.fr)'
-        required: true
+        description: 'Base domain for custom domain calculation (e.g. nextnode.fr). Leave empty to skip custom domain setup.'
+        required: false
+        default: ''
         type: string
       working-directory:
         description: 'Working directory'
@@ -97,39 +98,48 @@ jobs:
           echo "• Base domain: $BASE_DOMAIN"
           echo "• Environment: $ENVIRONMENT"
           
-          # Calculate custom domain based on environment
-          if [[ "$ENVIRONMENT" == "production" ]]; then
-            CUSTOM_DOMAIN="$BASE_DOMAIN"
-          elif [[ "$ENVIRONMENT" == "staging" ]]; then
-            CUSTOM_DOMAIN="test.$BASE_DOMAIN"
-          elif [[ "$ENVIRONMENT" == "development" ]]; then
-            CUSTOM_DOMAIN="dev.$BASE_DOMAIN"
+          # Calculate custom domain only if base-domain is provided
+          if [[ -n "$BASE_DOMAIN" ]]; then
+            echo "• Custom domain configuration enabled"
+            
+            if [[ "$ENVIRONMENT" == "production" ]]; then
+              CUSTOM_DOMAIN="$BASE_DOMAIN"
+            elif [[ "$ENVIRONMENT" == "staging" ]]; then
+              CUSTOM_DOMAIN="test.$BASE_DOMAIN"
+            elif [[ "$ENVIRONMENT" == "development" ]]; then
+              CUSTOM_DOMAIN="dev.$BASE_DOMAIN"
+            else
+              echo "⚠️ Warning: Unknown environment '$ENVIRONMENT'. DNS setup may fail."
+              CUSTOM_DOMAIN="unknown.$BASE_DOMAIN"
+            fi
+            
+            echo "• Calculated domain: $CUSTOM_DOMAIN"
           else
-            echo "⚠️ Warning: Unknown environment '$ENVIRONMENT'. DNS setup may fail."
-            CUSTOM_DOMAIN="unknown.$BASE_DOMAIN"
+            echo "• No base domain provided - skipping custom domain setup"
+            CUSTOM_DOMAIN=""
+            echo "• Custom domain: (none - will use Railway URLs)"
           fi
           
-          echo "• Calculated domain: $CUSTOM_DOMAIN"
           echo "custom-domain=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
           
           echo "::endgroup::"
       
       - name: Setup Railway CLI
         id: cli
-        uses: NextNodeSolutions/github-actions/actions/railway-cli-setup@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-cli-setup@main
         with:
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
       
       - name: Setup Project
         id: project
-        uses: NextNodeSolutions/github-actions/actions/railway-project-setup@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-project-setup@main
         with:
           app-name: ${{ inputs.app-name }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
       
       - name: Setup Service
         id: service
-        uses: NextNodeSolutions/github-actions/actions/railway-service-setup@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-service-setup@main
         with:
           app-name: ${{ inputs.app-name }}
           environment: ${{ inputs.environment }}
@@ -139,7 +149,7 @@ jobs:
       - name: Configure Variables
         id: vars
         if: inputs.variables != '{}'
-        uses: NextNodeSolutions/github-actions/actions/railway-variables@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-variables@main
         with:
           service-name: ${{ steps.service.outputs.service-name }}
           environment: ${{ inputs.environment }}
@@ -149,7 +159,7 @@ jobs:
       
       - name: Deploy Application
         id: trigger
-        uses: NextNodeSolutions/github-actions/actions/railway-deploy-trigger@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-deploy-trigger@main
         with:
           service-name: ${{ steps.service.outputs.service-name }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -157,7 +167,7 @@ jobs:
       - name: Wait for Deployment
         id: wait
         if: inputs.wait-for-deployment
-        uses: NextNodeSolutions/github-actions/actions/railway-deployment-wait@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-deployment-wait@main
         with:
           service-name: ${{ steps.service.outputs.service-name }}
           timeout-seconds: ${{ inputs.timeout-seconds }}
@@ -165,7 +175,7 @@ jobs:
       
       - name: Generate URL
         id: url
-        uses: NextNodeSolutions/github-actions/actions/railway-url-generate@main
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-url-generate@main
         with:
           service-name: ${{ steps.service.outputs.service-name }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -173,7 +183,7 @@ jobs:
       - name: Configure Custom Domain
         id: railway-domain
         if: inputs.base-domain != ''
-        uses: NextNodeSolutions/github-actions/actions/railway-domain-setup@main
+        uses: NextNodeSolutions/github-actions/actions/domain/railway-domain-setup@main
         with:
           service-name: ${{ steps.service.outputs.service-name }}
           custom-domain: ${{ steps.domain.outputs.custom-domain }}

@@ -52,14 +52,14 @@ jobs:
       passed: ${{ steps.build.outcome == 'success' }}
       size: ${{ steps.measure.outputs.size || 'unknown' }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+      - uses: NextNodeSolutions/github-actions/actions/build/node-setup-complete@main
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
           working-directory: ${{ inputs.working-directory }}
           
       - id: build
-        uses: NextNodeSolutions/github-actions/actions/build@main
+        uses: NextNodeSolutions/github-actions/actions/build/build-project@main
         with:
           working-directory: ${{ inputs.working-directory }}
           build-command: ${{ inputs.build-command }}
