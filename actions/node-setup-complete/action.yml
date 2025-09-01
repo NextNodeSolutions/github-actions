@@ -27,6 +27,10 @@ inputs:
     description: 'Run checkout step'
     required: false
     default: 'true'
+  install-dependencies:
+    description: 'Install dependencies with pnpm'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -35,16 +39,27 @@ runs:
       if: inputs.checkout == 'true'
       uses: actions/checkout@v4
       
-    - name: Setup Node.js and pnpm
-      uses: NextNodeSolutions/github-actions/actions/setup-node-pnpm@main
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+        run_install: false
+        
+    - name: Add pnpm to PATH
+      shell: bash
+      run: |
+        echo "$(pnpm config get global-bin-dir)" >> $GITHUB_PATH
+        echo "pnpm version: $(pnpm --version)"
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        pnpm-version: ${{ inputs.pnpm-version }}
-        working-directory: ${{ inputs.working-directory }}
-        enable-cache: ${{ inputs.enable-cache }}
+        cache: ${{ inputs.enable-cache == 'true' && 'pnpm' || '' }}
         
     - name: Install dependencies
-      uses: NextNodeSolutions/github-actions/actions/install@main
+      if: inputs.install-dependencies == 'true'
+      uses: NextNodeSolutions/github-actions/actions/build/install@main
       with:
         working-directory: ${{ inputs.working-directory }}
         frozen-lockfile: ${{ inputs.frozen-lockfile }}

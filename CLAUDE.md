@@ -20,10 +20,8 @@ github-actions/
 │   └── internal-tests.yml     # Internal tests (workflow_dispatch only)
 ├── actions/                    # Domain-organized atomic actions
 │   ├── build/                 # 🏗️ Build & Setup domain
-│   │   ├── setup-node-pnpm/   # Node.js and pnpm setup
 │   │   ├── install/           # Dependency installation
 │   │   ├── build-project/     # Project building
-│   │   ├── node-setup-complete/ # Complete Node setup
 │   │   └── smart-cache/       # Intelligent caching
 │   ├── quality/               # 🔍 Code Quality domain
 │   │   ├── lint/              # ESLint checks
@@ -48,6 +46,7 @@ github-actions/
 │   │   ├── check-command/     # Command availability check
 │   │   ├── set-env-vars/      # Environment management
 │   │   └── should-run/        # Conditional logic
+│   ├── node-setup-complete/   # ✅ Global: Complete Node.js setup (used externally)
 │   ├── test/                  # ✅ Global: Test execution (used externally)
 │   └── health-check/          # ✅ Global: URL health monitoring (used externally)
 └── README.md                   # User documentation
@@ -94,6 +93,7 @@ uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
 
 **Global actions (root level - always accessible):**
 ```yaml
+uses: nextnodesolutions/github-actions/actions/node-setup-complete@main
 uses: nextnodesolutions/github-actions/actions/test@main
 uses: nextnodesolutions/github-actions/actions/health-check@main
 ```
@@ -101,7 +101,6 @@ uses: nextnodesolutions/github-actions/actions/health-check@main
 **Domain-specific actions (internal use only):**
 ```yaml
 # Build domain
-uses: nextnodesolutions/github-actions/actions/build/setup-node-pnpm@main
 uses: nextnodesolutions/github-actions/actions/build/install@main
 
 # Quality domain  
@@ -150,12 +149,13 @@ touch actions/utilities/my-new-action/action.yml
 ```
 
 ### Domain Selection Guide
-- **build/**: Setup, installation, building, caching
+- **build/**: Installation, building, caching (Node setup is now global)
 - **quality/**: Linting, type checking, testing, security audits  
 - **deploy/**: Railway deployment and infrastructure
 - **domain/**: Domain and DNS management
 - **monitoring/**: Health checks, job verification
 - **utilities/**: Generic helpers and tools
+- **Global level**: Complete setups and externally-used actions
 
 ### Testing Actions Locally
 ```bash
@@ -213,9 +213,9 @@ This repository was reorganized by domain for better maintainability:
 
 1. **"Action not found"**: Check path - use domain-based paths like `actions/build/install`, not `actions/install`
 2. **"Workflow not accessible"**: Ensure using `workflow_call` trigger  
-3. **"pnpm not found"**: Always use `actions/build/setup-node-pnpm` action first
+3. **"pnpm not found"**: Always use `actions/node-setup-complete` action first
 4. **"Recursion detected"**: Check triggers - no push/PR triggers on this repo
-5. **"Global action moved"**: Only `test/` and `health-check/` remain at root level
+5. **"Global action moved"**: Only `node-setup-complete/`, `test/` and `health-check/` remain at root level
 
 ### Debug Mode
 

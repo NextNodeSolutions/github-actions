@@ -1,0 +1,156 @@
+name: 'Reference Validator'
+description: 'Validates that all uses: references in actions and workflows point to existing actions'
+author: 'NextNodeSolutions'
+
+inputs:
+  target-file:
+    description: 'Path to the action.yml or workflow.yml file to validate'
+    required: true
+  available-actions:
+    description: 'JSON array of available actions from discovery'
+    required: true
+  file-type:
+    description: 'Type of file: action or workflow'
+    required: false
+    default: 'action'
+
+outputs:
+  validation-result:
+    description: 'Validation result: success or failure'
+    value: ${{ steps.validate.outputs.result }}
+  issues-found:
+    description: 'Number of issues found'
+    value: ${{ steps.validate.outputs.issues }}
+  validation-details:
+    description: 'Detailed validation information'
+    value: ${{ steps.validate.outputs.details }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate references
+      id: validate
+      shell: bash
+      run: |
+        echo "::group::🔍 Validating References in ${{ inputs.target-file }}"
+        
+        TARGET_FILE="${{ inputs.target-file }}"
+        FILE_TYPE="${{ inputs.file-type }}"
+        AVAILABLE_ACTIONS='${{ inputs.available-actions }}'
+        
+        if [[ ! -f "$TARGET_FILE" ]]; then
+          echo "❌ Target file not found: $TARGET_FILE"
+          echo "result=failure" >> $GITHUB_OUTPUT
+          echo "issues=1" >> $GITHUB_OUTPUT
+          echo "details=File not found" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "• Analyzing file: $TARGET_FILE ($FILE_TYPE)"
+        
+        # Extract all uses: references
+        USES_REFERENCES=$(grep -n "uses:" "$TARGET_FILE" || true)
+        
+        if [[ -z "$USES_REFERENCES" ]]; then
+          echo "✅ No uses: references found"
+          echo "result=success" >> $GITHUB_OUTPUT
+          echo "issues=0" >> $GITHUB_OUTPUT
+          echo "details=No references to validate" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+        
+        echo "• Found $(echo "$USES_REFERENCES" | wc -l) uses: references"
+        
+        # Create list of available action paths
+        AVAILABLE_PATHS=$(echo "$AVAILABLE_ACTIONS" | jq -r '.[].path')
+        
+        ISSUES_FOUND=0
+        VALIDATION_DETAILS=""
+        
+        # Process each uses: reference
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            line_num=$(echo "$line" | cut -d: -f1)
+            uses_value=$(echo "$line" | sed 's/.*uses:[[:space:]]*//' | tr -d "'" | tr -d '"')
+            
+            echo "  → Line $line_num: $uses_value"
+            
+            # Skip external actions (GitHub marketplace, etc.)
+            if [[ "$uses_value" =~ ^actions/ ]] || \
+               [[ "$uses_value" =~ ^[^/]+/[^/]+@v[0-9] ]] || \
+               [[ "$uses_value" =~ @v[0-9] ]] || \
+               [[ "$uses_value" == *"/action-setup@"* ]] || \
+               [[ "$uses_value" == *"/checkout@"* ]] || \
+               [[ "$uses_value" == *"/setup-"* ]]; then
+              echo "    ✅ External action (skipped)"
+              continue
+            fi
+            
+            # Check internal NextNodeSolutions references
+            if [[ "$uses_value" =~ NextNodeSolutions/github-actions/actions/(.+)@main ]]; then
+              internal_path="actions/${BASH_REMATCH[1]}"
+              
+              echo "    🔍 Checking internal reference: $internal_path"
+              
+              # Check if this path exists in available actions
+              if echo "$AVAILABLE_PATHS" | grep -q "^$internal_path$"; then
+                echo "    ✅ Internal action exists: $internal_path"
+              else
+                echo "    ❌ Internal action NOT FOUND: $internal_path"
+                ISSUES_FOUND=$((ISSUES_FOUND + 1))
+                VALIDATION_DETAILS+="Line $line_num: Missing internal action '$internal_path'"$'\n'
+              fi
+              
+            # Check local references (./actions/...)
+            elif [[ "$uses_value" =~ ^\./actions/(.+)$ ]]; then
+              local_path="actions/${BASH_REMATCH[1]}"
+              
+              echo "    🔍 Checking local reference: $local_path"
+              
+              if echo "$AVAILABLE_PATHS" | grep -q "^$local_path$"; then
+                echo "    ✅ Local action exists: $local_path"
+              else
+                echo "    ❌ Local action NOT FOUND: $local_path"
+                ISSUES_FOUND=$((ISSUES_FOUND + 1))
+                VALIDATION_DETAILS+="Line $line_num: Missing local action '$local_path'"$'\n'
+              fi
+              
+            else
+              echo "    ⚠️ Unknown reference format: $uses_value"
+            fi
+          fi
+        done <<< "$USES_REFERENCES"
+        
+        # Summary
+        echo "• Validation completed:"
+        echo "  → Issues found: $ISSUES_FOUND"
+        
+        if [[ $ISSUES_FOUND -eq 0 ]]; then
+          echo "✅ All references are valid"
+          RESULT="success"
+        else
+          echo "❌ Found $ISSUES_FOUND invalid references"
+          RESULT="failure"
+        fi
+        
+        # Set outputs
+        echo "result=$RESULT" >> $GITHUB_OUTPUT
+        echo "issues=$ISSUES_FOUND" >> $GITHUB_OUTPUT
+        
+        {
+          echo "details<<EOF"
+          if [[ -n "$VALIDATION_DETAILS" ]]; then
+            echo "$VALIDATION_DETAILS"
+          else
+            echo "All references validated successfully"
+          fi
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+        
+        # Exit with error if issues found
+        if [[ $ISSUES_FOUND -gt 0 ]]; then
+          exit 1
+        fi

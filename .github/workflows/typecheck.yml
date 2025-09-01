@@ -38,7 +38,7 @@ jobs:
     outputs:
       passed: ${{ steps.typecheck.outcome == 'success' }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/build/node-setup-complete@main
+      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}

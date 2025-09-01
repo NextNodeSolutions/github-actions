@@ -1,0 +1,229 @@
+name: 'Architecture Validator'
+description: 'Validates repository architecture consistency, domain organization, and naming conventions'
+author: 'NextNodeSolutions'
+
+inputs:
+  available-actions:
+    description: 'JSON array of available actions from discovery'
+    required: true
+  available-workflows:
+    description: 'JSON array of available workflows from discovery'
+    required: true
+
+outputs:
+  validation-result:
+    description: 'Overall validation result: success or failure'
+    value: ${{ steps.validate.outputs.result }}
+  issues-found:
+    description: 'Total number of architecture issues found'
+    value: ${{ steps.validate.outputs.issues }}
+  domain-report:
+    description: 'Domain organization report'
+    value: ${{ steps.validate.outputs.domain-report }}
+  security-report:
+    description: 'Security validation report'  
+    value: ${{ steps.validate.outputs.security-report }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate architecture
+      id: validate
+      shell: bash
+      run: |
+        echo "::group::🏗️ Validating Repository Architecture"
+        
+        AVAILABLE_ACTIONS='${{ inputs.available-actions }}'
+        AVAILABLE_WORKFLOWS='${{ inputs.available-workflows }}'
+        
+        TOTAL_ISSUES=0
+        DOMAIN_REPORT=""
+        SECURITY_REPORT=""
+        
+        echo "• Validating domain organization..."
+        
+        # Expected domains and their purposes
+        declare -A EXPECTED_DOMAINS=(
+          ["build"]="Setup, installation, building, caching"
+          ["quality"]="Linting, type checking, testing, security audits"
+          ["deploy"]="Railway deployment and infrastructure"
+          ["domain"]="Domain and DNS management"
+          ["monitoring"]="Health checks, job verification"
+          ["utilities"]="Generic helpers and tools"
+          ["global"]="Globally-used actions (test, health-check)"
+        )
+        
+        # Validate domain structure
+        echo "  → Checking domain consistency..."
+        
+        for domain in "${!EXPECTED_DOMAINS[@]}"; do
+          domain_count=$(echo "$AVAILABLE_ACTIONS" | jq --arg d "$domain" '[.[] | select(.domain == $d)] | length')
+          if [[ $domain_count -gt 0 ]]; then
+            echo "    ✅ Domain '$domain': $domain_count actions (${EXPECTED_DOMAINS[$domain]})"
+            DOMAIN_REPORT+="$domain: $domain_count actions - ${EXPECTED_DOMAINS[$domain]}"$'\n'
+          else
+            echo "    ⚠️ Domain '$domain': No actions found"
+            DOMAIN_REPORT+="$domain: 0 actions (empty domain)"$'\n'
+          fi
+        done
+        
+        # Check for unknown domains
+        unknown_domains=$(echo "$AVAILABLE_ACTIONS" | jq -r '[.[] | select(.domain != "build" and .domain != "quality" and .domain != "deploy" and .domain != "domain" and .domain != "monitoring" and .domain != "utilities" and .domain != "global")] | .[].domain' | sort | uniq)
+        
+        if [[ -n "$unknown_domains" ]]; then
+          echo "    ❌ Unknown domains found:"
+          while IFS= read -r unknown; do
+            if [[ -n "$unknown" ]]; then
+              echo "      → $unknown"
+              TOTAL_ISSUES=$((TOTAL_ISSUES + 1))
+              DOMAIN_REPORT+="ISSUE: Unknown domain '$unknown'"$'\n'
+            fi
+          done <<< "$unknown_domains"
+        fi
+        
+        echo "• Validating naming conventions..."
+        
+        # Check action naming patterns
+        NAMING_ISSUES=0
+        
+        while IFS= read -r action_json; do
+          if [[ -n "$action_json" ]]; then
+            path=$(echo "$action_json" | jq -r '.path')
+            name=$(echo "$action_json" | jq -r '.name')
+            domain=$(echo "$action_json" | jq -r '.domain')
+            
+            # Check for consistent kebab-case in paths
+            if [[ ! "$path" =~ ^actions/[a-z0-9-]+(/[a-z0-9-]+)?$ ]]; then
+              echo "    ❌ Invalid path format: $path (should use kebab-case)"
+              NAMING_ISSUES=$((NAMING_ISSUES + 1))
+            fi
+            
+            # Check for descriptive names
+            if [[ ${#name} -lt 3 ]]; then
+              echo "    ❌ Action name too short: '$name' in $path"
+              NAMING_ISSUES=$((NAMING_ISSUES + 1))
+            fi
+          fi
+        done <<< "$(echo "$AVAILABLE_ACTIONS" | jq -c '.[]')"
+        
+        if [[ $NAMING_ISSUES -eq 0 ]]; then
+          echo "    ✅ All action names follow conventions"
+        else
+          echo "    ❌ Found $NAMING_ISSUES naming issues"
+          TOTAL_ISSUES=$((TOTAL_ISSUES + NAMING_ISSUES))
+        fi
+        
+        echo "• Validating workflow organization..."
+        
+        # Check workflow types
+        reusable_workflows=$(echo "$AVAILABLE_WORKFLOWS" | jq '[.[] | select(.has_workflow_call == true)] | length')
+        internal_workflows=$(echo "$AVAILABLE_WORKFLOWS" | jq '[.[] | select(.has_workflow_call == false)] | length')
+        
+        echo "    ✅ Workflow distribution: $reusable_workflows reusable, $internal_workflows internal"
+        
+        # Check for required workflows
+        required_workflows=("quality-checks" "deploy" "internal-tests")
+        for req_workflow in "${required_workflows[@]}"; do
+          if echo "$AVAILABLE_WORKFLOWS" | jq -r '.[].filename' | grep -q "^$req_workflow$"; then
+            echo "    ✅ Required workflow present: $req_workflow"
+          else
+            echo "    ❌ Missing required workflow: $req_workflow"
+            TOTAL_ISSUES=$((TOTAL_ISSUES + 1))
+          fi
+        done
+        
+        echo "• Performing security validation..."
+        
+        SECURITY_ISSUES=0
+        
+        # Check for security patterns in all files
+        while IFS= read -r action_json; do
+          if [[ -n "$action_json" ]]; then
+            action_file=$(echo "$action_json" | jq -r '.file')
+            action_path=$(echo "$action_json" | jq -r '.path')
+            
+            if [[ -f "$action_file" ]]; then
+              # Check for dangerous patterns
+              if grep -q "curl.*|.*bash\|wget.*|.*sh" "$action_file"; then
+                echo "    ⚠️ Potentially unsafe pattern (curl|bash) in: $action_path"
+                SECURITY_REPORT+="WARNING: curl|bash pattern in $action_path"$'\n'
+                SECURITY_ISSUES=$((SECURITY_ISSUES + 1))
+              fi
+              
+              # Check for hardcoded secrets/tokens
+              if grep -iE "(token|password|secret|key):[[:space:]]*['\"][^'\"]+['\"]" "$action_file"; then
+                echo "    ❌ Potential hardcoded secret in: $action_path"
+                SECURITY_REPORT+="CRITICAL: Potential hardcoded secret in $action_path"$'\n'
+                SECURITY_ISSUES=$((SECURITY_ISSUES + 1))
+              fi
+              
+              # Check for sudo usage
+              if grep -q "sudo\|su " "$action_file"; then
+                echo "    ⚠️ sudo usage detected in: $action_path"
+                SECURITY_REPORT+="WARNING: sudo usage in $action_path"$'\n'
+                SECURITY_ISSUES=$((SECURITY_ISSUES + 1))
+              fi
+            fi
+          fi
+        done <<< "$(echo "$AVAILABLE_ACTIONS" | jq -c '.[]')"
+        
+        if [[ $SECURITY_ISSUES -eq 0 ]]; then
+          echo "    ✅ No security issues detected"
+          SECURITY_REPORT="No security issues found"
+        else
+          echo "    ⚠️ Found $SECURITY_ISSUES potential security issues"
+          TOTAL_ISSUES=$((TOTAL_ISSUES + SECURITY_ISSUES))
+        fi
+        
+        echo "• Validating global actions policy..."
+        
+        # Check that only allowed actions are at global level
+        allowed_global=("test" "health-check")
+        global_actions=$(echo "$AVAILABLE_ACTIONS" | jq -r '[.[] | select(.level == "global")] | .[].path' | sed 's|actions/||')
+        
+        GLOBAL_ISSUES=0
+        while IFS= read -r global_action; do
+          if [[ -n "$global_action" ]]; then
+            if [[ " ${allowed_global[@]} " =~ " ${global_action} " ]]; then
+              echo "    ✅ Allowed global action: $global_action"
+            else
+              echo "    ❌ Unauthorized global action: $global_action (should be in domain folder)"
+              GLOBAL_ISSUES=$((GLOBAL_ISSUES + 1))
+            fi
+          fi
+        done <<< "$global_actions"
+        
+        TOTAL_ISSUES=$((TOTAL_ISSUES + GLOBAL_ISSUES))
+        
+        # Generate summary
+        echo "• Architecture validation completed:"
+        echo "  → Total issues found: $TOTAL_ISSUES"
+        
+        if [[ $TOTAL_ISSUES -eq 0 ]]; then
+          echo "✅ Architecture validation passed"
+          RESULT="success"
+        else
+          echo "❌ Architecture validation failed with $TOTAL_ISSUES issues"
+          RESULT="failure"
+        fi
+        
+        # Set outputs
+        echo "result=$RESULT" >> $GITHUB_OUTPUT
+        echo "issues=$TOTAL_ISSUES" >> $GITHUB_OUTPUT
+        
+        {
+          echo "domain-report<<EOF"
+          echo "$DOMAIN_REPORT"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        {
+          echo "security-report<<EOF"
+          echo "$SECURITY_REPORT"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+        
+        # Don't fail the job for architecture issues (warnings only)
+        # The caller can decide based on the result output

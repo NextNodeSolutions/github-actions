@@ -52,7 +52,7 @@ jobs:
       passed: ${{ steps.test.outcome == 'success' }}
       coverage: ${{ steps.test.outputs.coverage || 'N/A' }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/build/node-setup-complete@main
+      - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}

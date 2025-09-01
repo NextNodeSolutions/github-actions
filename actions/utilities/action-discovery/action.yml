@@ -1,0 +1,200 @@
+name: 'Action and Workflow Discovery'
+description: 'Centralized discovery of all available actions and workflows in the repository'
+author: 'NextNodeSolutions'
+
+outputs:
+  available-actions:
+    description: 'JSON array of all available actions with their paths and metadata'
+    value: ${{ steps.discovery.outputs.actions }}
+  available-workflows:
+    description: 'JSON array of all available workflows with their paths and metadata'
+    value: ${{ steps.discovery.outputs.workflows }}
+  action-paths:
+    description: 'Newline-separated list of action paths for validation'
+    value: ${{ steps.discovery.outputs.action-paths }}
+  workflow-paths:
+    description: 'Newline-separated list of workflow paths for validation'
+    value: ${{ steps.discovery.outputs.workflow-paths }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Discover actions and workflows
+      id: discovery
+      shell: bash
+      run: |
+        echo "::group::🔍 Discovering Actions and Workflows"
+        
+        # Initialize arrays
+        ACTIONS_JSON="["
+        WORKFLOWS_JSON="["
+        ACTION_PATHS=""
+        WORKFLOW_PATHS=""
+        
+        echo "• Scanning for actions..."
+        
+        # Find all action.yml files
+        while IFS= read -r -d '' action_file; do
+          if [[ -f "$action_file" ]]; then
+            # Extract path relative to repo root
+            action_path=$(dirname "$action_file")
+            action_name=$(basename "$action_path")
+            
+            # Determine domain (build, quality, deploy, etc.)
+            if [[ "$action_path" =~ ^actions/([^/]+)/([^/]+)$ ]]; then
+              domain="${BASH_REMATCH[1]}"
+              name="${BASH_REMATCH[2]}"
+              level="domain"
+            elif [[ "$action_path" =~ ^actions/([^/]+)$ ]]; then
+              domain="global"
+              name="${BASH_REMATCH[1]}"
+              level="global"
+            else
+              domain="unknown"
+              name="$action_name"
+              level="unknown"
+            fi
+            
+            # Extract metadata from action.yml
+            action_title=""
+            action_desc=""
+            if [[ -r "$action_file" ]]; then
+              action_title=$(grep "^name:" "$action_file" | head -1 | sed 's/^name:[[:space:]]*//' | tr -d "'" | tr -d '"')
+              action_desc=$(grep "^description:" "$action_file" | head -1 | sed 's/^description:[[:space:]]*//' | tr -d "'" | tr -d '"')
+            fi
+            
+            # Add to JSON array
+            if [[ "$ACTIONS_JSON" != "[" ]]; then
+              ACTIONS_JSON+=","
+            fi
+            
+            ACTIONS_JSON+="{
+              \"name\": \"$action_title\",
+              \"path\": \"$action_path\",
+              \"domain\": \"$domain\",
+              \"level\": \"$level\",
+              \"description\": \"$action_desc\",
+              \"file\": \"$action_file\"
+            }"
+            
+            # Add to paths list
+            ACTION_PATHS+="$action_path"$'\n'
+            
+            echo "  ✅ Found: $action_path ($domain/$level)"
+          fi
+        done < <(find actions -name "action.yml" -type f -print0)
+        
+        ACTIONS_JSON+="]"
+        
+        echo "• Scanning for workflows..."
+        
+        # Find all workflow files
+        while IFS= read -r -d '' workflow_file; do
+          if [[ -f "$workflow_file" ]]; then
+            # Extract workflow name and path
+            workflow_path="$workflow_file"
+            workflow_name=$(basename "$workflow_file" .yml)
+            
+            # Extract metadata from workflow
+            workflow_title=""
+            has_workflow_call="false"
+            if [[ -r "$workflow_file" ]]; then
+              workflow_title=$(grep "^name:" "$workflow_file" | head -1 | sed 's/^name:[[:space:]]*//' | tr -d "'" | tr -d '"')
+              if grep -q "workflow_call:" "$workflow_file"; then
+                has_workflow_call="true"
+              fi
+            fi
+            
+            # Add to JSON array
+            if [[ "$WORKFLOWS_JSON" != "[" ]]; then
+              WORKFLOWS_JSON+=","
+            fi
+            
+            WORKFLOWS_JSON+="{
+              \"name\": \"$workflow_title\",
+              \"path\": \"$workflow_path\",
+              \"filename\": \"$workflow_name\",
+              \"has_workflow_call\": $has_workflow_call
+            }"
+            
+            # Add to paths list
+            WORKFLOW_PATHS+="$workflow_path"$'\n'
+            
+            echo "  ✅ Found: $workflow_path (workflow_call: $has_workflow_call)"
+          fi
+        done < <(find .github/workflows -name "*.yml" -type f -print0)
+        
+        WORKFLOWS_JSON+="]"
+        
+        # Count discovered items
+        ACTION_COUNT=$(echo "$ACTIONS_JSON" | jq 'length')
+        WORKFLOW_COUNT=$(echo "$WORKFLOWS_JSON" | jq 'length')
+        
+        echo "• Discovery completed:"
+        echo "  → $ACTION_COUNT actions found"
+        echo "  → $WORKFLOW_COUNT workflows found"
+        
+        # Set outputs (escape for GitHub Actions)
+        {
+          echo "actions<<EOF"
+          echo "$ACTIONS_JSON"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        {
+          echo "workflows<<EOF"  
+          echo "$WORKFLOWS_JSON"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        {
+          echo "action-paths<<EOF"
+          echo -n "$ACTION_PATHS"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        {
+          echo "workflow-paths<<EOF"
+          echo -n "$WORKFLOW_PATHS"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+        
+    - name: Validate discovery output
+      shell: bash
+      run: |
+        echo "::group::✅ Validating Discovery Output"
+        
+        # Validate JSON structure
+        ACTIONS='${{ steps.discovery.outputs.actions }}'
+        WORKFLOWS='${{ steps.discovery.outputs.workflows }}'
+        
+        echo "• Validating actions JSON..."
+        if echo "$ACTIONS" | jq empty 2>/dev/null; then
+          ACTION_COUNT=$(echo "$ACTIONS" | jq 'length')
+          echo "✅ Actions JSON valid ($ACTION_COUNT items)"
+          
+          # Show breakdown by domain
+          echo "• Actions by domain:"
+          echo "$ACTIONS" | jq -r 'group_by(.domain) | .[] | "\(.[] | .domain) (\(length) actions)"' | sort | uniq
+        else
+          echo "❌ Invalid actions JSON"
+          exit 1
+        fi
+        
+        echo "• Validating workflows JSON..."
+        if echo "$WORKFLOWS" | jq empty 2>/dev/null; then
+          WORKFLOW_COUNT=$(echo "$WORKFLOWS" | jq 'length')
+          echo "✅ Workflows JSON valid ($WORKFLOW_COUNT items)"
+          
+          # Show breakdown by type
+          REUSABLE_COUNT=$(echo "$WORKFLOWS" | jq '[.[] | select(.has_workflow_call == true)] | length')
+          INTERNAL_COUNT=$(echo "$WORKFLOWS" | jq '[.[] | select(.has_workflow_call == false)] | length')
+          echo "• Workflow types: $REUSABLE_COUNT reusable, $INTERNAL_COUNT internal"
+        else
+          echo "❌ Invalid workflows JSON"
+          exit 1
+        fi
+        
+        echo "::endgroup::"

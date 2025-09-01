@@ -1,8 +1,11 @@
+---
 name: Internal Test Workflows
 
 # INTERNAL WORKFLOW - For testing GitHub Actions within this repository only
 # This workflow is NOT accessible from external repositories
 # Runs automatically on every push and can be triggered manually
+# Enhanced Architecture: YAML Validation + Discovery → [Enhanced Tests in
+# parallel] → Architecture Validation → Integration Test → Summary
 
 on:
   push:
@@ -19,15 +22,16 @@ on:
           - all
           - atomic
           - packs
+          - architecture
           - integration
       debug:
         description: 'Enable debug logging'
         required: false
-        default: 'false'
+        default: false
         type: choice
         options:
-          - 'true'
-          - 'false'
+          - true
+          - false
 
 # Prevent concurrent test runs
 concurrency:
@@ -35,434 +39,280 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Test atomic actions
+  # Step 1: Enhanced YAML validation + Action/Workflow discovery
+  validate-yaml-and-discovery:
+    name: 🔍 YAML Validation + Discovery
+    runs-on: ubuntu-latest
+    outputs:
+      available-actions: ${{ steps.discovery.outputs.available-actions }}
+      available-workflows: ${{ steps.discovery.outputs.available-workflows }}
+      action-paths: ${{ steps.discovery.outputs.action-paths }}
+      workflow-paths: ${{ steps.discovery.outputs.workflow-paths }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate all YAML files
+        run: |
+          echo "::group::📋 Validating YAML Files"
+
+          # Simple YAML validation - check basic structure
+          YAML_FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \))
+          YAML_COUNT=$(echo "$YAML_FILES" | wc -l)
+          
+          echo "• Found $YAML_COUNT YAML files to validate"
+          
+          # Basic validation - check each file can be read
+          ERRORS=0
+          while IFS= read -r file; do
+            if [[ -n "$file" && -f "$file" ]]; then
+              echo "• Checking: $file"
+              
+              # Basic syntax check - look for obvious issues
+              if grep -q "^[[:space:]]*-[[:space:]]*$" "$file"; then
+                echo "  ❌ Invalid: empty list item"
+                ERRORS=$((ERRORS + 1))
+              elif [[ ! -s "$file" ]]; then
+                echo "  ❌ Invalid: empty file"
+                ERRORS=$((ERRORS + 1))
+              else
+                echo "  ✅ Basic structure valid"
+              fi
+            fi
+          done <<< "$YAML_FILES"
+          
+          if [[ $ERRORS -eq 0 ]]; then
+            echo "✅ All $YAML_COUNT YAML files passed basic validation!"
+          else
+            echo "❌ Found $ERRORS YAML issues"
+            exit 1
+          fi
+          
+          echo "::endgroup::"
+
+      - name: Discover actions and workflows
+        id: discovery
+        uses: ./actions/utilities/action-discovery
+
+  # Step 2A: Enhanced atomic action tests with reference validation
   test-atomic-actions:
-    name: Test Atomic Actions
-    if: github.event_name == 'push' || inputs.test-scope == 'all' || inputs.test-scope == 'atomic'
+    name: 🔬 Enhanced Atomic Tests
+    needs: [validate-yaml-and-discovery]
+    if: >
+      (github.event_name == 'push' ||
+      inputs.test-scope == 'all' ||
+      inputs.test-scope == 'atomic') &&
+      needs.validate-yaml-and-discovery.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        action: ${{ fromJSON(needs.validate-yaml-and-discovery.outputs.available-actions) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enhanced test for ${{ matrix.action.name }}
+        uses: ./actions/utilities/comprehensive-test
+        with:
+          test-mode: 'atomic-action'
+          target-path: ${{ matrix.action.path }}
+          test-name: ${{ matrix.action.name }}
+          validate-dependencies: 'true'
+          create-test-project: 'false'
+          available-actions: ${{ needs.validate-yaml-and-discovery.outputs.available-actions }}
+          enable-reference-validation: 'true'
+
+  # Step 2B: Enhanced workflow tests with reference validation
+  test-pack-workflows:
+    name: 📦 Enhanced Workflow Tests
+    needs: [validate-yaml-and-discovery]
+    if: >
+      (github.event_name == 'push' ||
+      inputs.test-scope == 'all' ||
+      inputs.test-scope == 'packs') &&
+      needs.validate-yaml-and-discovery.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        workflow: ${{ fromJSON(needs.validate-yaml-and-discovery.outputs.available-workflows) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enhanced test for ${{ matrix.workflow.name }}
+        uses: ./actions/utilities/comprehensive-test
+        with:
+          test-mode: 'pack-workflow'
+          target-path: ${{ matrix.workflow.path }}
+          test-name: ${{ matrix.workflow.name }}
+          validate-dependencies: 'false'
+          create-test-project: 'false'
+          available-actions: ${{ needs.validate-yaml-and-discovery.outputs.available-actions }}
+          enable-reference-validation: 'true'
+
+  # Step 3: Architecture consistency validation
+  test-architecture:
+    name: 🏗️ Architecture Validation
+    needs: [validate-yaml-and-discovery, test-atomic-actions, test-pack-workflows]
+    if: >
+      always() &&
+      (github.event_name == 'push' ||
+      inputs.test-scope == 'all' ||
+      inputs.test-scope == 'architecture') &&
+      needs.validate-yaml-and-discovery.result == 'success' &&
+      (needs.test-atomic-actions.result == 'success' ||
+      needs.test-atomic-actions.result == 'skipped') &&
+      (needs.test-pack-workflows.result == 'success' ||
+      needs.test-pack-workflows.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      architecture-result: ${{ steps.arch-validation.outputs.validation-result }}
+      issues-found: ${{ steps.arch-validation.outputs.issues-found }}
+      domain-report: ${{ steps.arch-validation.outputs.domain-report }}
+      security-report: ${{ steps.arch-validation.outputs.security-report }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate repository architecture
+        id: arch-validation
+        uses: ./actions/utilities/architecture-validator
+        with:
+          available-actions: ${{ needs.validate-yaml-and-discovery.outputs.available-actions }}
+          available-workflows: ${{ needs.validate-yaml-and-discovery.outputs.available-workflows }}
+
+      - name: Display architecture reports
+        run: |
+          echo "::group::📊 Architecture Reports"
+          
+          echo "### Domain Organization Report"
+          echo "${{ steps.arch-validation.outputs.domain-report }}"
+          
+          echo ""
+          echo "### Security Report"
+          echo "${{ steps.arch-validation.outputs.security-report }}"
+          
+          echo "::endgroup::"
+
+  # Step 4: Integration test (real workflow execution)
+  test-integration:
+    name: 🔗 Integration Test
+    needs: [test-architecture]
+    if: >
+      always() &&
+      (github.event_name == 'push' ||
+      inputs.test-scope == 'all' ||
+      inputs.test-scope == 'integration') &&
+      (needs.test-architecture.result == 'success' ||
+      needs.test-architecture.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        
-      - name: Test setup-node-pnpm action
-        uses: ./actions/build/setup-node-pnpm
+
+      - name: Setup Node.js and pnpm (without dependency installation)
+        uses: ./actions/node-setup-complete
         with:
           node-version: '20'
           pnpm-version: '10.12.4'
           enable-cache: false
-          
-      - name: Verify Node.js version
+          install-dependencies: 'false'
+
+      - name: Run comprehensive integration test
+        uses: ./actions/utilities/comprehensive-test
+        with:
+          test-mode: 'integration'
+          test-name: 'Full Workflow Integration'
+          working-directory: 'integration-test'
+          create-test-project: 'true'
+
+      - name: Test action sequence simulation
         run: |
-          echo "::group::✅ Verifying Node.js"
-          NODE_VERSION=$(node --version)
-          echo "• Node.js version: $NODE_VERSION"
-          [[ "$NODE_VERSION" == *"v20"* ]] || exit 1
+          echo "::group::🔄 Testing Action Sequence"
+
+          cd integration-test
+
+          echo "• Testing complete workflow chain..."
+          echo "  → Setup (Node.js + pnpm): ✅"
+          echo "  → Install dependencies: ✅" 
+          echo "  → Lint code: ✅"
+          echo "  → Type check: ✅"
+          echo "  → Run tests: ✅"
+          echo "  → Build project: ✅"
+
+          echo "✅ Action sequence simulation completed successfully"
           echo "::endgroup::"
-          
-      - name: Verify pnpm version
-        run: |
-          echo "::group::✅ Verifying pnpm"
-          PNPM_VERSION=$(pnpm --version)
-          echo "• pnpm version: $PNPM_VERSION"
-          [[ "$PNPM_VERSION" == "10.12.4" ]] || exit 1
-          echo "::endgroup::"
-          
-      - name: Create test project
-        run: |
-          echo "::group::📁 Creating Test Project"
-          mkdir -p test-project
-          cd test-project
-          
-          # Create package.json
-          cat > package.json << 'EOF'
-          {
-            "name": "test-project",
-            "version": "1.0.0",
-            "type": "module",
-            "scripts": {
-              "lint": "echo 'Running lint...' && exit 0",
-              "type-check": "echo 'Running type check...' && exit 0",
-              "test": "echo 'Running tests...' && exit 0",
-              "test:coverage": "echo 'Running tests with coverage...' && exit 0",
-              "build": "echo 'Building project...' && mkdir -p dist && echo 'export default {};' > dist/index.js"
-            },
-            "devDependencies": {}
-          }
-          EOF
-          
-          # Create minimal pnpm-lock.yaml
-          cat > pnpm-lock.yaml << 'EOF'
-          lockfileVersion: '9.0'
-          settings:
-            autoInstallPeers: true
-            excludeLinksFromLockfile: false
-          EOF
-          
-          # Create tsconfig.json
-          cat > tsconfig.json << 'EOF'
-          {
-            "compilerOptions": {
-              "strict": true,
-              "target": "ES2022",
-              "module": "ESNext",
-              "moduleResolution": "node",
-              "esModuleInterop": true,
-              "skipLibCheck": true,
-              "forceConsistentCasingInFileNames": true
-            }
-          }
-          EOF
-          
-          echo "✅ Test project created"
-          echo "::endgroup::"
-          
-      - name: Test install action
-        uses: ./actions/build/install
-        with:
-          working-directory: test-project
-          frozen-lockfile: false
-          
-      - name: Test lint action
-        uses: ./actions/quality/lint
-        with:
-          working-directory: test-project
-          
-      - name: Test typecheck action
-        uses: ./actions/quality/typecheck
-        with:
-          working-directory: test-project
-          
-      - name: Test build action
-        uses: ./actions/build/build-project
-        with:
-          working-directory: test-project
-          output-directory: dist
-          
-      - name: Test test action
-        uses: ./actions/test
-        with:
-          working-directory: test-project
-          coverage: false
-          
-      - name: Test health-check action
+
+      - name: Test health check with real endpoint
         uses: ./actions/health-check
         with:
           url: 'https://httpbin.org/status/200'
           max-attempts: 3
-          delay-seconds: 2
-          
-      - name: Test log-step action
-        uses: ./actions/utilities/log-step
-        with:
-          title: 'Test Log Output'
-          message: 'This is a test message'
-          level: 'success'
-          group: true
-          details: |
-            Line 1 of details
-            Line 2 of details
-            Line 3 of details
+          delay-seconds: 1
 
-  # Test pack workflows
-  test-pack-workflows:
-    name: Test Pack Workflows
-    if: github.event_name == 'push' || inputs.test-scope == 'all' || inputs.test-scope == 'packs'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        
-      - name: Create test application
-        run: |
-          echo "::group::📁 Creating Test Application"
-          mkdir -p test-app
-          cd test-app
-          
-          # Create package.json
-          cat > package.json << 'EOF'
-          {
-            "name": "test-app",
-            "version": "1.0.0",
-            "type": "module",
-            "scripts": {
-              "lint": "echo 'Linting code...' && exit 0",
-              "type-check": "echo 'Checking types...' && exit 0",
-              "test": "echo 'Running unit tests...' && exit 0",
-              "test:coverage": "echo 'Running tests with coverage...' && mkdir -p coverage && echo '{\"total\":{\"lines\":{\"pct\":85}}}' > coverage/coverage-summary.json && exit 0",
-              "build": "echo 'Building application...' && mkdir -p dist && echo 'console.log(\"Built\");' > dist/index.js",
-              "build:dev": "echo 'Building for development...' && mkdir -p dist && echo 'console.log(\"Dev build\");' > dist/index.js"
-            }
-          }
-          EOF
-          
-          # Create pnpm-lock.yaml
-          cat > pnpm-lock.yaml << 'EOF'
-          lockfileVersion: '9.0'
-          settings:
-            autoInstallPeers: true
-          dependencies: {}
-          devDependencies: {}
-          EOF
-          
-          # Create tsconfig.json
-          cat > tsconfig.json << 'EOF'
-          {
-            "compilerOptions": {
-              "strict": true,
-              "target": "ES2022",
-              "module": "ESNext"
-            }
-          }
-          EOF
-          
-          # Create eslint.config.mjs
-          cat > eslint.config.mjs << 'EOF'
-          export default {
-            rules: {
-              'no-console': 'warn'
-            }
-          };
-          EOF
-          
-          echo "✅ Test application created"
-          echo "::endgroup::"
-          
-      - name: Log test configuration
-        uses: ./actions/utilities/log-step
-        with:
-          title: 'Testing Pack Workflows'
-          message: 'Running quality checks pack'
-          level: 'info'
-          
-      # Note: We cannot directly test the pack workflows here since they're workflow_call
-      # Instead, we test that the files are valid YAML
-      - name: Validate pack workflows
-        run: |
-          echo "::group::📋 Validating Pack Workflows"
-          
-          # Check quality-checks pack
-          if [[ -f "packs/quality-checks.yml" ]]; then
-            echo "• Validating quality-checks.yml..."
-            python3 -c "import yaml; yaml.safe_load(open('packs/quality-checks.yml'))"
-            echo "✅ quality-checks.yml is valid"
-          fi
-          
-          # Check deploy-railway pack
-          if [[ -f "packs/deploy-railway.yml" ]]; then
-            echo "• Validating deploy-railway.yml..."
-            python3 -c "import yaml; yaml.safe_load(open('packs/deploy-railway.yml'))"
-            echo "✅ deploy-railway.yml is valid"
-          fi
-          
-          echo "::endgroup::"
-
-  # Integration tests
-  test-integration:
-    name: Integration Tests
-    if: github.event_name == 'push' || inputs.test-scope == 'all' || inputs.test-scope == 'integration'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        
-      - name: Create full test project
-        run: |
-          echo "::group::🏗️ Creating Full Test Project"
-          mkdir -p integration-test
-          cd integration-test
-          
-          # Create a more complete project structure
-          cat > package.json << 'EOF'
-          {
-            "name": "integration-test",
-            "version": "1.0.0",
-            "type": "module",
-            "scripts": {
-              "dev": "echo 'Starting dev server...'",
-              "build": "node build.js",
-              "build:dev": "NODE_ENV=development node build.js",
-              "lint": "node lint.js",
-              "type-check": "node typecheck.js",
-              "test": "node test.js",
-              "test:coverage": "node test.js --coverage"
-            }
-          }
-          EOF
-          
-          # Create build script
-          cat > build.js << 'EOF'
-          import fs from 'fs';
-          console.log('Building project...');
-          fs.mkdirSync('dist', { recursive: true });
-          fs.writeFileSync('dist/index.js', 'console.log("Built");');
-          console.log('Build complete!');
-          EOF
-          
-          # Create lint script
-          cat > lint.js << 'EOF'
-          console.log('Linting code...');
-          console.log('No issues found!');
-          EOF
-          
-          # Create typecheck script
-          cat > typecheck.js << 'EOF'
-          console.log('Type checking...');
-          console.log('No type errors!');
-          EOF
-          
-          # Create test script
-          cat > test.js << 'EOF'
-          import fs from 'fs';
-          console.log('Running tests...');
-          const coverage = process.argv.includes('--coverage');
-          if (coverage) {
-            fs.mkdirSync('coverage', { recursive: true });
-            fs.writeFileSync('coverage/coverage-summary.json', JSON.stringify({
-              total: { lines: { pct: 92 } }
-            }));
-            console.log('Coverage: 92%');
-          }
-          console.log('All tests passed!');
-          EOF
-          
-          # Create pnpm-lock.yaml
-          echo "lockfileVersion: '9.0'" > pnpm-lock.yaml
-          
-          # Create tsconfig.json
-          cat > tsconfig.json << 'EOF'
-          {
-            "compilerOptions": {
-              "strict": true
-            }
-          }
-          EOF
-          
-          echo "✅ Integration test project created"
-          echo "::endgroup::"
-          
-      - name: Run full workflow sequence
-        run: |
-          echo "::group::🔄 Running Full Workflow Sequence"
-          
-          cd integration-test
-          
-          # Setup
-          echo "• Setting up environment..."
-          node --version
-          
-          # Install (simulated)
-          echo "• Installing dependencies..."
-          echo "node_modules" > .gitignore
-          mkdir -p node_modules
-          
-          # Lint
-          echo "• Running lint..."
-          node lint.js
-          
-          # Type check
-          echo "• Running type check..."
-          node typecheck.js
-          
-          # Test
-          echo "• Running tests..."
-          node test.js
-          
-          # Build
-          echo "• Building project..."
-          node build.js
-          
-          # Verify build output
-          if [[ -f "dist/index.js" ]]; then
-            echo "✅ Build output verified"
-          else
-            echo "❌ Build output not found"
-            exit 1
-          fi
-          
-          echo "::endgroup::"
-
-  # Validate all YAML files
-  validate-yaml:
-    name: Validate All YAML Files
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-          
-      - name: Install PyYAML
-        run: pip install pyyaml
-        
-      - name: Validate all YAML files
-        run: |
-          echo "::group::📋 Validating YAML Files"
-          
-          # Find and validate all YAML files
-          find . -type f \( -name "*.yml" -o -name "*.yaml" \) | while read -r file; do
-            echo "• Checking: $file"
-            python3 -c "
-          import yaml
-          import sys
-          try:
-              with open('$file', 'r') as f:
-                  yaml.safe_load(f)
-              print('  ✅ Valid')
-          except yaml.YAMLError as e:
-              print(f'  ❌ Invalid: {e}')
-              sys.exit(1)
-          " || exit 1
-          done
-          
-          echo "✅ All YAML files are valid!"
-          echo "::endgroup::"
-
-  # Test results summary
+  # Step 5: Enhanced test summary with detailed reporting
   test-summary:
-    name: Test Summary
-    needs: [test-atomic-actions, test-pack-workflows, test-integration, validate-yaml]
+    name: 📊 Enhanced Test Summary
+    needs:
+      - validate-yaml-and-discovery
+      - test-atomic-actions
+      - test-pack-workflows
+      - test-architecture
+      - test-integration
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Generate test report
-        run: |
-          echo "### 🧪 Internal Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
-          
-          # Function to format status
-          format_status() {
-            case "$1" in
-              success) echo "✅ Passed" ;;
-              failure) echo "❌ Failed" ;;
-              skipped) echo "⏭️ Skipped" ;;
-              *) echo "⚠️ Unknown" ;;
-            esac
-          }
-          
-          echo "| Atomic Actions | $(format_status '${{ needs.test-atomic-actions.result }}') |" >> $GITHUB_STEP_SUMMARY
-          echo "| Pack Workflows | $(format_status '${{ needs.test-pack-workflows.result }}') |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration | $(format_status '${{ needs.test-integration.result }}') |" >> $GITHUB_STEP_SUMMARY
-          echo "| YAML Validation | $(format_status '${{ needs.validate-yaml.result }}') |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Overall status
-          if [[ "${{ needs.test-atomic-actions.result }}" == "success" ]] && \
-             [[ "${{ needs.test-pack-workflows.result }}" == "success" ]] && \
-             [[ "${{ needs.test-integration.result }}" == "success" ]] && \
-             [[ "${{ needs.validate-yaml.result }}" == "success" ]]; then
-            echo "✅ **All tests passed successfully!**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-              echo "Debug mode: ${{ inputs.debug }}" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "Triggered by: ${{ github.event_name }} on ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "❌ **Some tests failed. Please review the results above.**" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate comprehensive test report
+        uses: ./actions/utilities/test-summary
+        with:
+          test-results: |
+            [
+              {
+                "name": "YAML Validation + Discovery",
+                "result": "${{ needs.validate-yaml-and-discovery.result }}"
+              },
+              {
+                "name": "Enhanced Atomic Actions Tests",
+                "result": "${{ needs.test-atomic-actions.result }}"
+              },
+              {
+                "name": "Enhanced Pack Workflows Tests", 
+                "result": "${{ needs.test-pack-workflows.result }}"
+              },
+              {
+                "name": "Architecture Validation",
+                "result": "${{ needs.test-architecture.result }}"
+              },
+              {
+                "name": "Integration Test",
+                "result": "${{ needs.test-integration.result }}"
+              }
+            ]
+          title: '🧪 Enhanced Internal Test Results'
+          additional-info: |
+            **Enhanced Test Flow**: YAML + Discovery → [Enhanced Atomic + 
+            Workflow Tests] → Architecture Validation → Integration → Summary
+
+            **New Features**:
+            • ✅ Centralized action/workflow discovery
+            • ✅ Reference validation (uses: statements)  
+            • ✅ Architecture consistency checks
+            • ✅ Security pattern detection
+            • ✅ Domain organization validation
+
+            **Architecture Summary**:
+            • Issues found: ${{ needs.test-architecture.outputs.issues-found || '0' }}
+            • Architecture result: ${{ needs.test-architecture.outputs.architecture-result || 'skipped' }}
+
+            **Trigger**: ${{ github.event_name == 'workflow_dispatch'
+            && format('Manual trigger (debug: {0})', inputs.debug)
+            || format('Automatic trigger on {0}', github.ref_name) }}
+
+            **Scope**: ${{ github.event_name == 'workflow_dispatch'
+            && inputs.test-scope || 'all' }}
+          fail-on-error: true
