@@ -1,0 +1,198 @@
+name: 'Changesets Publish'
+description: 'Publish packages to NPM with security best practices'
+author: 'NextNode'
+
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  npm-token:
+    description: 'NPM authentication token'
+    required: true
+  publish-script:
+    description: 'Script to run for publishing'
+    required: false
+    default: 'changeset:publish'
+  dry-run:
+    description: 'Run in dry-run mode'
+    required: false
+    default: 'false'
+    type: boolean
+  provenance:
+    description: 'Enable NPM provenance'
+    required: false
+    default: 'true'
+    type: boolean
+
+outputs:
+  published:
+    description: 'Whether packages were published'
+    value: ${{ steps.publish.outputs.published }}
+  packages:
+    description: 'List of published packages (JSON array)'
+    value: ${{ steps.publish.outputs.packages }}
+  success:
+    description: 'Whether publish operation was successful'
+    value: ${{ steps.publish.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Pre-publish security checks
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔐 Pre-publish security checks"
+        
+        # Verify NPM authentication
+        if ! npm whoami >/dev/null 2>&1; then
+          echo "❌ NPM authentication failed"
+          echo "Please check NPM_TOKEN"
+          exit 1
+        fi
+        
+        NPM_USER=$(npm whoami)
+        echo "✅ Authenticated as: $NPM_USER"
+        
+        # Check package.json for security
+        if [[ -f "package.json" ]]; then
+          # Check for publishConfig
+          if node -pe "Boolean(require('./package.json').publishConfig)" >/dev/null 2>&1; then
+            echo "✅ publishConfig found in package.json"
+          else
+            echo "⚠️  No publishConfig found in package.json"
+          fi
+          
+          # Check for proper access setting
+          ACCESS=$(node -pe "require('./package.json').publishConfig?.access || 'public'" 2>/dev/null)
+          echo "📦 Package access: $ACCESS"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Build package if needed
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🏗️  Building package"
+        
+        # Check if build script exists and if dist doesn't exist or is older than src
+        if npm run build --silent >/dev/null 2>&1; then
+          NEEDS_BUILD=false
+          
+          # Check if dist exists and is newer than src
+          if [[ -d "dist" ]] && [[ -d "src" ]]; then
+            if [[ $(find src -type f -newer dist 2>/dev/null | wc -l) -gt 0 ]]; then
+              NEEDS_BUILD=true
+            fi
+          elif [[ ! -d "dist" ]] && [[ -d "src" ]]; then
+            NEEDS_BUILD=true
+          fi
+          
+          if [[ "$NEEDS_BUILD" == "true" ]]; then
+            echo "🔄 Building package..."
+            npm run build
+            echo "✅ Package built successfully"
+          else
+            echo "ℹ️  Build not needed - dist is up to date"
+          fi
+        else
+          echo "ℹ️  No build script found - skipping build"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Publish to NPM
+      id: publish
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🚀 Publishing to NPM"
+        
+        # Prepare publish command options
+        PUBLISH_OPTIONS=""
+        
+        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+          echo "🧪 Running in dry-run mode"
+          PUBLISH_OPTIONS="$PUBLISH_OPTIONS --dry-run"
+        fi
+        
+        if [[ "${{ inputs.provenance }}" == "true" ]]; then
+          echo "🔐 NPM provenance enabled"
+          PUBLISH_OPTIONS="$PUBLISH_OPTIONS --provenance"
+        fi
+        
+        # Run publish command
+        echo "🔄 Running: pnpm run ${{ inputs.publish-script }} $PUBLISH_OPTIONS"
+        
+        set +e  # Don't exit on error, we want to capture output
+        OUTPUT=$(pnpm run ${{ inputs.publish-script }} $PUBLISH_OPTIONS 2>&1)
+        EXIT_CODE=$?
+        set -e
+        
+        echo "$OUTPUT"
+        
+        if [[ $EXIT_CODE -eq 0 ]]; then
+          echo "✅ Publish command completed successfully"
+          echo "success=true" >> $GITHUB_OUTPUT
+          
+          # Try to extract published packages from output
+          PUBLISHED_PACKAGES=$(echo "$OUTPUT" | grep -E "npm notice|Published" | head -10 | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+          echo "packages=$PUBLISHED_PACKAGES" >> $GITHUB_OUTPUT
+          
+          # Check if anything was actually published
+          if echo "$OUTPUT" | grep -q "npm notice"; then
+            echo "published=true" >> $GITHUB_OUTPUT
+          else
+            echo "published=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  No new versions to publish"
+          fi
+        else
+          echo "❌ Publish command failed with exit code $EXIT_CODE"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "published=false" >> $GITHUB_OUTPUT
+          echo "packages=[]" >> $GITHUB_OUTPUT
+          
+          # In case of failure, provide helpful error context
+          if echo "$OUTPUT" | grep -q "ENOTFOUND"; then
+            echo "💡 Network error - check NPM registry connectivity"
+          elif echo "$OUTPUT" | grep -q "E401\|E403"; then
+            echo "💡 Authentication error - check NPM_TOKEN permissions"
+          elif echo "$OUTPUT" | grep -q "E409"; then
+            echo "💡 Version conflict - version may already exist"
+          fi
+          
+          exit $EXIT_CODE
+        fi
+        
+        echo "::endgroup::"
+      env:
+        NPM_TOKEN: ${{ inputs.npm-token }}
+
+    - name: Post-publish summary
+      if: steps.publish.outputs.published == 'true' && inputs.dry-run != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📊 Publish Summary"
+        
+        if [[ -f "package.json" ]]; then
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          
+          echo "🎉 Successfully published:"
+          echo "📦 $PACKAGE_NAME@$PACKAGE_VERSION"
+          
+          # Try to get package info from NPM
+          echo "🔗 NPM Package: https://www.npmjs.com/package/$PACKAGE_NAME"
+          
+          # Check if package is publicly available (with timeout)
+          if timeout 30s npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            echo "✅ Package is now available on NPM"
+          else
+            echo "⏳ Package may take a few moments to appear on NPM"
+          fi
+        fi
+        
+        echo "::endgroup::"

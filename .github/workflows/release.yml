@@ -1,0 +1,285 @@
+name: Release Library
+
+# EXTERNAL WORKFLOW - Centralized release process for NPM libraries
+# Uses changesets for automated versioning and publishing with security best practices
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+        
+      # Quality checks configuration
+      run-quality-checks:
+        description: 'Run quality checks before release'
+        required: false
+        default: true
+        type: boolean
+      run-lint:
+        description: 'Run linting'
+        required: false
+        default: true
+        type: boolean
+      run-typecheck:
+        description: 'Run type checking'
+        required: false
+        default: true
+        type: boolean
+      run-tests:
+        description: 'Run tests'
+        required: false
+        default: true
+        type: boolean
+      run-build:
+        description: 'Run build'
+        required: false
+        default: true
+        type: boolean
+      test-coverage:
+        description: 'Enable test coverage'
+        required: false
+        default: false
+        type: boolean
+        
+      # Release configuration
+      version-script:
+        description: 'Script for versioning (changeset:version)'
+        required: false
+        default: 'changeset:version'
+        type: string
+      publish-script:
+        description: 'Script for publishing (changeset:publish)'
+        required: false
+        default: 'changeset:publish'
+        type: string
+      enable-provenance:
+        description: 'Enable NPM provenance attestation'
+        required: false
+        default: true
+        type: boolean
+      dry-run:
+        description: 'Run publish in dry-run mode'
+        required: false
+        default: false
+        type: boolean
+        
+    secrets:
+      NPM_TOKEN:
+        description: 'NPM authentication token'
+        required: true
+      CHANGESET_GITHUB_TOKEN:
+        description: 'GitHub token for changesets (fallback to GITHUB_TOKEN)'
+        required: false
+
+    outputs:
+      published:
+        description: 'Whether packages were published'
+        value: ${{ jobs.publish.outputs.published }}
+      packages:
+        description: 'List of published packages'
+        value: ${{ jobs.publish.outputs.packages }}
+      version:
+        description: 'Published package version'
+        value: ${{ jobs.publish.outputs.version }}
+
+# Prevent concurrent releases
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Quality Checks
+    if: inputs.run-quality-checks
+    uses: NextNodeSolutions/github-actions/.github/workflows/quality-checks.yml@main
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      node-version: ${{ inputs.node-version }}
+      pnpm-version: ${{ inputs.pnpm-version }}
+      run-lint: ${{ inputs.run-lint }}
+      run-typecheck: ${{ inputs.run-typecheck }}
+      run-tests: ${{ inputs.run-tests }}
+      run-build: ${{ inputs.run-build }}
+      test-coverage: ${{ inputs.test-coverage }}
+      fail-on-warning: true
+
+  # Setup and version management (separate from publishing for security)
+  version:
+    name: Version Management
+    needs: [quality]
+    if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      has-changesets: ${{ steps.version.outputs.has-changesets }}
+      ready-to-publish: ${{ steps.version.outputs.published }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Release Environment
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Version Packages
+        id: version
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-version@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          version-script: ${{ inputs.version-script }}
+
+  # Publishing (separate job with enhanced security)
+  publish:
+    name: Publish Packages
+    needs: [version]
+    if: needs.version.outputs.ready-to-publish == 'true'
+    runs-on: ubuntu-latest
+    # Enhanced permissions for provenance
+    permissions:
+      contents: read
+      id-token: write  # Required for NPM provenance
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      packages: ${{ steps.publish.outputs.packages }}
+      version: ${{ steps.package-info.outputs.version }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Release Environment
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure NPM Provenance
+        if: inputs.enable-provenance
+        uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          verify-attestation: false  # Skip verification during publish
+
+      - name: Publish to NPM
+        id: publish
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-publish@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          publish-script: ${{ inputs.publish-script }}
+          dry-run: ${{ inputs.dry-run }}
+          provenance: ${{ inputs.enable-provenance }}
+
+      - name: Get Package Info
+        id: package-info
+        if: steps.publish.outputs.published == 'true'
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [[ -f "package.json" ]]; then
+            VERSION=$(node -p "require('./package.json').version")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+  # Post-publish verification (separate job for security)
+  verify:
+    name: Post-Publish Verification
+    needs: [publish]
+    if: needs.publish.outputs.published == 'true' && inputs.enable-provenance
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Verify NPM Provenance
+        uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          verify-attestation: true
+
+  # Summary job
+  summary:
+    name: Release Summary
+    needs: [quality, version, publish, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Release Summary
+        shell: bash
+        run: |
+          echo "::group::📊 Release Summary"
+          
+          echo "### Quality Checks"
+          echo "Status: ${{ needs.quality.result || 'skipped' }}"
+          
+          echo ""
+          echo "### Version Management"
+          echo "Status: ${{ needs.version.result }}"
+          echo "Has changesets: ${{ needs.version.outputs.has-changesets || 'false' }}"
+          echo "Ready to publish: ${{ needs.version.outputs.ready-to-publish || 'false' }}"
+          
+          echo ""
+          echo "### Publishing"
+          echo "Status: ${{ needs.publish.result || 'skipped' }}"
+          echo "Published: ${{ needs.publish.outputs.published || 'false' }}"
+          
+          if [[ "${{ needs.publish.outputs.published }}" == "true" ]]; then
+            echo "Version: ${{ needs.publish.outputs.version }}"
+          fi
+          
+          echo ""
+          echo "### Verification"
+          echo "Status: ${{ needs.verify.result || 'skipped' }}"
+          
+          echo "::endgroup::"
+
+      - name: Check Overall Status
+        shell: bash
+        run: |
+          # Check if any required job failed
+          if [[ "${{ needs.quality.result }}" == "failure" ]] || 
+             [[ "${{ needs.version.result }}" == "failure" ]] || 
+             [[ "${{ needs.publish.result }}" == "failure" ]]; then
+            echo "❌ Release process failed"
+            exit 1
+          else
+            echo "✅ Release process completed successfully"
+          fi
