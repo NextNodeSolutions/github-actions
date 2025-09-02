@@ -1,0 +1,110 @@
+name: 'Changesets Setup'
+description: 'Setup environment for changesets release process'
+author: 'NextNode'
+
+inputs:
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '20'
+  pnpm-version:
+    description: 'pnpm version to use'
+    required: false
+    default: '10.12.4'
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  npm-token:
+    description: 'NPM authentication token'
+    required: true
+  github-token:
+    description: 'GitHub token for changesets'
+    required: true
+
+outputs:
+  cache-hit:
+    description: 'Whether dependencies cache was hit'
+    value: ${{ steps.setup.outputs.cache-hit }}
+  ready:
+    description: 'Whether environment is ready for release'
+    value: ${{ steps.verify.outputs.ready }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Environment
+      id: setup
+      uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+      with:
+        node-version: ${{ inputs.node-version }}
+        pnpm-version: ${{ inputs.pnpm-version }}
+        working-directory: ${{ inputs.working-directory }}
+
+    - name: Verify Tokens
+      id: verify
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔐 Verifying tokens"
+        
+        # Verify NPM token
+        if [[ -z "$NPM_TOKEN" ]]; then
+          echo "❌ NPM_TOKEN is not set"
+          echo "ready=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # Verify GitHub token  
+        if [[ -z "$GITHUB_TOKEN" ]]; then
+          echo "❌ GITHUB_TOKEN is not set"
+          echo "ready=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "✅ All tokens verified"
+        echo "ready=true" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+      env:
+        NPM_TOKEN: ${{ inputs.npm-token }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Verify Changesets Configuration
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📦 Verifying changesets setup"
+        
+        if [[ ! -f ".changeset/config.json" ]]; then
+          echo "❌ .changeset/config.json not found"
+          echo "Please initialize changesets with: pnpm changeset init"
+          exit 1
+        fi
+        
+        if [[ ! -f "package.json" ]]; then
+          echo "❌ package.json not found"
+          exit 1
+        fi
+        
+        # Check if changesets scripts exist
+        if ! pnpm run --silent changeset:version --help >/dev/null 2>&1; then
+          echo "⚠️  changeset:version script not found in package.json"
+        fi
+        
+        if ! pnpm run --silent changeset:publish --help >/dev/null 2>&1; then
+          echo "⚠️  changeset:publish script not found in package.json"
+        fi
+        
+        echo "✅ Changesets configuration verified"
+        echo "::endgroup::"
+
+    - name: Setup NPM Authentication
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔑 Setting up NPM authentication"
+        echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+        echo "✅ NPM authentication configured"
+        echo "::endgroup::"
+      env:
+        NPM_TOKEN: ${{ inputs.npm-token }}

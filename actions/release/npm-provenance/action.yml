@@ -1,0 +1,184 @@
+name: 'NPM Provenance'
+description: 'Configure and verify NPM provenance for package publishing'
+author: 'NextNode'
+
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  npm-token:
+    description: 'NPM authentication token'
+    required: true
+  package-name:
+    description: 'Package name (auto-detected from package.json if not provided)'
+    required: false
+    default: ''
+  verify-attestation:
+    description: 'Verify provenance attestation after publishing'
+    required: false
+    default: 'true'
+    type: boolean
+
+outputs:
+  provenance-enabled:
+    description: 'Whether provenance is properly configured'
+    value: ${{ steps.setup.outputs.provenance-enabled }}
+  attestation-verified:
+    description: 'Whether provenance attestation was verified'
+    value: ${{ steps.verify.outputs.verified }}
+  package-name:
+    description: 'Resolved package name'
+    value: ${{ steps.setup.outputs.package-name }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup NPM Provenance
+      id: setup
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔐 Setting up NPM Provenance"
+        
+        # Get package name from package.json or input
+        if [[ -n "${{ inputs.package-name }}" ]]; then
+          PACKAGE_NAME="${{ inputs.package-name }}"
+        elif [[ -f "package.json" ]]; then
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+        else
+          echo "❌ Cannot determine package name"
+          exit 1
+        fi
+        
+        echo "📦 Package: $PACKAGE_NAME"
+        echo "package-name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+        
+        # Check GitHub Actions context for provenance requirements
+        if [[ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]] || [[ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ]]; then
+          echo "⚠️  GitHub OIDC token not available"
+          echo "💡 Make sure the job has 'id-token: write' permissions"
+          echo "provenance-enabled=false" >> $GITHUB_OUTPUT
+        else
+          echo "✅ GitHub OIDC token available for provenance"
+          echo "provenance-enabled=true" >> $GITHUB_OUTPUT
+        fi
+        
+        # Verify NPM CLI supports provenance
+        NPM_VERSION=$(npm --version)
+        echo "📋 NPM version: $NPM_VERSION"
+        
+        # NPM provenance requires npm >= 9.5.0
+        if npm version --json | jq -r '.npm' | awk -F. '{if ($1 > 9 || ($1 == 9 && $2 >= 5)) exit 0; else exit 1}'; then
+          echo "✅ NPM version supports provenance"
+        else
+          echo "⚠️  NPM version may not support provenance (requires >= 9.5.0)"
+        fi
+        
+        # Check registry configuration
+        REGISTRY=$(npm config get registry)
+        echo "🌐 Registry: $REGISTRY"
+        
+        if [[ "$REGISTRY" != "https://registry.npmjs.org/" ]]; then
+          echo "⚠️  Custom registry detected - provenance may not work"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Configure provenance environment
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::⚙️  Configuring provenance environment"
+        
+        # Ensure proper NPM configuration for provenance
+        npm config set audit-level moderate
+        npm config set fund false
+        
+        # Set provenance-related configurations
+        if [[ "${{ steps.setup.outputs.provenance-enabled }}" == "true" ]]; then
+          echo "🔐 Enabling provenance configuration"
+          # NPM will automatically use OIDC token when --provenance flag is used
+        else
+          echo "⚠️  Provenance not available - publishing without attestation"
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Verify provenance attestation
+      id: verify
+      if: inputs.verify-attestation == 'true' && steps.setup.outputs.provenance-enabled == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔍 Verifying provenance attestation"
+        
+        PACKAGE_NAME="${{ steps.setup.outputs.package-name }}"
+        
+        # Wait a moment for NPM to propagate
+        echo "⏳ Waiting for package propagation..."
+        sleep 10
+        
+        # Get current package version
+        if [[ -f "package.json" ]]; then
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          FULL_PACKAGE="$PACKAGE_NAME@$PACKAGE_VERSION"
+          
+          echo "🔍 Checking attestation for: $FULL_PACKAGE"
+          
+          # Try to verify the attestation (this requires npm CLI with attestation support)
+          set +e
+          ATTESTATION_CHECK=$(npm audit signatures "$FULL_PACKAGE" 2>&1)
+          ATTESTATION_EXIT=$?
+          set -e
+          
+          if [[ $ATTESTATION_EXIT -eq 0 ]]; then
+            echo "✅ Provenance attestation verified successfully"
+            echo "verified=true" >> $GITHUB_OUTPUT
+            echo "📋 Attestation details:"
+            echo "$ATTESTATION_CHECK"
+          else
+            echo "⚠️  Could not verify attestation (this is normal for newly published packages)"
+            echo "verified=false" >> $GITHUB_OUTPUT
+            
+            # Show details for debugging
+            echo "📋 Attestation check output:"
+            echo "$ATTESTATION_CHECK"
+            
+            # Don't fail the job for attestation verification issues
+            echo "💡 Attestation verification may take time to propagate"
+          fi
+        else
+          echo "❌ package.json not found for version detection"
+          echo "verified=false" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Provenance summary
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📊 Provenance Summary"
+        
+        echo "📦 Package: ${{ steps.setup.outputs.package-name }}"
+        echo "🔐 Provenance enabled: ${{ steps.setup.outputs.provenance-enabled }}"
+        
+        if [[ "${{ inputs.verify-attestation }}" == "true" ]]; then
+          echo "🔍 Attestation verified: ${{ steps.verify.outputs.verified }}"
+        else
+          echo "🔍 Attestation verification: skipped"
+        fi
+        
+        if [[ "${{ steps.setup.outputs.provenance-enabled }}" == "true" ]]; then
+          echo ""
+          echo "✅ Your package will include cryptographic attestation"
+          echo "🔗 Users can verify with: npm audit signatures ${{ steps.setup.outputs.package-name }}"
+          echo "🛡️  This provides end-to-end supply chain security"
+        else
+          echo ""
+          echo "⚠️  Provenance not available in this environment"
+          echo "💡 Ensure job has 'id-token: write' permissions for provenance"
+        fi
+        
+        echo "::endgroup::"

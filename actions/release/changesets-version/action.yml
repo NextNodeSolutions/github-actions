@@ -1,0 +1,124 @@
+name: 'Changesets Version'
+description: 'Handle versioning and PR creation for changesets release process'
+author: 'NextNode'
+
+inputs:
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+  github-token:
+    description: 'GitHub token for changesets'
+    required: true
+  version-script:
+    description: 'Script to run for versioning'
+    required: false
+    default: 'changeset:version'
+  commit-message:
+    description: 'Commit message for version changes'
+    required: false
+    default: 'Version packages'
+
+outputs:
+  has-changesets:
+    description: 'Whether there are pending changesets'
+    value: ${{ steps.check.outputs.has-changesets }}
+  published:
+    description: 'Whether packages were published'
+    value: ${{ steps.version.outputs.published }}
+  pr-created:
+    description: 'Whether a version PR was created'
+    value: ${{ steps.version.outputs.pr-created }}
+  pr-number:
+    description: 'Version PR number if created'
+    value: ${{ steps.version.outputs.pr-number }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check for pending changesets
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::🔍 Checking for pending changesets"
+        
+        CHANGESET_COUNT=$(find .changeset -name "*.md" ! -name "README.md" | wc -l)
+        
+        if [ $CHANGESET_COUNT -gt 0 ]; then
+          echo "✅ Found $CHANGESET_COUNT pending changeset(s)"
+          echo "has-changesets=true" >> $GITHUB_OUTPUT
+          
+          echo "📋 Pending changesets:"
+          find .changeset -name "*.md" ! -name "README.md" -exec basename {} \;
+        else
+          echo "ℹ️  No pending changesets found"
+          echo "has-changesets=false" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "::endgroup::"
+
+    - name: Run changesets version
+      id: version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📦 Running changesets version"
+        
+        # Set git configuration for changesets
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Run changesets version command
+        echo "🔄 Running: pnpm run ${{ inputs.version-script }}"
+        pnpm run ${{ inputs.version-script }}
+        
+        # Check if files were modified
+        if git diff --quiet; then
+          echo "ℹ️  No version changes were made"
+          echo "published=false" >> $GITHUB_OUTPUT
+          echo "pr-created=false" >> $GITHUB_OUTPUT
+        else
+          echo "✅ Version changes detected"
+          
+          # Check current branch and commit/PR strategy
+          CURRENT_BRANCH=$(git branch --show-current)
+          
+          if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "master" ]]; then
+            # On main branch - commit directly (this happens when PR is merged)
+            echo "📝 Committing version changes to $CURRENT_BRANCH"
+            git add .
+            git commit -m "${{ inputs.commit-message }}"
+            echo "published=true" >> $GITHUB_OUTPUT
+            echo "pr-created=false" >> $GITHUB_OUTPUT
+          else
+            # On feature branch - would need to create PR (shouldn't happen in normal flow)
+            echo "⚠️  Version changes detected on non-main branch: $CURRENT_BRANCH"
+            echo "published=false" >> $GITHUB_OUTPUT
+            echo "pr-created=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+        
+        echo "::endgroup::"
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Display version summary
+      if: steps.version.outputs.published == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "::group::📊 Version Summary"
+        
+        # Show what was changed in the last commit
+        echo "🔄 Changes in version commit:"
+        git show --stat HEAD
+        
+        # Show current package version
+        if [[ -f "package.json" ]]; then
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "📦 $PACKAGE_NAME@$PACKAGE_VERSION"
+        fi
+        
+        echo "::endgroup::"
