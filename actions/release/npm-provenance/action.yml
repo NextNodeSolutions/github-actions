@@ -3,10 +3,6 @@ description: 'Configure and verify NPM provenance for package publishing'
 author: 'NextNode'
 
 inputs:
-  working-directory:
-    description: 'Working directory'
-    required: false
-    default: '.'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -37,7 +33,6 @@ runs:
     - name: Setup NPM Provenance
       id: setup
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🔐 Setting up NPM Provenance"
         
@@ -87,7 +82,6 @@ runs:
 
     - name: Configure provenance environment
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::⚙️  Configuring provenance environment"
         
@@ -109,7 +103,6 @@ runs:
       id: verify
       if: inputs.verify-attestation == 'true' && steps.setup.outputs.provenance-enabled == 'true'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🔍 Verifying provenance attestation"
         
@@ -157,7 +150,6 @@ runs:
 
     - name: Provenance summary
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::📊 Provenance Summary"
         

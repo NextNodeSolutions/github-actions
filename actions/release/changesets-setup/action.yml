@@ -11,10 +11,6 @@ inputs:
     description: 'pnpm version to use'
     required: false
     default: '10.12.4'
-  working-directory:
-    description: 'Working directory'
-    required: false
-    default: '.'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -39,12 +35,10 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         pnpm-version: ${{ inputs.pnpm-version }}
-        working-directory: ${{ inputs.working-directory }}
 
     - name: Verify Tokens
       id: verify
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🔐 Verifying tokens"
         
@@ -71,7 +65,6 @@ runs:
 
     - name: Verify Changesets Configuration
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::📦 Verifying changesets setup"
         
@@ -100,7 +93,6 @@ runs:
 
     - name: Setup NPM Authentication
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🔑 Setting up NPM authentication"
         echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc

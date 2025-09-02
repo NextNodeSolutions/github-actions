@@ -3,10 +3,6 @@ description: 'Publish packages to NPM with security best practices'
 author: 'NextNode'
 
 inputs:
-  working-directory:
-    description: 'Working directory'
-    required: false
-    default: '.'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -41,7 +37,6 @@ runs:
   steps:
     - name: Pre-publish security checks
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🔐 Pre-publish security checks"
         
@@ -73,7 +68,6 @@ runs:
 
     - name: Build package if needed
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🏗️  Building package"
         
@@ -106,7 +100,6 @@ runs:
     - name: Publish to NPM
       id: publish
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::🚀 Publishing to NPM"
         
@@ -173,7 +166,6 @@ runs:
     - name: Post-publish summary
       if: steps.publish.outputs.published == 'true' && inputs.dry-run != 'true'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         echo "::group::📊 Publish Summary"
         

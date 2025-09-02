@@ -117,11 +117,13 @@ runs:
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         
-        # Parse output for errors and warnings
-        ERROR_COUNT=$(grep -c "error" "$OUTPUT_FILE" 2>/dev/null || true)
-        ERROR_COUNT=${ERROR_COUNT:-0}
-        WARNING_COUNT=$(grep -c "warning" "$OUTPUT_FILE" 2>/dev/null || true)
-        WARNING_COUNT=${WARNING_COUNT:-0}
+        # Parse output for errors and warnings (simple approach)
+        if ! ERROR_COUNT=$(grep -c " error " "$OUTPUT_FILE" 2>/dev/null); then
+            ERROR_COUNT=0
+        fi
+        if ! WARNING_COUNT=$(grep -c " warning " "$OUTPUT_FILE" 2>/dev/null); then
+            WARNING_COUNT=0
+        fi
         
         # Count fixed issues if auto-fix was enabled
         if [[ "${{ inputs.fix }}" == "true" ]]; then

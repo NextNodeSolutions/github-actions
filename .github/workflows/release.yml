@@ -6,11 +6,6 @@ name: Release Library
 on:
   workflow_call:
     inputs:
-      working-directory:
-        description: 'Working directory'
-        required: false
-        default: '.'
-        type: string
       node-version:
         description: 'Node.js version'
         required: false
@@ -95,10 +90,7 @@ on:
         description: 'Published package version'
         value: ${{ jobs.publish.outputs.version }}
 
-# Prevent concurrent releases
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+# Note: Concurrency is managed by calling workflow
 
 jobs:
   quality:
@@ -106,7 +98,6 @@ jobs:
     if: inputs.run-quality-checks
     uses: NextNodeSolutions/github-actions/.github/workflows/quality-checks.yml@main
     with:
-      working-directory: ${{ inputs.working-directory }}
       node-version: ${{ inputs.node-version }}
       pnpm-version: ${{ inputs.pnpm-version }}
       run-lint: ${{ inputs.run-lint }}
@@ -138,7 +129,6 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
-          working-directory: ${{ inputs.working-directory }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -146,7 +136,6 @@ jobs:
         id: version
         uses: NextNodeSolutions/github-actions/actions/release/changesets-version@main
         with:
-          working-directory: ${{ inputs.working-directory }}
           github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           version-script: ${{ inputs.version-script }}
 
@@ -156,10 +145,6 @@ jobs:
     needs: [version]
     if: needs.version.outputs.ready-to-publish == 'true'
     runs-on: ubuntu-latest
-    # Enhanced permissions for provenance
-    permissions:
-      contents: read
-      id-token: write  # Required for NPM provenance
     outputs:
       published: ${{ steps.publish.outputs.published }}
       packages: ${{ steps.publish.outputs.packages }}
@@ -176,7 +161,6 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
-          working-directory: ${{ inputs.working-directory }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -184,7 +168,6 @@ jobs:
         if: inputs.enable-provenance
         uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
         with:
-          working-directory: ${{ inputs.working-directory }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           verify-attestation: false  # Skip verification during publish
 
@@ -192,7 +175,6 @@ jobs:
         id: publish
         uses: NextNodeSolutions/github-actions/actions/release/changesets-publish@main
         with:
-          working-directory: ${{ inputs.working-directory }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           publish-script: ${{ inputs.publish-script }}
           dry-run: ${{ inputs.dry-run }}
@@ -202,7 +184,6 @@ jobs:
         id: package-info
         if: steps.publish.outputs.published == 'true'
         shell: bash
-        working-directory: ${{ inputs.working-directory }}
         run: |
           if [[ -f "package.json" ]]; then
             VERSION=$(node -p "require('./package.json').version")
@@ -225,12 +206,10 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           pnpm-version: ${{ inputs.pnpm-version }}
-          working-directory: ${{ inputs.working-directory }}
 
       - name: Verify NPM Provenance
         uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
         with:
-          working-directory: ${{ inputs.working-directory }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           verify-attestation: true
 
