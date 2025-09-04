@@ -83,6 +83,10 @@ runs:
             echo "📝 Committing version changes to $CURRENT_BRANCH"
             git add .
             git commit -m "${{ inputs.commit-message }}"
+            
+            echo "🚀 Pushing changes to origin/$CURRENT_BRANCH"
+            git push origin $CURRENT_BRANCH
+            
             echo "published=true" >> $GITHUB_OUTPUT
             echo "pr-created=false" >> $GITHUB_OUTPUT
           else
