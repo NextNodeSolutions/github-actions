@@ -67,15 +67,16 @@ runs:
         echo "🔄 Running: pnpm run ${{ inputs.version-script }}"
         pnpm run ${{ inputs.version-script }}
         
-        # Check if changesets made a version commit
-        if ! git diff --quiet HEAD~1; then
+        # Check if changesets made file changes
+        if ! git diff --quiet; then
           echo "✅ Version changes detected"
           
-          # Get new version
+          # Stage changes and get new version
+          git add .
           VERSION=$(node -p "require('./package.json').version")
           
-          # Amend commit with proper message and create tag
-          git commit --amend -m "chore: updated to $VERSION"
+          # Create commit with proper message and tag
+          git commit -m "chore: updated to $VERSION"
           git tag "v$VERSION"
           
           # Push changes and tags
