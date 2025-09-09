@@ -115,7 +115,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has-changesets: ${{ steps.version.outputs.has-changesets }}
-      ready-to-publish: ${{ steps.version.outputs.published }}
+      pr-created: ${{ steps.version.outputs.pr-created }}
+      pr-number: ${{ steps.version.outputs.pr-number }}
+      version: ${{ steps.version.outputs.version }}
     
     steps:
       - name: Checkout Repository
@@ -139,16 +141,47 @@ jobs:
           github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           version-script: ${{ inputs.version-script }}
 
+  # Merge PR and create tag
+  merge-pr:
+    name: Merge Version PR
+    needs: [version]
+    if: needs.version.outputs.pr-created == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+      tag-created: ${{ steps.merge.outputs.tag-created }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Environment
+        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Merge PR and Create Tag
+        id: merge
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-pr-merge@main
+        with:
+          github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          pr-number: ${{ needs.version.outputs.pr-number }}
+          version: ${{ needs.version.outputs.version }}
+
   # Publishing (separate job with enhanced security)
   publish:
     name: Publish Packages
-    needs: [version]
-    if: needs.version.outputs.ready-to-publish == 'true'
+    needs: [version, merge-pr]
+    if: needs.merge-pr.outputs.merged == 'true' && needs.merge-pr.outputs.tag-created == 'true'
     runs-on: ubuntu-latest
     outputs:
       published: ${{ steps.publish.outputs.published }}
       packages: ${{ steps.publish.outputs.packages }}
-      version: ${{ steps.package-info.outputs.version }}
+      version: ${{ needs.version.outputs.version }}
     
     steps:
       - name: Checkout Repository
@@ -216,7 +249,7 @@ jobs:
   # Summary job
   summary:
     name: Release Summary
-    needs: [quality, version, publish, verify]
+    needs: [quality, version, merge-pr, publish, verify]
     if: always()
     runs-on: ubuntu-latest
     
@@ -233,7 +266,18 @@ jobs:
           echo "### Version Management"
           echo "Status: ${{ needs.version.result }}"
           echo "Has changesets: ${{ needs.version.outputs.has-changesets || 'false' }}"
-          echo "Ready to publish: ${{ needs.version.outputs.ready-to-publish || 'false' }}"
+          echo "PR created: ${{ needs.version.outputs.pr-created || 'false' }}"
+          
+          if [[ "${{ needs.version.outputs.pr-created }}" == "true" ]]; then
+            echo "PR number: #${{ needs.version.outputs.pr-number }}"
+            echo "Version: ${{ needs.version.outputs.version }}"
+          fi
+          
+          echo ""
+          echo "### PR Merge & Tagging"
+          echo "Status: ${{ needs.merge-pr.result || 'skipped' }}"
+          echo "PR merged: ${{ needs.merge-pr.outputs.merged || 'false' }}"
+          echo "Tag created: ${{ needs.merge-pr.outputs.tag-created || 'false' }}"
           
           echo ""
           echo "### Publishing"
@@ -256,6 +300,7 @@ jobs:
           # Check if any required job failed
           if [[ "${{ needs.quality.result }}" == "failure" ]] || 
              [[ "${{ needs.version.result }}" == "failure" ]] || 
+             [[ "${{ needs.merge-pr.result }}" == "failure" ]] || 
              [[ "${{ needs.publish.result }}" == "failure" ]]; then
             echo "❌ Release process failed"
             exit 1
