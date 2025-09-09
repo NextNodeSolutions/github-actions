@@ -1,0 +1,389 @@
+name: Publish Release
+
+# EXTERNAL WORKFLOW - Centralized NPM publishing for libraries
+# Triggered by repository_dispatch events from version-management workflow
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      publish-script:
+        description: 'Script for publishing (changeset:publish)'
+        required: false
+        default: 'changeset:publish'
+        type: string
+      build-script:
+        description: 'Build script to run before publishing'
+        required: false
+        default: 'build'
+        type: string
+      enable-provenance:
+        description: 'Enable NPM provenance attestation'
+        required: false
+        default: true
+        type: boolean
+      dry-run:
+        description: 'Run publish in dry-run mode'
+        required: false
+        default: false
+        type: boolean
+      create-github-release:
+        description: 'Create GitHub release'
+        required: false
+        default: true
+        type: boolean
+        
+    secrets:
+      NPM_TOKEN:
+        description: 'NPM authentication token'
+        required: true
+      GITHUB_TOKEN:
+        description: 'GitHub token with repo permissions'
+        required: true
+
+    outputs:
+      published:
+        description: 'Whether packages were published'
+        value: ${{ jobs.publish.outputs.published }}
+      packages:
+        description: 'List of published packages'
+        value: ${{ jobs.publish.outputs.packages }}
+      version:
+        description: 'Published package version'
+        value: ${{ jobs.publish.outputs.version }}
+      tag-name:
+        description: 'Created git tag name'
+        value: ${{ jobs.tag.outputs.tag-name }}
+      release-url:
+        description: 'GitHub release URL'
+        value: ${{ jobs.github-release.outputs.release-url }}
+
+# Note: This workflow expects to receive event data via github.event.client_payload.data
+
+jobs:
+  validate-event:
+    name: Validate Event Data
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      pr-number: ${{ steps.validate.outputs.pr-number }}
+      merge-commit-sha: ${{ steps.validate.outputs.merge-commit-sha }}
+      
+    steps:
+      - name: Validate Repository Dispatch Event
+        id: validate
+        run: |
+          # Extract data from event payload
+          VERSION="${{ github.event.client_payload.data.version }}"
+          PR_NUMBER="${{ github.event.client_payload.data.pr_number }}"
+          MERGE_SHA="${{ github.event.client_payload.data.merge_commit_sha }}"
+          
+          # Validate required fields
+          if [ -z "$VERSION" ] || [ -z "$PR_NUMBER" ] || [ -z "$MERGE_SHA" ]; then
+            echo "❌ Missing required event data"
+            echo "Version: $VERSION"
+            echo "PR Number: $PR_NUMBER"
+            echo "Merge SHA: $MERGE_SHA"
+            exit 1
+          fi
+          
+          echo "✅ Event data validated"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "merge-commit-sha=$MERGE_SHA" >> $GITHUB_OUTPUT
+          
+          # Debug output
+          echo "🔍 Repository Dispatch Event Details:"
+          echo "Version: $VERSION"
+          echo "PR Number: $PR_NUMBER" 
+          echo "Merge Commit: $MERGE_SHA"
+          echo "Triggered By: ${{ github.event.client_payload.data.triggered_by }}"
+          echo "Source Repo: ${{ github.event.client_payload.data.repository }}"
+
+  tag:
+    name: Create Git Tag
+    needs: [validate-event]
+    runs-on: ubuntu-latest
+    outputs:
+      tag-name: ${{ steps.tag.outputs.tag-name }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # Checkout the exact merge commit
+          ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git for Tagging
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and Push Git Tag
+        id: tag
+        run: |
+          VERSION="${{ needs.validate-event.outputs.version }}"
+          TAG_NAME="v$VERSION"
+          
+          # Check if tag already exists
+          if git tag -l | grep -q "^$TAG_NAME$"; then
+            echo "⚠️ Tag $TAG_NAME already exists"
+            echo "tag-name=$TAG_NAME" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Create annotated tag with release notes
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME
+
+          Released via automated workflow from PR #${{ needs.validate-event.outputs.pr-number }}
+          
+          🚀 Generated with [Claude Code](https://claude.ai/code)"
+          
+          # Push tag
+          git push origin "$TAG_NAME"
+          
+          echo "✅ Created and pushed tag: $TAG_NAME"
+          echo "tag-name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+  publish:
+    name: Publish to NPM
+    needs: [validate-event, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # Required for npm provenance
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      packages: ${{ steps.publish.outputs.packages }}
+      version: ${{ needs.validate-event.outputs.version }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # Checkout the exact merge commit  
+          ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Release Environment
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Package Version
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_VERSION="${{ needs.validate-event.outputs.version }}"
+          
+          if [ "$PACKAGE_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "❌ Version mismatch!"
+            echo "Package.json version: $PACKAGE_VERSION"
+            echo "Expected version: $EXPECTED_VERSION"
+            exit 1
+          fi
+          
+          echo "✅ Version verified: v$PACKAGE_VERSION"
+
+      - name: Build Package
+        if: inputs.build-script != ''
+        run: |
+          echo "📦 Building package with script: ${{ inputs.build-script }}"
+          pnpm run ${{ inputs.build-script }}
+
+      - name: Configure NPM Provenance
+        if: inputs.enable-provenance
+        uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          verify-attestation: false
+
+      - name: Publish to NPM
+        id: publish
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-publish@main
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          publish-script: ${{ inputs.publish-script }}
+          dry-run: ${{ inputs.dry-run }}
+          provenance: ${{ inputs.enable-provenance }}
+
+      - name: Verify NPM Publication
+        if: steps.publish.outputs.published == 'true' && !inputs.dry-run
+        run: |
+          VERSION="${{ needs.validate-event.outputs.version }}"
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          
+          echo "🔍 Verifying publication..."
+          sleep 10 # Wait for NPM to propagate
+          
+          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "none")
+          
+          if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+            echo "✅ Successfully published: $PACKAGE_NAME@$VERSION"
+            echo "🌐 View on NPM: https://www.npmjs.com/package/$PACKAGE_NAME/v/$VERSION"
+          else
+            echo "⚠️ NPM publication verification inconclusive"
+            echo "Expected: $VERSION, Found: $PUBLISHED_VERSION"
+            echo "This might be due to NPM propagation delay"
+          fi
+
+  github-release:
+    name: Create GitHub Release
+    needs: [validate-event, tag, publish]
+    if: needs.publish.outputs.published == 'true' && inputs.create-github-release
+    runs-on: ubuntu-latest
+    outputs:
+      release-url: ${{ steps.release.outputs.release-url }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Release Notes
+        id: release-notes
+        run: |
+          VERSION="${{ needs.validate-event.outputs.version }}"
+          TAG_NAME="${{ needs.tag.outputs.tag-name }}"
+          
+          # Extract changelog section for this version
+          if [ -f "CHANGELOG.md" ]; then
+            # Get the section between ## $VERSION and the next ## or end of file
+            RELEASE_NOTES=$(awk "/^## $VERSION/{flag=1; next} /^## [0-9]/{flag=0} flag" CHANGELOG.md | sed '/^$/d')
+            
+            if [ -n "$RELEASE_NOTES" ]; then
+              echo "Found changelog section for v$VERSION"
+              # Save to file for GitHub Release
+              cat > release-notes.md << EOF
+          ## What's Changed
+
+          $RELEASE_NOTES
+
+          ---
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "v0.0.0")...$TAG_NAME
+
+          🚀 Generated with [Claude Code](https://claude.ai/code)
+          EOF
+            else
+              echo "No specific changelog found for v$VERSION, using generic notes"
+              cat > release-notes.md << EOF
+          ## What's Changed
+
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for detailed changes in this release.
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "v0.0.0")...$TAG_NAME
+
+          🚀 Generated with [Claude Code](https://claude.ai/code)
+          EOF
+            fi
+          else
+            echo "No CHANGELOG.md found, using minimal release notes"
+            cat > release-notes.md << EOF
+          ## Release $TAG_NAME
+
+          This release was automatically generated from PR #${{ needs.validate-event.outputs.pr-number }}.
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "v0.0.0")...$TAG_NAME
+
+          🚀 Generated with [Claude Code](https://claude.ai/code)
+          EOF
+          fi
+
+      - name: Create GitHub Release
+        id: release
+        run: |
+          TAG_NAME="${{ needs.tag.outputs.tag-name }}"
+          
+          RELEASE_URL=$(gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --notes-file release-notes.md \
+            --latest \
+            --json url --jq '.url')
+          
+          echo "✅ Created GitHub Release: $TAG_NAME"
+          echo "🔗 Release URL: $RELEASE_URL"
+          echo "release-url=$RELEASE_URL" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify:
+    name: Post-Publish Verification
+    needs: [validate-event, publish]
+    if: needs.publish.outputs.published == 'true' && inputs.enable-provenance && !inputs.dry-run
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
+
+      - name: Setup Environment
+        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+
+      - name: Verify NPM Provenance
+        uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          verify-attestation: true
+
+  summary:
+    name: Release Summary
+    needs: [validate-event, tag, publish, github-release, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Release Summary
+        run: |
+          VERSION="${{ needs.validate-event.outputs.version }}"
+          PUBLISHED="${{ needs.publish.outputs.published }}"
+          TAG_NAME="${{ needs.tag.outputs.tag-name }}"
+          RELEASE_URL="${{ needs.github-release.outputs.release-url }}"
+          
+          echo ""
+          echo "🎉 Release Summary for v$VERSION"
+          echo "================================"
+          echo ""
+          echo "📦 Published: $PUBLISHED"
+          echo "🏷️ Git Tag: $TAG_NAME"
+          echo "📝 PR: #${{ needs.validate-event.outputs.pr-number }}"
+          
+          if [ "$PUBLISHED" = "true" ]; then
+            PACKAGE_NAME=$(node -p "require('./package.json').name" 2>/dev/null || echo "unknown")
+            echo "🌐 NPM: https://www.npmjs.com/package/$PACKAGE_NAME/v/$VERSION"
+            echo "✨ Install: npm install $PACKAGE_NAME@$VERSION"
+          fi
+          
+          if [ -n "$RELEASE_URL" ]; then
+            echo "🔗 GitHub Release: $RELEASE_URL"
+          fi
+          
+          echo ""
+          if [ "$PUBLISHED" = "true" ]; then
+            echo "✅ Release completed successfully!"
+          else
+            echo "⚠️ Release completed with issues - check individual jobs"
+          fi
