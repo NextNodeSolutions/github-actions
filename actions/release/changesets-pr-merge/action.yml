@@ -1,0 +1,209 @@
+name: 'Changesets PR Merge'
+description: 'Wait for changesets PR to be merged and create release tag'
+author: 'NextNode'
+
+inputs:
+  github-token:
+    description: 'GitHub token for PR operations'
+    required: true
+  pr-number:
+    description: 'PR number to wait for'
+    required: true
+  version:
+    description: 'Version to tag after merge'
+    required: true
+  timeout:
+    description: 'Timeout in minutes to wait for PR merge'
+    required: false
+    default: '30'
+
+outputs:
+  merged:
+    description: 'Whether the PR was successfully merged'
+    value: ${{ steps.wait-merge.outputs.merged }}
+  tag-created:
+    description: 'Whether the tag was created'
+    value: ${{ steps.create-tag.outputs.created }}
+  merge-commit:
+    description: 'SHA of the merge commit'
+    value: ${{ steps.wait-merge.outputs.merge-commit }}
+  branch-cleaned:
+    description: 'Whether the release branch was cleaned up'
+    value: ${{ steps.wait-merge.outputs.merged }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Wait for PR to be merged
+      id: wait-merge
+      shell: bash
+      run: |
+        echo "::group::⏳ Waiting for PR #${{ inputs.pr-number }} to be merged"
+        
+        PR_NUMBER="${{ inputs.pr-number }}"
+        TIMEOUT_MINUTES="${{ inputs.timeout }}"
+        TIMEOUT_SECONDS=$((TIMEOUT_MINUTES * 60))
+        SLEEP_INTERVAL=30
+        ELAPSED=0
+        
+        echo "🔍 Monitoring PR #$PR_NUMBER"
+        echo "⏱️  Timeout: $TIMEOUT_MINUTES minutes"
+        
+        while [ $ELAPSED -lt $TIMEOUT_SECONDS ]; do
+          # Check PR status
+          PR_STATE=$(gh pr view $PR_NUMBER --json state -q .state)
+          PR_MERGED=$(gh pr view $PR_NUMBER --json merged -q .merged)
+          
+          echo "📊 PR State: $PR_STATE | Merged: $PR_MERGED | Elapsed: ${ELAPSED}s"
+          
+          if [ "$PR_MERGED" = "true" ]; then
+            echo "✅ PR #$PR_NUMBER has been merged!"
+            
+            # Get merge commit SHA and branch name
+            MERGE_COMMIT=$(gh pr view $PR_NUMBER --json mergeCommit -q .mergeCommit.sha)
+            HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName -q .headRefName)
+            
+            echo "merged=true" >> $GITHUB_OUTPUT
+            echo "merge-commit=$MERGE_COMMIT" >> $GITHUB_OUTPUT
+            echo "head-branch=$HEAD_BRANCH" >> $GITHUB_OUTPUT
+            break
+          elif [ "$PR_STATE" = "CLOSED" ]; then
+            echo "❌ PR #$PR_NUMBER was closed without merging"
+            echo "merged=false" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            # Show current checks status
+            CHECKS_STATUS=$(gh pr checks $PR_NUMBER --json state,conclusion -q '.[] | select(.state == "COMPLETED") | .conclusion' | sort | uniq -c || echo "No completed checks")
+            echo "🔍 Checks status: $CHECKS_STATUS"
+            
+            sleep $SLEEP_INTERVAL
+            ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
+          fi
+        done
+        
+        if [ $ELAPSED -ge $TIMEOUT_SECONDS ]; then
+          echo "⏰ Timeout reached while waiting for PR merge"
+          echo "merged=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "::endgroup::"
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Checkout main and create tag
+      id: create-tag
+      if: steps.wait-merge.outputs.merged == 'true'
+      shell: bash
+      run: |
+        echo "::group::🏷️ Creating release tag"
+        
+        VERSION="${{ inputs.version }}"
+        TAG="v$VERSION"
+        
+        # Set git configuration
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Checkout main and pull latest changes
+        echo "🔄 Checking out main branch"
+        git checkout main
+        git pull origin main
+        
+        # Verify the version in package.json matches
+        CURRENT_VERSION=$(node -p "require('./package.json').version")
+        if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+          echo "❌ Version mismatch: expected $VERSION, got $CURRENT_VERSION"
+          echo "created=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "✅ Version verified: $VERSION"
+        
+        # Create and push tag
+        echo "🏷️ Creating tag: $TAG"
+        git tag "$TAG"
+        git push origin "$TAG"
+        
+        echo "✅ Tag $TAG created and pushed successfully"
+        echo "created=true" >> $GITHUB_OUTPUT
+        
+        # Create GitHub release
+        echo "📋 Creating GitHub release"
+        gh release create "$TAG" \
+          --title "v$VERSION" \
+          --notes "Release $VERSION
+          
+          🤖 This release was automatically created by the changesets workflow.
+          
+          See [CHANGELOG.md](./CHANGELOG.md) for detailed changes." \
+          --latest
+        
+        echo "✅ GitHub release created"
+        
+        echo "::endgroup::"
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Cleanup branch
+      if: steps.wait-merge.outputs.merged == 'true'
+      shell: bash
+      run: |
+        echo "::group::🧹 Cleaning up release branch"
+        
+        HEAD_BRANCH="${{ steps.wait-merge.outputs.head-branch }}"
+        
+        if [ -n "$HEAD_BRANCH" ]; then
+          echo "🗑️ Deleting branch: $HEAD_BRANCH"
+          
+          # Delete the remote branch
+          git push origin --delete "$HEAD_BRANCH" || {
+            echo "⚠️ Failed to delete remote branch (may have been auto-deleted)"
+          }
+          
+          # Delete local branch if it exists
+          if git show-ref --verify --quiet refs/heads/"$HEAD_BRANCH"; then
+            git branch -D "$HEAD_BRANCH" || {
+              echo "⚠️ Failed to delete local branch"
+            }
+          fi
+          
+          echo "✅ Branch cleanup completed"
+        else
+          echo "⚠️ No branch name found, skipping cleanup"
+        fi
+        
+        echo "::endgroup::"
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Display merge summary
+      if: always()
+      shell: bash
+      run: |
+        echo "::group::📊 Merge Summary"
+        
+        PR_NUMBER="${{ inputs.pr-number }}"
+        VERSION="${{ inputs.version }}"
+        MERGED="${{ steps.wait-merge.outputs.merged }}"
+        TAG_CREATED="${{ steps.create-tag.outputs.created }}"
+        
+        echo "📋 PR: #$PR_NUMBER"
+        echo "📦 Version: $VERSION"
+        echo "🔀 Merged: $MERGED"
+        echo "🏷️ Tag Created: $TAG_CREATED"
+        
+        if [ "$MERGED" = "true" ]; then
+          MERGE_COMMIT="${{ steps.wait-merge.outputs.merge-commit }}"
+          echo "📝 Merge Commit: $MERGE_COMMIT"
+          
+          if [ "$TAG_CREATED" = "true" ]; then
+            echo "✅ Release process completed successfully"
+          else
+            echo "⚠️ PR merged but tag creation failed"
+          fi
+        else
+          echo "❌ PR merge failed or timed out"
+        fi
+        
+        echo "::endgroup::"

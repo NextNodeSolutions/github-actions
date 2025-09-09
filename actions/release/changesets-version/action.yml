@@ -28,6 +28,12 @@ outputs:
   pr-number:
     description: 'Version PR number if created'
     value: ${{ steps.version.outputs.pr-number }}
+  pr-url:
+    description: 'Version PR URL if created'
+    value: ${{ steps.version.outputs.pr-url }}
+  version:
+    description: 'New version number'
+    value: ${{ steps.version.outputs.version }}
 
 runs:
   using: 'composite'
@@ -71,23 +77,58 @@ runs:
         if ! git diff --quiet; then
           echo "✅ Version changes detected"
           
-          # Stage changes and get new version
-          git add .
+          # Get new version
           VERSION=$(node -p "require('./package.json').version")
+          BRANCH_NAME="changeset-release/v$VERSION"
           
-          # Create commit with proper message and tag
-          git commit -m "chore: updated to $VERSION"
-          git tag "v$VERSION"
+          echo "📝 New version: $VERSION"
+          echo "🔀 Creating branch: $BRANCH_NAME"
           
-          # Push changes and tags
-          echo "🚀 Pushing changes and tags to origin/main"
-          git push origin main --tags
+          # Create and checkout new branch
+          git checkout -b "$BRANCH_NAME"
           
-          echo "published=true" >> $GITHUB_OUTPUT
+          # Stage changes and commit
+          git add .
+          git commit -m "chore: release v$VERSION"
+          
+          # Push the new branch
+          echo "🚀 Pushing branch to origin"
+          git push origin "$BRANCH_NAME"
+          
+          # Create PR with version as title
+          echo "🔄 Creating pull request"
+          PR_URL=$(gh pr create \
+            --base main \
+            --title "v$VERSION" \
+            --body "Release version $VERSION
+            
+            🤖 This PR was automatically created by the changesets workflow.
+            
+            ## Changes
+            - Updated package version to $VERSION
+            - Updated changelog
+            
+            ## Release Process
+            - ✅ Changesets processed
+            - ⏳ Waiting for quality checks
+            - ⏳ Auto-merge enabled
+            - ⏳ Tag will be created after merge")
+          
+          PR_NUMBER=$(gh pr view --json number -q .number)
+          
+          # Enable auto-merge
+          echo "🤖 Enabling auto-merge"
+          gh pr merge --auto --squash
+          
+          echo "published=false" >> $GITHUB_OUTPUT
+          echo "pr-created=true" >> $GITHUB_OUTPUT
+          echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr-url=$PR_URL" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         else
           echo "ℹ️ No version changes were made"
           echo "published=false" >> $GITHUB_OUTPUT
+          echo "pr-created=false" >> $GITHUB_OUTPUT
         fi
         
         echo "::endgroup::"
@@ -95,20 +136,27 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
     - name: Display version summary
-      if: steps.version.outputs.published == 'true'
+      if: steps.version.outputs.pr-created == 'true'
       shell: bash
       run: |
         echo "::group::📊 Version Summary"
         
-        # Show what was changed in the last commit
-        echo "🔄 Changes in version commit:"
-        git show --stat HEAD
+        VERSION="${{ steps.version.outputs.version }}"
+        PR_NUMBER="${{ steps.version.outputs.pr-number }}"
+        PR_URL="${{ steps.version.outputs.pr-url }}"
         
-        # Show current package version
+        echo "📦 Version: $VERSION"
+        echo "🔗 PR: #$PR_NUMBER"
+        echo "🌐 URL: $PR_URL"
+        
+        # Show current package info
         if [[ -f "package.json" ]]; then
           PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          echo "📦 $PACKAGE_NAME@$PACKAGE_VERSION"
+          echo "📋 Package: $PACKAGE_NAME@$VERSION"
         fi
         
+        echo ""
+        echo "✅ Pull request created successfully"
+        echo "⏳ Auto-merge enabled - waiting for checks to pass"
+
         echo "::endgroup::"
