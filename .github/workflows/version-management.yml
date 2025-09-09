@@ -1,0 +1,191 @@
+name: Version Management
+
+# EXTERNAL WORKFLOW - Centralized version management for NPM libraries
+# Creates version PRs, auto-merges them, and triggers release workflow via repository_dispatch
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      pnpm-version:
+        description: 'pnpm version'
+        required: false
+        default: '10.12.4'
+        type: string
+      version-script:
+        description: 'Script for versioning (changeset:version)'
+        required: false
+        default: 'changeset:version'
+        type: string
+      auto-merge:
+        description: 'Auto-merge version PRs'
+        required: false
+        default: true
+        type: boolean
+        
+    secrets:
+      GITHUB_TOKEN:
+        description: 'GitHub token with repo permissions'
+        required: true
+
+    outputs:
+      has-changesets:
+        description: 'Whether changesets were found'
+        value: ${{ jobs.check-changesets.outputs.has-changesets }}
+      pr-created:
+        description: 'Whether a version PR was created'
+        value: ${{ jobs.create-version-pr.outputs.pr-created }}
+      pr-number:
+        description: 'Version PR number'
+        value: ${{ jobs.create-version-pr.outputs.pr-number }}
+      version:
+        description: 'New version number'
+        value: ${{ jobs.create-version-pr.outputs.version }}
+      merged:
+        description: 'Whether the PR was merged'
+        value: ${{ jobs.auto-merge-pr.outputs.merged }}
+      merge-commit-sha:
+        description: 'Merge commit SHA'
+        value: ${{ jobs.auto-merge-pr.outputs.merge-commit-sha }}
+
+# Note: Concurrency is managed by calling workflow
+
+jobs:
+  check-changesets:
+    name: Check for Changesets
+    runs-on: ubuntu-latest
+    outputs:
+      has-changesets: ${{ steps.changesets.outputs.hasChangesets }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Environment
+        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+      
+      - name: Check for Changesets
+        id: changesets
+        run: |
+          if [ -n "$(ls -A .changeset/*.md 2>/dev/null | grep -v README)" ]; then
+            echo "hasChangesets=true" >> $GITHUB_OUTPUT
+            echo "📦 Found unreleased changesets"
+            ls -la .changeset/*.md | grep -v README || true
+          else
+            echo "hasChangesets=false" >> $GITHUB_OUTPUT
+            echo "✨ No changesets found"
+          fi
+
+  create-version-pr:
+    name: Create Version PR
+    needs: [check-changesets]
+    if: needs.check-changesets.outputs.has-changesets == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      pr-created: ${{ steps.create-pr.outputs.pr-created }}
+      pr-number: ${{ steps.create-pr.outputs.pr-number }}
+      version: ${{ steps.create-pr.outputs.version }}
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Environment
+        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          pnpm-version: ${{ inputs.pnpm-version }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Create Version PR
+        id: create-pr
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-version@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version-script: ${{ inputs.version-script }}
+
+  auto-merge-pr:
+    name: Auto-merge Version PR
+    needs: [create-version-pr]
+    if: needs.create-version-pr.outputs.pr-created == 'true' && inputs.auto-merge
+    runs-on: ubuntu-latest
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+      merge-commit-sha: ${{ steps.merge.outputs.merge-commit-sha }}
+      
+    steps:
+      - name: Auto-merge PR
+        id: merge
+        uses: NextNodeSolutions/github-actions/actions/release/changesets-pr-merge@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ needs.create-version-pr.outputs.pr-number }}
+          version: ${{ needs.create-version-pr.outputs.version }}
+
+  trigger-release:
+    name: Trigger Release Workflow
+    needs: [create-version-pr, auto-merge-pr]
+    if: needs.auto-merge-pr.outputs.merged == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Trigger Release Event
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: version-merged
+          client-payload: |
+            {
+              "data": {
+                "version": "${{ needs.create-version-pr.outputs.version }}",
+                "pr_number": "${{ needs.create-version-pr.outputs.pr-number }}",
+                "merge_commit_sha": "${{ needs.auto-merge-pr.outputs.merge-commit-sha }}",
+                "triggered_by": "${{ github.actor }}",
+                "repository": "${{ github.repository }}",
+                "ref": "${{ github.ref }}",
+                "sha": "${{ github.sha }}",
+                "workflow_run_id": "${{ github.run_id }}"
+              }
+            }
+      
+      - name: Success Summary
+        run: |
+          echo "🎉 Version management completed successfully!"
+          echo "📦 Version: ${{ needs.create-version-pr.outputs.version }}"
+          echo "🔀 PR: #${{ needs.create-version-pr.outputs.pr-number }}"
+          echo "📝 Merge commit: ${{ needs.auto-merge-pr.outputs.merge-commit-sha }}"
+          echo "🚀 Release workflow triggered via repository_dispatch event"
+
+  summary:
+    name: Version Management Summary
+    needs: [check-changesets, create-version-pr, auto-merge-pr, trigger-release]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Summary
+        run: |
+          echo "📋 Version Management Summary"
+          echo "Has changesets: ${{ needs.check-changesets.outputs.has-changesets }}"
+          echo "PR created: ${{ needs.create-version-pr.outputs.pr-created }}"
+          echo "PR number: ${{ needs.create-version-pr.outputs.pr-number }}"
+          echo "Version: ${{ needs.create-version-pr.outputs.version }}"
+          echo "Merged: ${{ needs.auto-merge-pr.outputs.merged }}"
+          echo "Release triggered: ${{ needs.trigger-release.result == 'success' }}"
