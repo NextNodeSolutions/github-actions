@@ -1,7 +1,7 @@
 name: Publish Release
 
-# EXTERNAL WORKFLOW - Centralized NPM publishing for libraries
-# Triggered by repository_dispatch events from version-management workflow
+# UNIFIED WORKFLOW - Can be called externally OR triggered by repository_dispatch
+# Supports both workflow_call for external use AND repository_dispatch for event-driven releases
 
 on:
   workflow_call:
@@ -41,31 +41,42 @@ on:
         required: false
         default: true
         type: boolean
+      # Event data (for workflow_call usage)
+      version:
+        description: 'Version to publish (required for workflow_call)'
+        required: false
+        type: string
+      pr-number:
+        description: 'PR number (required for workflow_call)'
+        required: false
+        type: string
+      merge-commit-sha:
+        description: 'Merge commit SHA (required for workflow_call)'
+        required: false
+        type: string
         
     secrets:
       NPM_TOKEN:
         description: 'NPM authentication token'
         required: true
-      GITHUB_TOKEN:
-        description: 'GitHub token with repo permissions'
-        required: true
-
+        
     outputs:
       published:
         description: 'Whether packages were published'
         value: ${{ jobs.publish.outputs.published }}
-      packages:
-        description: 'List of published packages'
-        value: ${{ jobs.publish.outputs.packages }}
       version:
         description: 'Published package version'
-        value: ${{ jobs.publish.outputs.version }}
+        value: ${{ jobs.validate-event.outputs.version }}
       tag-name:
         description: 'Created git tag name'
         value: ${{ jobs.tag.outputs.tag-name }}
-      release-url:
-        description: 'GitHub release URL'
-        value: ${{ jobs.github-release.outputs.release-url }}
+
+  repository_dispatch:
+    types: [version-merged]
+
+concurrency:
+  group: publish-${{ github.event.client_payload.data.version || inputs.version }}
+  cancel-in-progress: false
 
 # Note: This workflow expects to receive event data via github.event.client_payload.data
 
@@ -79,17 +90,47 @@ jobs:
       merge-commit-sha: ${{ steps.validate.outputs.merge-commit-sha }}
       
     steps:
-      - name: Validate Repository Dispatch Event
+      - name: Validate Event Data
         id: validate
         run: |
-          # Extract data from event payload
-          VERSION="${{ github.event.client_payload.data.version }}"
-          PR_NUMBER="${{ github.event.client_payload.data.pr_number }}"
-          MERGE_SHA="${{ github.event.client_payload.data.merge_commit_sha }}"
+          # Extract data from either repository_dispatch event OR workflow_call inputs
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "🔄 Processing repository_dispatch event"
+            VERSION="${{ github.event.client_payload.data.version }}"
+            PR_NUMBER="${{ github.event.client_payload.data.pr_number }}"
+            MERGE_SHA="${{ github.event.client_payload.data.merge_commit_sha }}"
+            
+            # Configuration from event or defaults
+            NODE_VERSION="${{ github.event.client_payload.data.node_version || '20' }}"
+            PNPM_VERSION="${{ github.event.client_payload.data.pnpm_version || '10.12.4' }}"
+            PUBLISH_SCRIPT="${{ github.event.client_payload.data.publish_script || 'changeset:publish' }}"
+            BUILD_SCRIPT="${{ github.event.client_payload.data.build_script || 'build' }}"
+            ENABLE_PROVENANCE="${{ github.event.client_payload.data.enable_provenance || 'true' }}"
+            DRY_RUN="${{ github.event.client_payload.data.dry_run || 'false' }}"
+            CREATE_GITHUB_RELEASE="${{ github.event.client_payload.data.create_github_release || 'true' }}"
+            
+            echo "Triggered By: ${{ github.event.client_payload.data.triggered_by }}"
+            echo "Source Repo: ${{ github.event.client_payload.data.repository }}"
+          else
+            echo "📞 Processing workflow_call"
+            VERSION="${{ inputs.version }}"
+            PR_NUMBER="${{ inputs.pr-number }}"
+            MERGE_SHA="${{ inputs.merge-commit-sha }}"
+            
+            # Configuration from inputs
+            NODE_VERSION="${{ inputs.node-version }}"
+            PNPM_VERSION="${{ inputs.pnpm-version }}"
+            PUBLISH_SCRIPT="${{ inputs.publish-script }}"
+            BUILD_SCRIPT="${{ inputs.build-script }}"
+            ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
+            DRY_RUN="${{ inputs.dry-run }}"
+            CREATE_GITHUB_RELEASE="${{ inputs.create-github-release }}"
+          fi
           
           # Validate required fields
           if [ -z "$VERSION" ] || [ -z "$PR_NUMBER" ] || [ -z "$MERGE_SHA" ]; then
-            echo "❌ Missing required event data"
+            echo "❌ Missing required data"
+            echo "Event Type: ${{ github.event_name }}"
             echo "Version: $VERSION"
             echo "PR Number: $PR_NUMBER"
             echo "Merge SHA: $MERGE_SHA"
@@ -100,14 +141,22 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "merge-commit-sha=$MERGE_SHA" >> $GITHUB_OUTPUT
+          echo "node-version=$NODE_VERSION" >> $GITHUB_OUTPUT
+          echo "pnpm-version=$PNPM_VERSION" >> $GITHUB_OUTPUT
+          echo "publish-script=$PUBLISH_SCRIPT" >> $GITHUB_OUTPUT
+          echo "build-script=$BUILD_SCRIPT" >> $GITHUB_OUTPUT
+          echo "enable-provenance=$ENABLE_PROVENANCE" >> $GITHUB_OUTPUT
+          echo "dry-run=$DRY_RUN" >> $GITHUB_OUTPUT
+          echo "create-github-release=$CREATE_GITHUB_RELEASE" >> $GITHUB_OUTPUT
           
           # Debug output
-          echo "🔍 Repository Dispatch Event Details:"
+          echo "🔍 Unified Workflow Details:"
+          echo "Event Type: ${{ github.event_name }}"
           echo "Version: $VERSION"
           echo "PR Number: $PR_NUMBER" 
           echo "Merge Commit: $MERGE_SHA"
-          echo "Triggered By: ${{ github.event.client_payload.data.triggered_by }}"
-          echo "Source Repo: ${{ github.event.client_payload.data.repository }}"
+          echo "Node Version: $NODE_VERSION"
+          echo "pnpm Version: $PNPM_VERSION"
 
   tag:
     name: Create Git Tag
@@ -181,10 +230,10 @@ jobs:
       - name: Setup Release Environment
         uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
+          node-version: ${{ needs.validate-event.outputs.node-version }}
+          pnpm-version: ${{ needs.validate-event.outputs.pnpm-version }}
           npm-token: ${{ secrets.NPM_TOKEN }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Verify Package Version
         run: |
@@ -201,13 +250,13 @@ jobs:
           echo "✅ Version verified: v$PACKAGE_VERSION"
 
       - name: Build Package
-        if: inputs.build-script != ''
+        if: needs.validate-event.outputs.build-script != ''
         run: |
           echo "📦 Building package with script: ${{ inputs.build-script }}"
-          pnpm run ${{ inputs.build-script }}
+          pnpm run ${{ needs.validate-event.outputs.build-script }}
 
       - name: Configure NPM Provenance
-        if: inputs.enable-provenance
+        if: needs.validate-event.outputs.enable-provenance == 'true'
         uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
@@ -218,12 +267,12 @@ jobs:
         uses: NextNodeSolutions/github-actions/actions/release/changesets-publish@main
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
-          publish-script: ${{ inputs.publish-script }}
-          dry-run: ${{ inputs.dry-run }}
-          provenance: ${{ inputs.enable-provenance }}
+          publish-script: ${{ needs.validate-event.outputs.publish-script }}
+          dry-run: ${{ needs.validate-event.outputs.dry-run }}
+          provenance: ${{ needs.validate-event.outputs.enable-provenance }}
 
       - name: Verify NPM Publication
-        if: steps.publish.outputs.published == 'true' && !inputs.dry-run
+        if: steps.publish.outputs.published == 'true' && needs.validate-event.outputs.dry-run == 'false'
         run: |
           VERSION="${{ needs.validate-event.outputs.version }}"
           PACKAGE_NAME=$(node -p "require('./package.json').name")
@@ -245,7 +294,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     needs: [validate-event, tag, publish]
-    if: needs.publish.outputs.published == 'true' && inputs.create-github-release
+    if: needs.publish.outputs.published == 'true' && needs.validate-event.outputs.create-github-release == 'true'
     runs-on: ubuntu-latest
     outputs:
       release-url: ${{ steps.release.outputs.release-url }}
@@ -323,12 +372,12 @@ jobs:
           echo "🔗 Release URL: $RELEASE_URL"
           echo "release-url=$RELEASE_URL" >> $GITHUB_OUTPUT
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   verify:
     name: Post-Publish Verification
     needs: [validate-event, publish]
-    if: needs.publish.outputs.published == 'true' && inputs.enable-provenance && !inputs.dry-run
+    if: needs.publish.outputs.published == 'true' && needs.validate-event.outputs.enable-provenance == 'true' && needs.validate-event.outputs.dry-run == 'false'
     runs-on: ubuntu-latest
     
     steps:
@@ -340,8 +389,8 @@ jobs:
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
+          node-version: ${{ needs.validate-event.outputs.node-version }}
+          pnpm-version: ${{ needs.validate-event.outputs.pnpm-version }}
 
       - name: Verify NPM Provenance
         uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
