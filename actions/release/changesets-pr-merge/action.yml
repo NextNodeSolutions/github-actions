@@ -91,6 +91,13 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
+    - name: Checkout repository
+      if: steps.wait-merge.outputs.merged == 'true'
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.github-token }}
+
     - name: Checkout main and create tag
       id: create-tag
       if: steps.wait-merge.outputs.merged == 'true'
