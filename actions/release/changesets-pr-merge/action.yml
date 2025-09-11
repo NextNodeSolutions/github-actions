@@ -51,8 +51,8 @@ runs:
         
         while [ $ELAPSED -lt $TIMEOUT_SECONDS ]; do
           # Check PR status
-          PR_STATE=$(gh pr view $PR_NUMBER --json state -q .state)
-          PR_MERGED=$(gh pr view $PR_NUMBER --json merged -q .merged)
+          PR_STATE=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json state -q .state)
+          PR_MERGED=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json merged -q .merged)
           
           echo "📊 PR State: $PR_STATE | Merged: $PR_MERGED | Elapsed: ${ELAPSED}s"
           
@@ -60,8 +60,8 @@ runs:
             echo "✅ PR #$PR_NUMBER has been merged!"
             
             # Get merge commit SHA and branch name
-            MERGE_COMMIT=$(gh pr view $PR_NUMBER --json mergeCommit -q .mergeCommit.sha)
-            HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName -q .headRefName)
+            MERGE_COMMIT=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeCommit -q .mergeCommit.sha)
+            HEAD_BRANCH=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json headRefName -q .headRefName)
             
             echo "merged=true" >> $GITHUB_OUTPUT
             echo "merge-commit=$MERGE_COMMIT" >> $GITHUB_OUTPUT
@@ -73,7 +73,7 @@ runs:
             exit 1
           else
             # Show current checks status
-            CHECKS_STATUS=$(gh pr checks $PR_NUMBER --json state,conclusion -q '.[] | select(.state == "COMPLETED") | .conclusion' | sort | uniq -c || echo "No completed checks")
+            CHECKS_STATUS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json state,conclusion -q '.[] | select(.state == "COMPLETED") | .conclusion' | sort | uniq -c || echo "No completed checks")
             echo "🔍 Checks status: $CHECKS_STATUS"
             
             sleep $SLEEP_INTERVAL
@@ -138,6 +138,7 @@ runs:
         # Create GitHub release
         echo "📋 Creating GitHub release"
         gh release create "$TAG" \
+          --repo ${{ github.repository }} \
           --title "v$VERSION" \
           --notes "Release $VERSION
           
