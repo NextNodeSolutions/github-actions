@@ -1,5 +1,5 @@
 name: 'Changesets PR Merge'
-description: 'Wait for changesets PR to be merged and create release tag'
+description: 'Wait for changesets PR to be merged'
 author: 'NextNode'
 
 inputs:
@@ -21,10 +21,7 @@ outputs:
   merged:
     description: 'Whether the PR was successfully merged'
     value: ${{ steps.wait-merge.outputs.merged }}
-  tag-created:
-    description: 'Whether the tag was created'
-    value: ${{ steps.create-tag.outputs.created }}
-  merge-commit:
+  merge-commit-sha:
     description: 'SHA of the merge commit'
     value: ${{ steps.wait-merge.outputs.merge-commit }}
   branch-cleaned:
@@ -97,60 +94,6 @@ runs:
         fetch-depth: 0
         token: ${{ inputs.github-token }}
 
-    - name: Checkout main and create tag
-      id: create-tag
-      if: steps.wait-merge.outputs.merged == 'true'
-      shell: bash
-      run: |
-        echo "::group::🏷️ Creating release tag"
-        
-        VERSION="${{ inputs.version }}"
-        TAG="v$VERSION"
-        
-        # Set git configuration
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Checkout main and pull latest changes
-        echo "🔄 Checking out main branch"
-        git checkout main
-        git pull origin main
-        
-        # Verify the version in package.json matches
-        CURRENT_VERSION=$(node -p "require('./package.json').version")
-        if [ "$CURRENT_VERSION" != "$VERSION" ]; then
-          echo "❌ Version mismatch: expected $VERSION, got $CURRENT_VERSION"
-          echo "created=false" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
-        echo "✅ Version verified: $VERSION"
-        
-        # Create and push tag
-        echo "🏷️ Creating tag: $TAG"
-        git tag "$TAG"
-        git push origin "$TAG"
-        
-        echo "✅ Tag $TAG created and pushed successfully"
-        echo "created=true" >> $GITHUB_OUTPUT
-        
-        # Create GitHub release
-        echo "📋 Creating GitHub release"
-        gh release create "$TAG" \
-          --repo ${{ github.repository }} \
-          --title "v$VERSION" \
-          --notes "Release $VERSION
-          
-          🤖 This release was automatically created by the changesets workflow.
-          
-          See [CHANGELOG.md](./CHANGELOG.md) for detailed changes." \
-          --latest
-        
-        echo "✅ GitHub release created"
-        
-        echo "::endgroup::"
-      env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
 
     - name: Cleanup branch
       if: steps.wait-merge.outputs.merged == 'true'
@@ -193,22 +136,15 @@ runs:
         PR_NUMBER="${{ inputs.pr-number }}"
         VERSION="${{ inputs.version }}"
         MERGED="${{ steps.wait-merge.outputs.merged }}"
-        TAG_CREATED="${{ steps.create-tag.outputs.created }}"
         
         echo "📋 PR: #$PR_NUMBER"
         echo "📦 Version: $VERSION"
         echo "🔀 Merged: $MERGED"
-        echo "🏷️ Tag Created: $TAG_CREATED"
         
         if [ "$MERGED" = "true" ]; then
           MERGE_COMMIT="${{ steps.wait-merge.outputs.merge-commit }}"
           echo "📝 Merge Commit: $MERGE_COMMIT"
-          
-          if [ "$TAG_CREATED" = "true" ]; then
-            echo "✅ Release process completed successfully"
-          else
-            echo "⚠️ PR merged but tag creation failed"
-          fi
+          echo "✅ PR merge completed successfully - release workflow will be triggered"
         else
           echo "❌ PR merge failed or timed out"
         fi
