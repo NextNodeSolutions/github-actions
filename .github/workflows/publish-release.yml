@@ -94,6 +94,11 @@ jobs:
         id: validate
         run: |
           # Extract data from either repository_dispatch event OR workflow_call inputs
+          echo "🔍 Event details:"
+          echo "Event name: ${{ github.event_name }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Actor: ${{ github.actor }}"
+          
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             echo "🔄 Processing repository_dispatch event"
             VERSION="${{ github.event.client_payload.data.version }}"
@@ -111,7 +116,7 @@ jobs:
             
             echo "Triggered By: ${{ github.event.client_payload.data.triggered_by }}"
             echo "Source Repo: ${{ github.event.client_payload.data.repository }}"
-          else
+          elif [ "${{ github.event_name }}" = "workflow_call" ]; then
             echo "📞 Processing workflow_call"
             VERSION="${{ inputs.version }}"
             PR_NUMBER="${{ inputs.pr-number }}"
@@ -125,6 +130,16 @@ jobs:
             ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
             DRY_RUN="${{ inputs.dry-run }}"
             CREATE_GITHUB_RELEASE="${{ inputs.create-github-release }}"
+          else
+            echo "❌ Unsupported event type: ${{ github.event_name }}"
+            echo "This workflow only supports:"
+            echo "  - repository_dispatch (with 'version-merged' type)"
+            echo "  - workflow_call (for external project use)"
+            echo ""
+            echo "Received event: ${{ github.event_name }}"
+            echo "If this is a workflow_run event, it may be triggered by another workflow"
+            echo "but this workflow doesn't support workflow_run triggers."
+            exit 1
           fi
           
           # Validate required fields
