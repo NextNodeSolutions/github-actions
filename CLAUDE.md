@@ -13,43 +13,53 @@ This is a **reusable GitHub Actions repository** for NextNode projects. It provi
 ### Current Repository Structure
 ```
 github-actions/
-├── .github/workflows/          # Reusable workflows (external + internal)
-│   ├── quality-checks.yml     # Full quality pipeline (workflow_call)
-│   ├── deploy.yml             # Railway deployment (workflow_call)
-│   ├── dns.yml                # DNS Cloudflare management (workflow_call)
-│   └── internal-tests.yml     # Internal tests (workflow_dispatch only)
-├── actions/                    # Domain-organized atomic actions
-│   ├── build/                 # 🏗️ Build & Setup domain
-│   │   ├── install/           # Dependency installation
-│   │   ├── build-project/     # Project building
-│   │   └── smart-cache/       # Intelligent caching
-│   ├── quality/               # 🔍 Code Quality domain
-│   │   ├── lint/              # ESLint checks
-│   │   ├── typecheck/         # TypeScript validation
-│   │   └── security-audit/    # Security scanning
-│   ├── deploy/                # 🚀 Railway Deployment domain
-│   │   ├── railway-cli-setup/ # Railway CLI configuration
+├── .github/workflows/              # Reusable workflows (external + internal)
+│   ├── quality-checks.yml         # Full quality pipeline (workflow_call)
+│   ├── deploy.yml                 # Railway deployment (workflow_call)
+│   ├── release.yml                # NPM library release (workflow_call)
+│   ├── publish-release.yml        # Publish workflow with repository_dispatch
+│   ├── version-management.yml     # Automated versioning with changesets
+│   ├── security.yml               # Security scanning (workflow_call)
+│   ├── health-check.yml           # Health monitoring (workflow_call)
+│   └── [additional workflows]     # Lint, test, typecheck individual workflows
+├── actions/                        # Domain-organized atomic actions
+│   ├── build/                     # 🏗️ Build & Setup domain
+│   │   ├── install/               # Dependency installation
+│   │   ├── build-project/         # Project building
+│   │   └── smart-cache/           # Intelligent caching
+│   ├── quality/                   # 🔍 Code Quality domain
+│   │   ├── lint/                  # ESLint checks
+│   │   ├── typecheck/             # TypeScript validation
+│   │   └── security-audit/        # Security scanning
+│   ├── deploy/                    # 🚀 Railway Deployment domain
+│   │   ├── railway-cli-setup/     # Railway CLI configuration
 │   │   ├── railway-project-setup/ # Railway project management
 │   │   ├── railway-service-setup/ # Railway service configuration
-│   │   ├── railway-deploy/    # Main deployment action
+│   │   ├── railway-deploy/        # Main deployment action
 │   │   ├── railway-deploy-trigger/ # Deployment triggering
 │   │   ├── railway-deployment-wait/ # Deployment monitoring
-│   │   ├── railway-variables/ # Environment variables
-│   │   └── railway-url-generate/ # URL generation
-│   ├── domain/                # 🌐 Domain Management domain
-│   │   └── railway-domain-setup/ # Domain configuration
-│   ├── monitoring/            # 🔍 Monitoring domain
-│   │   └── check-job-results/ # Job result verification
-│   ├── utilities/             # 🛠️ Generic Utilities domain
-│   │   ├── log-step/          # Enhanced logging
-│   │   ├── run-command/       # Command wrapper
-│   │   ├── check-command/     # Command availability check
-│   │   ├── set-env-vars/      # Environment management
-│   │   └── should-run/        # Conditional logic
-│   ├── node-setup-complete/   # ✅ Global: Complete Node.js setup (used externally)
-│   ├── test/                  # ✅ Global: Test execution (used externally)
-│   └── health-check/          # ✅ Global: URL health monitoring (used externally)
-└── README.md                   # User documentation
+│   │   ├── railway-variables/     # Environment variables
+│   │   └── railway-url-generate/  # URL generation
+│   ├── release/                   # 📦 NPM Release Management domain
+│   │   ├── changesets-setup/      # Setup changesets for versioning
+│   │   ├── changesets-version/    # Create version PRs with changesets
+│   │   ├── changesets-publish/    # Publish packages with changesets
+│   │   ├── changesets-pr-merge/   # Auto-merge version PRs
+│   │   └── npm-provenance/        # NPM provenance attestation
+│   ├── domain/                    # 🌐 Domain Management domain
+│   │   └── railway-domain-setup/  # Domain configuration
+│   ├── monitoring/                # 🔍 Monitoring domain
+│   │   └── check-job-results/     # Job result verification
+│   ├── utilities/                 # 🛠️ Generic Utilities domain
+│   │   ├── log-step/              # Enhanced logging
+│   │   ├── run-command/           # Command wrapper
+│   │   ├── check-command/         # Command availability check
+│   │   ├── set-env-vars/          # Environment management
+│   │   └── should-run/            # Conditional logic
+│   ├── node-setup-complete/       # ✅ Global: Complete Node.js setup (used externally)
+│   ├── test/                      # ✅ Global: Test execution (used externally)
+│   └── health-check/              # ✅ Global: URL health monitoring (used externally)
+└── README.md                       # User documentation
 ```
 
 ### Design Principles
@@ -71,7 +81,8 @@ The actions are organized into logical domains to improve maintainability and di
 
 - **🏗️ build/**: Everything related to project setup, dependency installation, and building
 - **🔍 quality/**: Code quality checks including linting, type checking, and security
-- **🚀 deploy/**: Railway platform deployment and infrastructure management  
+- **🚀 deploy/**: Railway platform deployment and infrastructure management
+- **📦 release/**: NPM package release management with changesets and provenance
 - **🌐 domain/**: Domain and DNS management (separate from deployment)
 - **🔍 monitoring/**: Health checks and job result verification
 - **🛠️ utilities/**: Generic helper actions used across domains
@@ -83,10 +94,12 @@ The actions are organized into logical domains to improve maintainability and di
 
 External projects can call workflows in two ways:
 
-1. **Full pipelines** (workflow packs):
+1. **Full pipelines** (reusable workflows):
 ```yaml
 uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/release.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/version-management.yml@main
 ```
 
 2. **Individual actions**:
@@ -109,6 +122,9 @@ uses: nextnodesolutions/github-actions/actions/quality/typecheck@main
 
 # Deploy domain
 uses: nextnodesolutions/github-actions/actions/deploy/railway-deploy@main
+
+# Release domain
+uses: nextnodesolutions/github-actions/actions/release/changesets-publish@main
 ```
 
 ### For This Repository
@@ -150,8 +166,9 @@ touch actions/utilities/my-new-action/action.yml
 
 ### Domain Selection Guide
 - **build/**: Installation, building, caching (Node setup is now global)
-- **quality/**: Linting, type checking, testing, security audits  
+- **quality/**: Linting, type checking, testing, security audits
 - **deploy/**: Railway deployment and infrastructure
+- **release/**: NPM package release management, changesets, provenance
 - **domain/**: Domain and DNS management
 - **monitoring/**: Health checks, job verification
 - **utilities/**: Generic helpers and tools
@@ -172,8 +189,16 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: Domain Organization (2025)
-This repository was reorganized by domain for better maintainability:
+### Latest Migration: Release Management Integration (2025)
+Added comprehensive NPM release management capabilities:
+- **Added**: New `release/` domain with changesets integration
+- **Added**: Complete release workflows (`release.yml`, `publish-release.yml`, `version-management.yml`)
+- **Enhanced**: Automated versioning with PR creation and auto-merge
+- **Added**: NPM provenance attestation for enhanced security
+- **Integrated**: Repository dispatch events for cross-repo release coordination
+
+### Previous Migration: Domain Organization (2025)
+Reorganized repository by domain for better maintainability:
 - **Organized**: Actions grouped into logical domains (`build/`, `quality/`, `deploy/`, etc.)
 - **Preserved**: Global actions `test/` and `health-check/` at root for external compatibility
 - **Separated**: Deploy vs Domain management (Railway deployment vs DNS/domain setup)

@@ -6,39 +6,56 @@
 
 ```
 github-actions/
-├── .github/workflows/  # Reusable workflows (external + internal)
-├── actions/           # Atomic reusable actions
+├── .github/workflows/          # Reusable workflows (external + internal)
+│   ├── quality-checks.yml     # Full quality pipeline (workflow_call)
+│   ├── deploy.yml             # Railway deployment (workflow_call)
+│   ├── release.yml            # NPM library release (workflow_call) 
+│   ├── publish-release.yml    # Publish workflow with repository_dispatch
+│   ├── version-management.yml # Automated versioning with changesets
+│   └── [additional workflows] # Security, health checks, etc.
+├── actions/                    # Domain-organized atomic actions
+│   ├── build/                 # 🏗️ Build & Setup domain
+│   ├── quality/               # 🔍 Code Quality domain
+│   ├── deploy/                # 🚀 Railway Deployment domain
+│   ├── release/               # 📦 NPM Release Management domain
+│   ├── domain/                # 🌐 Domain Management domain
+│   ├── monitoring/            # 🔍 Monitoring domain
+│   ├── utilities/             # 🛠️ Generic Utilities domain
+│   ├── node-setup-complete/   # ✅ Global: Complete Node.js setup
+│   ├── test/                  # ✅ Global: Test execution
+│   └── health-check/          # ✅ Global: URL health monitoring
 ```
 
 ## 🚀 Quick Start
 
-### Using Atomic Actions
+### Using Global Actions
 
-Atomic actions are small, focused, reusable components that perform a single task.
+Global actions are available at the root level for external projects.
 
 ```yaml
-# In your workflow file
+# Complete Node.js and pnpm setup with caching
 - name: Setup Node.js and pnpm
-  uses: nextnodesolutions/github-actions/actions/atomic/setup-node-pnpm@main
+  uses: nextnodesolutions/github-actions/actions/node-setup-complete@main
   with:
     node-version: '20'
     pnpm-version: '10.12.4'
     
-- name: Install Dependencies
-  uses: nextnodesolutions/github-actions/actions/atomic/install@main
-  with:
-    frozen-lockfile: true
-    
 - name: Run Tests
-  uses: nextnodesolutions/github-actions/actions/atomic/test@main
+  uses: nextnodesolutions/github-actions/actions/test@main
   with:
     coverage: true
     coverage-threshold: '80'
+    
+- name: Health Check
+  uses: nextnodesolutions/github-actions/actions/health-check@main
+  with:
+    url: 'https://my-app.railway.app'
+    max-attempts: 5
 ```
 
-### Using Workflow Packs
+### Using Reusable Workflows
 
-Workflow packs combine multiple atomic actions into complete workflows.
+Reusable workflows provide complete CI/CD pipelines.
 
 ```yaml
 # Quality checks workflow
@@ -48,7 +65,7 @@ on: [push, pull_request]
 
 jobs:
   quality:
-    uses: nextnodesolutions/github-actions/packs/quality-checks.yml@main
+    uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
     with:
       node-version: '20'
       test-coverage: true
@@ -56,7 +73,7 @@ jobs:
 ```
 
 ```yaml
-# Deployment workflow
+# Railway deployment workflow
 name: Deploy
 
 on:
@@ -65,7 +82,7 @@ on:
 
 jobs:
   deploy:
-    uses: nextnodesolutions/github-actions/packs/deploy-railway.yml@main
+    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
     with:
       environment: production
       app-name: my-app
@@ -73,34 +90,77 @@ jobs:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
 ```
 
-## 📦 Available Atomic Actions
+```yaml
+# NPM library release workflow
+name: Release
 
-### Core Actions
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: nextnodesolutions/github-actions/.github/workflows/release.yml@main
+    with:
+      run-quality-checks: true
+      enable-provenance: true
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## 📦 Available Actions
+
+### Global Actions (External Use)
 
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
-| `setup-node-pnpm` | Setup Node.js and pnpm with caching | `node-version`, `pnpm-version` |
-| `install` | Install dependencies with pnpm | `frozen-lockfile`, `working-directory` |
-| `lint` | Run ESLint with optional auto-fix | `fix`, `fail-on-warning` |
-| `typecheck` | Run TypeScript type checking | `strict`, `tsconfig-path` |
-| `test` | Run tests with optional coverage | `coverage`, `coverage-threshold` |
-| `build` | Build project with pnpm | `build-command`, `output-directory` |
-| `security-audit` | Run security audit | `audit-level`, `fix` |
-
-### Utility Actions
-
-| Action | Description | Key Inputs |
-|--------|-------------|------------|
+| `node-setup-complete` | Complete Node.js and pnpm setup with caching | `node-version`, `pnpm-version` |
+| `test` | Run tests with optional coverage | `coverage`, `coverage-threshold`, `test-script` |
 | `health-check` | Check URL health status | `url`, `max-attempts`, `expected-status` |
-| `log-step` | Enhanced logging with groups | `title`, `message`, `level` |
-| `set-env-vars` | Set environment variables | `variables`, `prefix` |
-| `run-command` | Run shell commands | `command`, `working-directory` |
-| `check-command` | Check if command exists | `command`, `fail-if-missing` |
 
-## 🔧 Available Workflow Packs
+### Domain Actions (Internal Use)
 
-### Quality Checks Pack
-**File:** `packs/quality-checks.yml`
+#### 🏗️ Build Domain
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `build/install` | Install dependencies with pnpm | `frozen-lockfile`, `working-directory` |
+| `build/build-project` | Build project with pnpm | `build-command`, `output-directory` |
+| `build/smart-cache` | Intelligent dependency caching | `cache-key`, `restore-keys` |
+
+#### 🔍 Quality Domain
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `quality/lint` | Run ESLint with optional auto-fix | `fix`, `fail-on-warning` |
+| `quality/typecheck` | Run TypeScript type checking | `strict`, `tsconfig-path` |
+| `quality/security-audit` | Run security audit | `audit-level`, `fix` |
+
+#### 🚀 Deploy Domain
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `deploy/railway-deploy` | Deploy to Railway platform | `service-name`, `environment` |
+| `deploy/railway-cli-setup` | Setup Railway CLI | `token`, `version` |
+| `deploy/railway-variables` | Set Railway environment variables | `variables`, `service-name` |
+
+#### 📦 Release Domain
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `release/changesets-setup` | Setup changesets for versioning | `version`, `working-directory` |
+| `release/changesets-version` | Create version PR with changesets | `version-script`, `commit-message` |
+| `release/changesets-publish` | Publish packages with changesets | `publish-script`, `registry-url` |
+| `release/npm-provenance` | Setup NPM provenance attestation | `token`, `package-name` |
+
+#### 🛠️ Utility Actions
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `utilities/log-step` | Enhanced logging with groups | `title`, `message`, `level` |
+| `utilities/set-env-vars` | Set environment variables | `variables`, `prefix` |
+| `utilities/run-command` | Run shell commands | `command`, `working-directory` |
+| `utilities/check-command` | Check if command exists | `command`, `fail-if-missing` |
+
+## 🔧 Available Reusable Workflows
+
+### Quality Checks Workflow
+**File:** `.github/workflows/quality-checks.yml`
 
 Complete quality assurance workflow including:
 - Linting
@@ -113,7 +173,7 @@ Complete quality assurance workflow including:
 ```yaml
 jobs:
   quality:
-    uses: nextnodesolutions/github-actions/packs/quality-checks.yml@main
+    uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
     with:
       run-lint: true
       run-typecheck: true
@@ -124,10 +184,10 @@ jobs:
       coverage-threshold: '80'
 ```
 
-### Railway Deployment Pack
-**File:** `packs/deploy-railway.yml`
+### Railway Deployment Workflow
+**File:** `.github/workflows/deploy.yml`
 
-Unified deployment workflow for Railway supporting both development and production environments.
+Unified deployment workflow for Railway supporting multiple environments.
 
 **Features:**
 - Environment-based configuration
@@ -139,7 +199,7 @@ Unified deployment workflow for Railway supporting both development and producti
 ```yaml
 jobs:
   deploy:
-    uses: nextnodesolutions/github-actions/packs/deploy-railway.yml@main
+    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
     with:
       environment: production
       app-name: nextnode-app
@@ -148,6 +208,54 @@ jobs:
       test-coverage: true
     secrets:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+### NPM Release Workflow
+**File:** `.github/workflows/release.yml`
+
+Complete NPM library release workflow with changesets.
+
+**Features:**
+- Automated versioning with changesets
+- Quality checks before release
+- NPM provenance attestation
+- Security best practices
+
+**Example:**
+```yaml
+jobs:
+  release:
+    uses: nextnodesolutions/github-actions/.github/workflows/release.yml@main
+    with:
+      run-quality-checks: true
+      enable-provenance: true
+      publish-script: 'changeset:publish'
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Version Management Workflow
+**File:** `.github/workflows/version-management.yml`
+
+Automated version management with PR creation and auto-merge.
+
+**Features:**
+- Creates version PRs with changesets
+- Auto-merges version PRs
+- Triggers release workflow via repository_dispatch
+- Configurable merge strategies
+
+**Example:**
+```yaml
+jobs:
+  version:
+    uses: nextnodesolutions/github-actions/.github/workflows/version-management.yml@main
+    with:
+      auto-merge: true
+      version-script: 'changeset:version'
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## ⚙️ Configuration
@@ -176,13 +284,16 @@ The deployment workflow automatically adjusts settings based on environment:
 
 ## 🧪 Testing
 
-Internal testing workflows are located in the `internal/` directory and are not accessible from external repositories.
+Internal testing is handled by the repository's own workflows.
 
-To test the actions locally:
+To test workflows locally:
 
 ```bash
-# Run internal tests (only from this repository)
-gh workflow run internal/test-workflows.yml
+# Test using act (GitHub Actions local runner)
+act workflow_dispatch -W .github/workflows/quality-checks.yml
+
+# Run specific workflow
+gh workflow run quality-checks.yml
 ```
 
 ## 📋 Requirements
@@ -220,24 +331,30 @@ All workflows now use pnpm exclusively. Update your projects:
 
 ### From Old Workflow Structure
 
-Replace individual job workflows with atomic actions:
+Update to use domain-organized actions and reusable workflows:
 
 ```yaml
-# Old
-- uses: nextnodesolutions/github-actions/.github/workflows/job-lint.yml@main
-
-# New
+# Old atomic actions (removed)
 - uses: nextnodesolutions/github-actions/actions/atomic/lint@main
+
+# New domain-organized actions
+- uses: nextnodesolutions/github-actions/actions/quality/lint@main
+
+# Or use complete workflows
+- uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
 ```
 
 ## 📚 Best Practices
 
-1. **Use Atomic Actions:** Build workflows from small, reusable pieces
-2. **Enable Caching:** Always use cache for dependencies
-3. **Set Appropriate Timeouts:** Prevent hung workflows
-4. **Use Groups for Logging:** Improve readability with `::group::`
-5. **Fail Fast:** Exit early on errors
-6. **Document Inputs:** Provide clear descriptions for all inputs
+1. **Use Reusable Workflows:** Prefer complete workflows for common patterns
+2. **Domain Organization:** Use domain-specific actions when building custom workflows
+3. **Global Actions:** Use root-level actions for external projects
+4. **Enable Caching:** Always enabled in `node-setup-complete` action
+5. **Set Appropriate Timeouts:** Prevent hung workflows
+6. **Use Groups for Logging:** All actions include grouped logging
+7. **Fail Fast:** Exit early on errors
+8. **Security First:** Use provenance attestation for NPM packages
+9. **Automated Versioning:** Use changesets for semantic releases
 
 ## 🐛 Troubleshooting
 

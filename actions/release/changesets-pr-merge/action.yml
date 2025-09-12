@@ -52,11 +52,10 @@ runs:
         while [ $ELAPSED -lt $TIMEOUT_SECONDS ]; do
           # Check PR status
           PR_STATE=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json state -q .state)
-          PR_MERGED=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json merged -q .merged)
           
-          echo "📊 PR State: $PR_STATE | Merged: $PR_MERGED | Elapsed: ${ELAPSED}s"
+          echo "📊 PR State: $PR_STATE | Elapsed: ${ELAPSED}s"
           
-          if [ "$PR_MERGED" = "true" ]; then
+          if [ "$PR_STATE" = "MERGED" ]; then
             echo "✅ PR #$PR_NUMBER has been merged!"
             
             # Get merge commit SHA and branch name
