@@ -111,7 +111,7 @@ uses: nextnodesolutions/github-actions/actions/test@main
 uses: nextnodesolutions/github-actions/actions/health-check@main
 ```
 
-**Domain-specific actions (internal use only):**
+**Domain-specific actions (NextNode internal projects only - not external):**
 ```yaml
 # Build domain
 uses: nextnodesolutions/github-actions/actions/build/install@main
@@ -150,9 +150,22 @@ Internal testing uses `internal-tests.yml` with manual trigger only to avoid rec
 4. Use atomic actions from `/actions/` - don't duplicate logic
 
 ### Testing Changes
-1. Use `internal-tests.yml` for testing within this repo
-2. Test with `workflow_dispatch` event
-3. Never commit test workflows that trigger on push
+1. **Always use act for local testing** before finishing a branch
+2. Use `internal-tests.yml` for testing within this repo
+3. Test with `workflow_dispatch` event
+4. Never commit test workflows that trigger on push
+
+**Required local testing workflow:**
+```bash
+# Install act if not already installed
+brew install act
+
+# Test workflow locally before push
+act workflow_dispatch -W .github/workflows/internal-tests.yml
+
+# Test specific action changes
+act -j test-action --use-actions-cache false
+```
 
 ## Common Tasks
 
@@ -189,7 +202,15 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: Release Management Integration (2025)
+### Latest Migration: Changesets Publish Action Refactor (2025)
+Simplified and fixed the changesets publish action:
+- **Fixed**: "Invalid format '[]'" error by removing problematic JSON package parsing
+- **Simplified**: Reduced complex nested conditionals from 50+ lines to clean 25 lines
+- **Improved**: Direct command execution with `if OUTPUT=$(...)`  instead of exit code capture
+- **Removed**: Unnecessary `packages` output that caused GitHub Actions format errors
+- **Enhanced**: More reliable changesets output detection with "packages published successfully"
+
+### Previous Migration: Release Management Integration (2025)
 Added comprehensive NPM release management capabilities:
 - **Added**: New `release/` domain with changesets integration
 - **Added**: Complete release workflows (`release.yml`, `publish-release.yml`, `version-management.yml`)

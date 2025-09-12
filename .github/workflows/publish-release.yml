@@ -74,11 +74,6 @@ on:
   repository_dispatch:
     types: [version-merged]
     
-  workflow_run:
-    workflows: ["Version Management"]
-    types: [completed]
-    branches: [main]
-    
   workflow_dispatch:
     inputs:
       dry-run:
@@ -101,10 +96,17 @@ jobs:
       version: ${{ steps.validate.outputs.version }}
       pr-number: ${{ steps.validate.outputs.pr-number }}
       merge-commit-sha: ${{ steps.validate.outputs.merge-commit-sha }}
+      node-version: ${{ steps.validate.outputs.node-version }}
+      pnpm-version: ${{ steps.validate.outputs.pnpm-version }}
+      publish-script: ${{ steps.validate.outputs.publish-script }}
+      build-script: ${{ steps.validate.outputs.build-script }}
+      enable-provenance: ${{ steps.validate.outputs.enable-provenance }}
+      dry-run: ${{ steps.validate.outputs.dry-run }}
+      create-github-release: ${{ steps.validate.outputs.create-github-release }}
       
     steps:
       - name: Checkout Repository
-        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -115,7 +117,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          # Extract data from repository_dispatch, workflow_call, workflow_run, or workflow_dispatch
+          # Extract data from repository_dispatch, workflow_call, or workflow_dispatch
           echo "🔍 Event details:"
           echo "Event name: ${{ github.event_name }}"
           echo "Repository: ${{ github.repository }}"
@@ -152,8 +154,8 @@ jobs:
             ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
             DRY_RUN="${{ inputs.dry-run }}"
             CREATE_GITHUB_RELEASE="${{ inputs.create-github-release }}"
-          elif [ "${{ github.event_name }}" = "workflow_run" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "🔄 Processing ${{ github.event_name }} - Auto-detecting release data"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "🔄 Processing workflow_dispatch - Auto-detecting release data"
             
             # Ensure we're on main branch for data extraction
             git checkout main 2>/dev/null || {
@@ -186,20 +188,19 @@ jobs:
             echo "✅ Found changeset PR: #$PR_NUMBER"
             echo "✅ Merge commit: $MERGE_SHA"
             
-            # Default configuration for auto-detected workflows
-            NODE_VERSION="20"
-            PNPM_VERSION="10.12.4"
-            PUBLISH_SCRIPT="changeset:publish"
-            BUILD_SCRIPT="build"
-            ENABLE_PROVENANCE="true"
-            DRY_RUN="${{ inputs.dry-run || 'false' }}"
-            CREATE_GITHUB_RELEASE="true"
+            # Configuration from inputs with their defaults
+            NODE_VERSION="${{ inputs.node-version }}"
+            PNPM_VERSION="${{ inputs.pnpm-version }}"
+            PUBLISH_SCRIPT="${{ inputs.publish-script }}"
+            BUILD_SCRIPT="${{ inputs.build-script }}"
+            ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
+            DRY_RUN="${{ inputs.dry-run }}"
+            CREATE_GITHUB_RELEASE="${{ inputs.create-github-release }}"
           else
             echo "❌ Unsupported event type: ${{ github.event_name }}"
             echo "This workflow supports:"
             echo "  - repository_dispatch (with 'version-merged' type)"
             echo "  - workflow_call (for external project use)"
-            echo "  - workflow_run (auto-detect from Version Management workflow)"
             echo "  - workflow_dispatch (manual trigger with auto-detection)"
             echo ""
             echo "Received event: ${{ github.event_name }}"
@@ -334,13 +335,6 @@ jobs:
           echo "📦 Building package with script: ${{ inputs.build-script }}"
           pnpm run ${{ needs.validate-event.outputs.build-script }}
 
-      - name: Configure NPM Provenance
-        if: needs.validate-event.outputs.enable-provenance == 'true'
-        uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
-        with:
-          npm-token: ${{ secrets.NPM_TOKEN }}
-          verify-attestation: false
-
       - name: Publish to NPM
         id: publish
         uses: NextNodeSolutions/github-actions/actions/release/changesets-publish@main
@@ -441,11 +435,12 @@ jobs:
         run: |
           TAG_NAME="${{ needs.tag.outputs.tag-name }}"
           
-          RELEASE_URL=$(gh release create "$TAG_NAME" \
+          gh release create "$TAG_NAME" \
             --title "$TAG_NAME" \
             --notes-file release-notes.md \
-            --latest \
-            --json url --jq '.url')
+            --latest
+          
+          RELEASE_URL=$(gh release view "$TAG_NAME" --json url --jq '.url')
           
           echo "✅ Created GitHub Release: $TAG_NAME"
           echo "🔗 Release URL: $RELEASE_URL"
@@ -453,33 +448,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-  verify:
-    name: Post-Publish Verification
-    needs: [validate-event, publish]
-    if: needs.publish.outputs.published == 'true' && needs.validate-event.outputs.enable-provenance == 'true' && needs.validate-event.outputs.dry-run == 'false'
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
-
-      - name: Setup Environment
-        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
-        with:
-          node-version: ${{ needs.validate-event.outputs.node-version }}
-          pnpm-version: ${{ needs.validate-event.outputs.pnpm-version }}
-
-      - name: Verify NPM Provenance
-        uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
-        with:
-          npm-token: ${{ secrets.NPM_TOKEN }}
-          verify-attestation: true
-
   summary:
     name: Release Summary
-    needs: [validate-event, tag, publish, github-release, verify]
+    needs: [validate-event, tag, publish, github-release]
     if: always()
     runs-on: ubuntu-latest
     

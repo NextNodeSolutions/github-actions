@@ -25,9 +25,6 @@ outputs:
   published:
     description: 'Whether packages were published'
     value: ${{ steps.publish.outputs.published }}
-  packages:
-    description: 'List of published packages (JSON array)'
-    value: ${{ steps.publish.outputs.packages }}
   success:
     description: 'Whether publish operation was successful'
     value: ${{ steps.publish.outputs.success }}
@@ -40,15 +37,13 @@ runs:
       run: |
         echo "::group::🔐 Pre-publish security checks"
         
-        # Verify NPM authentication
-        if ! npm whoami >/dev/null 2>&1; then
-          echo "❌ NPM authentication failed"
-          echo "Please check NPM_TOKEN"
+        # Verify NPM_TOKEN is provided
+        if [[ -z "${{ inputs.npm-token }}" ]]; then
+          echo "❌ NPM_TOKEN is required but not provided"
           exit 1
         fi
         
-        NPM_USER=$(npm whoami)
-        echo "✅ Authenticated as: $NPM_USER"
+        echo "✅ NPM_TOKEN provided"
         
         # Check package.json for security
         if [[ -f "package.json" ]]; then
@@ -103,51 +98,33 @@ runs:
       run: |
         echo "::group::🚀 Publishing to NPM"
         
-        # Prepare publish command options
-        PUBLISH_OPTIONS=""
+        # Build command with options
+        PUBLISH_CMD="pnpm run ${{ inputs.publish-script }}"
+        [[ "${{ inputs.dry-run }}" == "true" ]] && PUBLISH_CMD="$PUBLISH_CMD --dry-run"
+        [[ "${{ inputs.provenance }}" == "true" ]] && PUBLISH_CMD="$PUBLISH_CMD --provenance"
         
-        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
-          echo "🧪 Running in dry-run mode"
-          PUBLISH_OPTIONS="$PUBLISH_OPTIONS --dry-run"
-        fi
+        echo "🔄 Running: $PUBLISH_CMD"
         
-        if [[ "${{ inputs.provenance }}" == "true" ]]; then
-          echo "🔐 NPM provenance enabled"
-          PUBLISH_OPTIONS="$PUBLISH_OPTIONS --provenance"
-        fi
-        
-        # Run publish command
-        echo "🔄 Running: pnpm run ${{ inputs.publish-script }} $PUBLISH_OPTIONS"
-        
-        set +e  # Don't exit on error, we want to capture output
-        OUTPUT=$(pnpm run ${{ inputs.publish-script }} $PUBLISH_OPTIONS 2>&1)
-        EXIT_CODE=$?
-        set -e
-        
-        echo "$OUTPUT"
-        
-        if [[ $EXIT_CODE -eq 0 ]]; then
+        # Execute and capture result
+        if OUTPUT=$($PUBLISH_CMD 2>&1); then
+          echo "$OUTPUT"
           echo "✅ Publish command completed successfully"
           echo "success=true" >> $GITHUB_OUTPUT
           
-          # Try to extract published packages from output
-          PUBLISHED_PACKAGES=$(echo "$OUTPUT" | grep -E "npm notice|Published" | head -10 | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
-          echo "packages=$PUBLISHED_PACKAGES" >> $GITHUB_OUTPUT
-          
-          # Check if anything was actually published
-          if echo "$OUTPUT" | grep -q "npm notice"; then
+          # Check if changesets actually published something
+          if echo "$OUTPUT" | grep -q "packages published successfully"; then
             echo "published=true" >> $GITHUB_OUTPUT
           else
             echo "published=false" >> $GITHUB_OUTPUT
             echo "ℹ️  No new versions to publish"
           fi
         else
-          echo "❌ Publish command failed with exit code $EXIT_CODE"
+          echo "$OUTPUT"
+          echo "❌ Publish command failed"
           echo "success=false" >> $GITHUB_OUTPUT
           echo "published=false" >> $GITHUB_OUTPUT
-          echo "packages=[]" >> $GITHUB_OUTPUT
           
-          # In case of failure, provide helpful error context
+          # Provide helpful error context
           if echo "$OUTPUT" | grep -q "ENOTFOUND"; then
             echo "💡 Network error - check NPM registry connectivity"
           elif echo "$OUTPUT" | grep -q "E401\|E403"; then
@@ -156,7 +133,7 @@ runs:
             echo "💡 Version conflict - version may already exist"
           fi
           
-          exit $EXIT_CODE
+          exit 1
         fi
         
         echo "::endgroup::"
