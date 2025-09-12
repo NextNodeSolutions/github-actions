@@ -171,9 +171,9 @@ jobs:
             
             # Find the corresponding changeset PR
             echo "🔍 Looking for PR with title: v$VERSION"
-            PR_DATA=$(gh pr list --repo ${{ github.repository }} --state merged --limit 20 --json number,title,mergeCommit --jq ".[] | select(.title == \"v$VERSION\")")
+            PR_DATA=$(gh pr list --repo ${{ github.repository }} --state merged --limit 20 --json number,title,mergeCommit --jq "[.[] | select(.title == \"v$VERSION\")] | first")
             
-            if [ -z "$PR_DATA" ]; then
+            if [ -z "$PR_DATA" ] || [ "$PR_DATA" = "null" ]; then
               echo "❌ No merged PR found with title 'v$VERSION'"
               echo "Available recent PRs:"
               gh pr list --repo ${{ github.repository }} --state merged --limit 10 --json number,title --jq '.[] | "  #\(.number): \(.title)"'
