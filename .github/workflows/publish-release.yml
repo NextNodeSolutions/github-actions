@@ -73,9 +73,22 @@ on:
 
   repository_dispatch:
     types: [version-merged]
+    
+  workflow_run:
+    workflows: ["Version Management"]
+    types: [completed]
+    branches: [main]
+    
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Run in dry-run mode'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
-  group: publish-${{ github.event.client_payload.data.version || inputs.version }}
+  group: publish-${{ github.event.client_payload.data.version || inputs.version || 'auto' }}
   cancel-in-progress: false
 
 # Note: This workflow expects to receive event data via github.event.client_payload.data
@@ -90,10 +103,19 @@ jobs:
       merge-commit-sha: ${{ steps.validate.outputs.merge-commit-sha }}
       
     steps:
+      - name: Checkout Repository
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+          
       - name: Validate Event Data
         id: validate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          # Extract data from either repository_dispatch event OR workflow_call inputs
+          # Extract data from repository_dispatch, workflow_call, workflow_run, or workflow_dispatch
           echo "🔍 Event details:"
           echo "Event name: ${{ github.event_name }}"
           echo "Repository: ${{ github.repository }}"
@@ -130,15 +152,57 @@ jobs:
             ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
             DRY_RUN="${{ inputs.dry-run }}"
             CREATE_GITHUB_RELEASE="${{ inputs.create-github-release }}"
+          elif [ "${{ github.event_name }}" = "workflow_run" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "🔄 Processing ${{ github.event_name }} - Auto-detecting release data"
+            
+            # Ensure we're on main branch for data extraction
+            git checkout main 2>/dev/null || {
+              echo "⚠️ Not on main branch, staying on current branch"
+            }
+            
+            # Auto-detect version from package.json
+            if [ ! -f "package.json" ]; then
+              echo "❌ No package.json found - cannot auto-detect version"
+              exit 1
+            fi
+            
+            VERSION=$(node -p "require('./package.json').version")
+            echo "📦 Auto-detected version: $VERSION"
+            
+            # Find the corresponding changeset PR
+            echo "🔍 Looking for PR with title: v$VERSION"
+            PR_DATA=$(gh pr list --repo ${{ github.repository }} --state merged --limit 20 --json number,title,mergeCommit --jq ".[] | select(.title == \"v$VERSION\")")
+            
+            if [ -z "$PR_DATA" ]; then
+              echo "❌ No merged PR found with title 'v$VERSION'"
+              echo "Available recent PRs:"
+              gh pr list --repo ${{ github.repository }} --state merged --limit 10 --json number,title --jq '.[] | "  #\(.number): \(.title)"'
+              exit 1
+            fi
+            
+            PR_NUMBER=$(echo "$PR_DATA" | jq -r '.number')
+            MERGE_SHA=$(echo "$PR_DATA" | jq -r '.mergeCommit.oid')
+            
+            echo "✅ Found changeset PR: #$PR_NUMBER"
+            echo "✅ Merge commit: $MERGE_SHA"
+            
+            # Default configuration for auto-detected workflows
+            NODE_VERSION="20"
+            PNPM_VERSION="10.12.4"
+            PUBLISH_SCRIPT="changeset:publish"
+            BUILD_SCRIPT="build"
+            ENABLE_PROVENANCE="true"
+            DRY_RUN="${{ inputs.dry-run || 'false' }}"
+            CREATE_GITHUB_RELEASE="true"
           else
             echo "❌ Unsupported event type: ${{ github.event_name }}"
-            echo "This workflow only supports:"
+            echo "This workflow supports:"
             echo "  - repository_dispatch (with 'version-merged' type)"
             echo "  - workflow_call (for external project use)"
+            echo "  - workflow_run (auto-detect from Version Management workflow)"
+            echo "  - workflow_dispatch (manual trigger with auto-detection)"
             echo ""
             echo "Received event: ${{ github.event_name }}"
-            echo "If this is a workflow_run event, it may be triggered by another workflow"
-            echo "but this workflow doesn't support workflow_run triggers."
             exit 1
           fi
           
