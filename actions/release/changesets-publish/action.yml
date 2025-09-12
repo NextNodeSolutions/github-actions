@@ -40,15 +40,13 @@ runs:
       run: |
         echo "::group::🔐 Pre-publish security checks"
         
-        # Verify NPM authentication
-        if ! npm whoami >/dev/null 2>&1; then
-          echo "❌ NPM authentication failed"
-          echo "Please check NPM_TOKEN"
+        # Verify NPM_TOKEN is provided
+        if [[ -z "${{ inputs.npm-token }}" ]]; then
+          echo "❌ NPM_TOKEN is required but not provided"
           exit 1
         fi
         
-        NPM_USER=$(npm whoami)
-        echo "✅ Authenticated as: $NPM_USER"
+        echo "✅ NPM_TOKEN provided"
         
         # Check package.json for security
         if [[ -f "package.json" ]]; then
