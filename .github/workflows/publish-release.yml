@@ -6,16 +6,6 @@ name: Publish Release
 on:
   workflow_call:
     inputs:
-      node-version:
-        description: 'Node.js version'
-        required: false
-        default: '20'
-        type: string
-      pnpm-version:
-        description: 'pnpm version'
-        required: false
-        default: '10.12.4'
-        type: string
       publish-script:
         description: 'Script for publishing (changeset:publish)'
         required: false
@@ -96,8 +86,6 @@ jobs:
       version: ${{ steps.validate.outputs.version }}
       pr-number: ${{ steps.validate.outputs.pr-number }}
       merge-commit-sha: ${{ steps.validate.outputs.merge-commit-sha }}
-      node-version: ${{ steps.validate.outputs.node-version }}
-      pnpm-version: ${{ steps.validate.outputs.pnpm-version }}
       publish-script: ${{ steps.validate.outputs.publish-script }}
       build-script: ${{ steps.validate.outputs.build-script }}
       enable-provenance: ${{ steps.validate.outputs.enable-provenance }}
@@ -130,8 +118,6 @@ jobs:
             MERGE_SHA="${{ github.event.client_payload.data.merge_commit_sha }}"
             
             # Configuration from event or defaults
-            NODE_VERSION="${{ github.event.client_payload.data.node_version || '20' }}"
-            PNPM_VERSION="${{ github.event.client_payload.data.pnpm_version || '10.12.4' }}"
             PUBLISH_SCRIPT="${{ github.event.client_payload.data.publish_script || 'changeset:publish' }}"
             BUILD_SCRIPT="${{ github.event.client_payload.data.build_script || 'build' }}"
             ENABLE_PROVENANCE="${{ github.event.client_payload.data.enable_provenance || 'true' }}"
@@ -147,8 +133,6 @@ jobs:
             MERGE_SHA="${{ inputs.merge-commit-sha }}"
             
             # Configuration from inputs
-            NODE_VERSION="${{ inputs.node-version }}"
-            PNPM_VERSION="${{ inputs.pnpm-version }}"
             PUBLISH_SCRIPT="${{ inputs.publish-script }}"
             BUILD_SCRIPT="${{ inputs.build-script }}"
             ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
@@ -189,8 +173,6 @@ jobs:
             echo "✅ Merge commit: $MERGE_SHA"
             
             # Configuration from inputs with their defaults
-            NODE_VERSION="${{ inputs.node-version }}"
-            PNPM_VERSION="${{ inputs.pnpm-version }}"
             PUBLISH_SCRIPT="${{ inputs.publish-script }}"
             BUILD_SCRIPT="${{ inputs.build-script }}"
             ENABLE_PROVENANCE="${{ inputs.enable-provenance }}"
@@ -238,8 +220,6 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "merge-commit-sha=$MERGE_SHA" >> $GITHUB_OUTPUT
-          echo "node-version=$NODE_VERSION" >> $GITHUB_OUTPUT
-          echo "pnpm-version=$PNPM_VERSION" >> $GITHUB_OUTPUT
           echo "publish-script=$PUBLISH_SCRIPT" >> $GITHUB_OUTPUT
           echo "build-script=$BUILD_SCRIPT" >> $GITHUB_OUTPUT
           echo "enable-provenance=$ENABLE_PROVENANCE" >> $GITHUB_OUTPUT
@@ -252,8 +232,6 @@ jobs:
           echo "Version: $VERSION"
           echo "PR Number: $PR_NUMBER" 
           echo "Merge Commit: $MERGE_SHA"
-          echo "Node Version: $NODE_VERSION"
-          echo "pnpm Version: $PNPM_VERSION"
 
   tag:
     name: Create Git Tag
@@ -327,8 +305,6 @@ jobs:
       - name: Setup Release Environment
         uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
         with:
-          node-version: ${{ needs.validate-event.outputs.node-version }}
-          pnpm-version: ${{ needs.validate-event.outputs.pnpm-version }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ github.token }}
 

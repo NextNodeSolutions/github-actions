@@ -6,17 +6,6 @@ name: Release Library
 on:
   workflow_call:
     inputs:
-      node-version:
-        description: 'Node.js version'
-        required: false
-        default: '20'
-        type: string
-      pnpm-version:
-        description: 'pnpm version'
-        required: false
-        default: '10.12.4'
-        type: string
-        
       # Quality checks configuration
       run-quality-checks:
         description: 'Run quality checks before release'
@@ -98,8 +87,6 @@ jobs:
     if: inputs.run-quality-checks
     uses: NextNodeSolutions/github-actions/.github/workflows/quality-checks.yml@main
     with:
-      node-version: ${{ inputs.node-version }}
-      pnpm-version: ${{ inputs.pnpm-version }}
       run-lint: ${{ inputs.run-lint }}
       run-typecheck: ${{ inputs.run-typecheck }}
       run-tests: ${{ inputs.run-tests }}
@@ -129,8 +116,6 @@ jobs:
       - name: Setup Release Environment
         uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -161,8 +146,6 @@ jobs:
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
 
       - name: Merge PR and Create Tag
         id: merge
@@ -192,8 +175,6 @@ jobs:
       - name: Setup Release Environment
         uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.CHANGESET_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -237,8 +218,6 @@ jobs:
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
 
       - name: Verify NPM Provenance
         uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main

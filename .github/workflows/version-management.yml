@@ -6,16 +6,6 @@ name: Version Management
 on:
   workflow_call:
     inputs:
-      node-version:
-        description: 'Node.js version'
-        required: false
-        default: '20'
-        type: string
-      pnpm-version:
-        description: 'pnpm version'
-        required: false
-        default: '10.12.4'
-        type: string
       version-script:
         description: 'Script for versioning (changeset:version)'
         required: false
@@ -66,9 +56,6 @@ jobs:
       
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
-        with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
       
       - name: Check for Changesets
         id: changesets
@@ -101,9 +88,6 @@ jobs:
       
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
-        with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
       
       - name: Configure Git
         run: |

@@ -11,16 +11,6 @@ on:
         required: false
         default: '.'
         type: string
-      node-version:
-        description: 'Node.js version'
-        required: false
-        default: '20'
-        type: string
-      pnpm-version:
-        description: 'pnpm version'
-        required: false
-        default: '10.12.4'
-        type: string
       coverage:
         description: 'Enable test coverage'
         required: false
@@ -54,8 +44,6 @@ jobs:
     steps:
       - uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
         with:
-          node-version: ${{ inputs.node-version }}
-          pnpm-version: ${{ inputs.pnpm-version }}
           working-directory: ${{ inputs.working-directory }}
           
       - id: test

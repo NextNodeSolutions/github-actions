@@ -3,14 +3,6 @@ description: 'Complete setup for Node.js projects including checkout, pnpm setup
 author: 'NextNodeSolutions'
 
 inputs:
-  node-version:
-    description: 'Node.js version'
-    required: false
-    default: '20'
-  pnpm-version:
-    description: 'pnpm version'
-    required: false
-    default: '10.12.4'
   working-directory:
     description: 'Working directory'
     required: false
@@ -42,7 +34,6 @@ runs:
     - name: Setup pnpm
       uses: pnpm/action-setup@v4
       with:
-        version: ${{ inputs.pnpm-version }}
         run_install: false
         
     - name: Add pnpm to PATH
@@ -54,7 +45,7 @@ runs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version-file: 'package.json'
         cache: ${{ inputs.enable-cache == 'true' && 'pnpm' || '' }}
         
     - name: Install dependencies

@@ -3,14 +3,6 @@ description: 'Setup environment for changesets release process'
 author: 'NextNode'
 
 inputs:
-  node-version:
-    description: 'Node.js version to use'
-    required: false
-    default: '20'
-  pnpm-version:
-    description: 'pnpm version to use'
-    required: false
-    default: '10.12.4'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -32,9 +24,6 @@ runs:
     - name: Setup Environment
       id: setup
       uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
-      with:
-        node-version: ${{ inputs.node-version }}
-        pnpm-version: ${{ inputs.pnpm-version }}
 
     - name: Verify Tokens
       id: verify
