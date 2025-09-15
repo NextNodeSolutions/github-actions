@@ -33,12 +33,9 @@ github-actions/
 Global actions are available at the root level for external projects.
 
 ```yaml
-# Complete Node.js and pnpm setup with caching
+# Complete Node.js and pnpm setup with caching (auto-detects versions)
 - name: Setup Node.js and pnpm
   uses: nextnodesolutions/github-actions/actions/node-setup-complete@main
-  with:
-    node-version: '20'
-    pnpm-version: '10.12.4'
     
 - name: Run Tests
   uses: nextnodesolutions/github-actions/actions/test@main
@@ -52,6 +49,35 @@ Global actions are available at the root level for external projects.
     url: 'https://my-app.railway.app'
     max-attempts: 5
 ```
+
+## 🔧 Version Auto-Detection
+
+All workflows and actions automatically detect Node.js and pnpm versions from your project's configuration. **No version inputs required!**
+
+### How it works
+
+**pnpm Version**: Automatically detected from `packageManager` field in `package.json`:
+```json
+{
+  "packageManager": "pnpm@10.11.0"
+}
+```
+
+**Node.js Version**: Automatically detected from `engines.node` field in `package.json`:
+```json
+{
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+```
+
+### Benefits
+
+✅ **Single source of truth** - Versions defined in one place  
+✅ **No version conflicts** - Local and CI environments always match  
+✅ **Easy maintenance** - Update `package.json` and everywhere stays in sync  
+✅ **Corepack compatible** - Works with modern Node.js toolchain  
 
 ### Using Reusable Workflows
 
@@ -67,7 +93,6 @@ jobs:
   quality:
     uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
     with:
-      node-version: '20'
       test-coverage: true
       run-security: true
 ```
@@ -114,7 +139,7 @@ jobs:
 
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
-| `node-setup-complete` | Complete Node.js and pnpm setup with caching | `node-version`, `pnpm-version` |
+| `node-setup-complete` | Complete Node.js and pnpm setup with caching | Auto-detects versions from package.json |
 | `test` | Run tests with optional coverage | `coverage`, `coverage-threshold`, `test-script` |
 | `health-check` | Check URL health status | `url`, `max-attempts`, `expected-status` |
 

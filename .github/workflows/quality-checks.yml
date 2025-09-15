@@ -11,16 +11,6 @@ on:
         required: false
         default: '.'
         type: string
-      node-version:
-        description: 'Node.js version'
-        required: false
-        default: '20'
-        type: string
-      pnpm-version:
-        description: 'pnpm version'
-        required: false
-        default: '10.12.4'
-        type: string
       
       # Individual check toggles
       run-lint:
@@ -103,8 +93,6 @@ jobs:
     uses: ./.github/workflows/lint.yml
     with:
       working-directory: ${{ inputs.working-directory }}
-      node-version: ${{ inputs.node-version }}
-      pnpm-version: ${{ inputs.pnpm-version }}
       lint-fix: ${{ inputs.lint-fix }}
       fail-on-warning: ${{ inputs.fail-on-warning }}
 
@@ -114,8 +102,6 @@ jobs:
     uses: ./.github/workflows/typecheck.yml
     with:
       working-directory: ${{ inputs.working-directory }}
-      node-version: ${{ inputs.node-version }}
-      pnpm-version: ${{ inputs.pnpm-version }}
       strict: true
 
   test:
@@ -124,8 +110,6 @@ jobs:
     uses: ./.github/workflows/test.yml
     with:
       working-directory: ${{ inputs.working-directory }}
-      node-version: ${{ inputs.node-version }}
-      pnpm-version: ${{ inputs.pnpm-version }}
       coverage: ${{ inputs.test-coverage }}
       coverage-threshold: ${{ inputs.coverage-threshold }}
       upload-coverage: ${{ inputs.test-coverage }}
@@ -136,8 +120,6 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       working-directory: ${{ inputs.working-directory }}
-      node-version: ${{ inputs.node-version }}
-      pnpm-version: ${{ inputs.pnpm-version }}
       build-command: ${{ inputs.build-command }}
       output-directory: ${{ inputs.output-directory }}
 
@@ -147,8 +129,6 @@ jobs:
     uses: ./.github/workflows/security.yml
     with:
       working-directory: ${{ inputs.working-directory }}
-      node-version: ${{ inputs.node-version }}
-      pnpm-version: ${{ inputs.pnpm-version }}
       audit-level: ${{ inputs.audit-level }}
 
   summary:
