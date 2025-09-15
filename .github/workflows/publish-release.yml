@@ -207,13 +207,30 @@ jobs:
             exit 1
           fi
           
-          # Validate required fields
+          # Validate required fields with detailed diagnostics
           if [ -z "$VERSION" ] || [ -z "$PR_NUMBER" ] || [ -z "$MERGE_SHA" ]; then
             echo "❌ Missing required data"
             echo "Event Type: ${{ github.event_name }}"
-            echo "Version: $VERSION"
-            echo "PR Number: $PR_NUMBER"
-            echo "Merge SHA: $MERGE_SHA"
+            echo "Version: '$VERSION'"
+            echo "PR Number: '$PR_NUMBER'"
+            echo "Merge SHA: '$MERGE_SHA'"
+            
+            if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+              echo ""
+              echo "🔍 Debugging repository_dispatch payload:"
+              echo "Raw client_payload: ${{ toJson(github.event.client_payload) }}"
+              echo "Expected data structure: github.event.client_payload.data"
+              echo ""
+              echo "Available client_payload keys:"
+              echo '${{ toJson(github.event.client_payload) }}' | jq -r 'keys[]' 2>/dev/null || echo "Failed to parse client_payload"
+              
+              if [ -n "${{ github.event.client_payload.data }}" ]; then
+                echo ""
+                echo "Available data keys:"
+                echo '${{ toJson(github.event.client_payload.data) }}' | jq -r 'keys[]' 2>/dev/null || echo "Failed to parse data object"
+              fi
+            fi
+            
             exit 1
           fi
           

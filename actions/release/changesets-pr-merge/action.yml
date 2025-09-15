@@ -55,9 +55,35 @@ runs:
           if [ "$PR_STATE" = "MERGED" ]; then
             echo "✅ PR #$PR_NUMBER has been merged!"
             
-            # Get merge commit SHA and branch name
-            MERGE_COMMIT=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeCommit -q .mergeCommit.sha)
-            HEAD_BRANCH=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json headRefName -q .headRefName)
+            # Get merge commit SHA and branch name with proper error handling
+            PR_DATA=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeCommit,headRefName)
+            echo "🔍 PR Data: $PR_DATA"
+            
+            MERGE_COMMIT=$(echo "$PR_DATA" | jq -r '.mergeCommit.sha // .mergeCommit.oid // empty')
+            HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName // empty')
+            
+            # If merge commit is still empty, try alternative approaches
+            if [ -z "$MERGE_COMMIT" ] || [ "$MERGE_COMMIT" = "null" ]; then
+              echo "⚠️ mergeCommit.sha not found, trying alternative methods..."
+              
+              # Try getting merge commit from PR merge event
+              MERGE_COMMIT=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER --jq '.merge_commit_sha // empty')
+              
+              # If still empty, get latest commit from main branch after merge
+              if [ -z "$MERGE_COMMIT" ] || [ "$MERGE_COMMIT" = "null" ]; then
+                echo "⚠️ merge_commit_sha not found, using latest main branch commit"
+                MERGE_COMMIT=$(gh api repos/${{ github.repository }}/branches/main --jq '.commit.sha')
+              fi
+            fi
+            
+            echo "📝 Merge Commit SHA: $MERGE_COMMIT"
+            echo "🌿 Head Branch: $HEAD_BRANCH"
+            
+            if [ -z "$MERGE_COMMIT" ] || [ "$MERGE_COMMIT" = "null" ]; then
+              echo "❌ Failed to determine merge commit SHA"
+              echo "merged=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
             
             echo "merged=true" >> $GITHUB_OUTPUT
             echo "merge-commit-sha=$MERGE_COMMIT" >> $GITHUB_OUTPUT
