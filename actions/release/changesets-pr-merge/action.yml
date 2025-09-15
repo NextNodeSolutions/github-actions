@@ -23,7 +23,7 @@ outputs:
     value: ${{ steps.wait-merge.outputs.merged }}
   merge-commit-sha:
     description: 'SHA of the merge commit'
-    value: ${{ steps.wait-merge.outputs.merge-commit }}
+    value: ${{ steps.wait-merge.outputs.merge-commit-sha }}
   branch-cleaned:
     description: 'Whether the release branch was cleaned up'
     value: ${{ steps.wait-merge.outputs.merged }}

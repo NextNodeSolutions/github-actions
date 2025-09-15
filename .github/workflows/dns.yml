@@ -47,8 +47,9 @@ jobs:
     name: Update DNS
     runs-on: ubuntu-latest
     outputs:
-      success: ${{ steps.cloudflare.outputs.success == 'true' }}
+      success: ${{ steps.cloudflare.outputs.success == 'true' && steps.cloudflare-www.outputs.success == 'true' }}
       record-id: ${{ steps.cloudflare.outputs.record-id }}
+      www-record-id: ${{ steps.cloudflare-www.outputs.record-id }}
     steps:
       - name: Update Cloudflare DNS
         id: cloudflare
@@ -200,4 +201,22 @@ jobs:
           if [[ "$SUCCESS" != "true" ]]; then
             echo "$RESPONSE" | jq '.errors'
             exit 1
+          fi
+          
+          # Add www subdomain (CNAME to main domain)
+          if [[ "${{ inputs.domain }}" != www.* ]]; then
+            echo "Adding www.${{ inputs.domain }} CNAME..."
+            
+            WWW_DATA=$(jq -n \
+              --arg type "CNAME" \
+              --arg name "www.${{ inputs.domain }}" \
+              --arg content "${{ inputs.domain }}" \
+              --argjson proxied true \
+              --argjson ttl 1 \
+              '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
+            
+            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$WWW_DATA" || echo "www subdomain might already exist"
           fi
