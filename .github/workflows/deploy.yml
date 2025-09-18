@@ -146,7 +146,16 @@ jobs:
           project-id: ${{ steps.project.outputs.project-id }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
       
-      - name: Configure Variables
+      - name: Sync Environment Variables
+        id: env-sync
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-env-sync@main
+        with:
+          service-name: ${{ steps.service.outputs.service-name }}
+          environment: ${{ inputs.environment }}
+          memory-mb: ${{ inputs.memory-mb }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+      
+      - name: Configure Additional Variables
         id: vars
         if: inputs.variables != '{}'
         uses: NextNodeSolutions/github-actions/actions/deploy/railway-variables@main
