@@ -84,7 +84,7 @@ runs:
             'to_entries[] | select(.key | test($pattern) | not) | "\(.key)=\(.value)"' | \
           while IFS='=' read -r key value; do
             echo "  → Setting secret: $key"
-            if railway variables --set "$key=$value"; then
+            if railway variables --set "$key=$value" --skip-deploys; then
               SYNCED_COUNT=$((SYNCED_COUNT + 1))
               SYNCED_SECRETS="$SYNCED_SECRETS,$key"
             else
@@ -109,7 +109,7 @@ runs:
             'to_entries[] | select(.key | test($pattern) | not) | "\(.key)=\(.value)"' | \
           while IFS='=' read -r key value; do
             echo "  → Setting variable: $key"
-            if railway variables --set "$key=$value"; then
+            if railway variables --set "$key=$value" --skip-deploys; then
               SYNCED_COUNT=$((SYNCED_COUNT + 1))
               SYNCED_VARS="$SYNCED_VARS,$key"
             else
@@ -126,7 +126,7 @@ runs:
         # Always set NODE_ENV based on environment
         NODE_ENV_VALUE="${{ inputs.environment }}"
         echo "  → NODE_ENV = $NODE_ENV_VALUE"
-        if railway variables --set "NODE_ENV=$NODE_ENV_VALUE"; then
+        if railway variables --set "NODE_ENV=$NODE_ENV_VALUE" --skip-deploys; then
           SYNCED_COUNT=$((SYNCED_COUNT + 1))
         else
           echo "    ⚠️ Failed to set NODE_ENV"
@@ -134,7 +134,7 @@ runs:
         
         # Set memory allocation
         echo "  → MEMORY_MB = ${{ inputs.memory-mb }}"
-        if railway variables --set "MEMORY_MB=${{ inputs.memory-mb }}"; then
+        if railway variables --set "MEMORY_MB=${{ inputs.memory-mb }}" --skip-deploys; then
           SYNCED_COUNT=$((SYNCED_COUNT + 1))
         else
           echo "    ⚠️ Failed to set MEMORY_MB"

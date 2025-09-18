@@ -48,7 +48,7 @@ runs:
             VAR_NAME="${var%%=*}"
             VAR_VALUE="${var#*=}"
             echo "  → $VAR_NAME = ***"
-            if railway variables --set "$var"; then
+            if railway variables --set "$var" --skip-deploys; then
               VARIABLES_COUNT=$((VARIABLES_COUNT + 1))
             else
               echo "  ⚠️ Failed to set $VAR_NAME"
@@ -59,7 +59,7 @@ runs:
         # Always set NODE_ENV
         echo "• Setting standard variables:"
         echo "  → NODE_ENV = ${{ inputs.environment }}"
-        if railway variables --set "NODE_ENV=${{ inputs.environment }}"; then
+        if railway variables --set "NODE_ENV=${{ inputs.environment }}" --skip-deploys; then
           VARIABLES_COUNT=$((VARIABLES_COUNT + 1))
         else
           echo "  ⚠️ Failed to set NODE_ENV"
@@ -67,7 +67,7 @@ runs:
         
         # Set memory allocation
         echo "  → MEMORY_MB = ${{ inputs.memory-mb }}"
-        if railway variables --set "MEMORY_MB=${{ inputs.memory-mb }}"; then
+        if railway variables --set "MEMORY_MB=${{ inputs.memory-mb }}" --skip-deploys; then
           VARIABLES_COUNT=$((VARIABLES_COUNT + 1))
         else
           echo "  ⚠️ Failed to set MEMORY_MB"

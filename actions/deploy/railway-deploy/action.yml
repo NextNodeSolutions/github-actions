@@ -226,17 +226,17 @@ runs:
           VAR_NAME="${var%%=*}"
           VAR_VALUE="${var#*=}"
           echo "   • $VAR_NAME = ***"
-          railway variables --set "$var" || echo "   ⚠️  Failed to set $VAR_NAME"
+          railway variables --set "$var" --skip-deploys || echo "   ⚠️  Failed to set $VAR_NAME"
           VARIABLES_COUNT=$((VARIABLES_COUNT + 1))
         done
         
         # Always set NODE_ENV
         echo "   • NODE_ENV = ${{ inputs.environment }}"
-        railway variables --set "NODE_ENV=${{ inputs.environment }}" || echo "   ⚠️  Failed to set NODE_ENV"
+        railway variables --set "NODE_ENV=${{ inputs.environment }}" --skip-deploys || echo "   ⚠️  Failed to set NODE_ENV"
         
         # Set memory if specified
         echo "   • MEMORY_MB = ${{ inputs.memory-mb }}"
-        railway variables --set "MEMORY_MB=${{ inputs.memory-mb }}" || echo "   ⚠️  Failed to set MEMORY_MB"
+        railway variables --set "MEMORY_MB=${{ inputs.memory-mb }}" --skip-deploys || echo "   ⚠️  Failed to set MEMORY_MB"
         
         echo "✅ Environment variables configured"
       env:
