@@ -1,0 +1,375 @@
+name: 'Cloudflare SEO Setup'
+description: 'Automated SEO configuration for Cloudflare - blocks dev subdomains, adds redirections, enables optimizations'
+
+inputs:
+  domain:
+    description: 'Primary domain (e.g., nextnode.fr)'
+    required: true
+  blocked-subdomains:
+    description: 'Comma-separated list of subdomains to block from search engines'
+    required: false
+    default: 'dev,staging,test,preview'
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected if not provided)'
+    required: false
+  enable-www-redirect:
+    description: 'Create www -> non-www redirect'
+    required: false
+    default: 'true'
+  enable-optimizations:
+    description: 'Enable Cloudflare performance optimizations'
+    required: false
+    default: 'true'
+  dry-run:
+    description: 'Show what would be configured without making changes'
+    required: false
+    default: 'false'
+
+outputs:
+  seo-configured:
+    description: 'Whether SEO configuration was successful'
+    value: ${{ steps.seo-setup.outputs.success }}
+  page-rules-created:
+    description: 'Number of page rules created'
+    value: ${{ steps.seo-setup.outputs.page-rules-count }}
+  redirects-created:
+    description: 'Number of redirect rules created'
+    value: ${{ steps.seo-setup.outputs.redirects-count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Cloudflare SEO Configuration
+      id: seo-setup
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        BLOCKED_SUBDOMAINS: ${{ inputs.blocked-subdomains }}
+        ENABLE_WWW_REDIRECT: ${{ inputs.enable-www-redirect }}
+        ENABLE_OPTIMIZATIONS: ${{ inputs.enable-optimizations }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        echo "::group::🎯 Cloudflare SEO Setup for $DOMAIN"
+        
+        # Validate inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "❌ Cloudflare API token is required"
+          exit 1
+        fi
+        
+        if [[ -z "$DOMAIN" ]]; then
+          echo "❌ Domain is required"
+          exit 1
+        fi
+        
+        echo "🔧 Configuration:"
+        echo "  • Domain: $DOMAIN"
+        echo "  • Blocked subdomains: $BLOCKED_SUBDOMAINS"
+        echo "  • WWW redirect: $ENABLE_WWW_REDIRECT"
+        echo "  • Optimizations: $ENABLE_OPTIMIZATIONS"
+        echo "  • Dry run: $DRY_RUN"
+        echo ""
+        
+        # Get Zone ID if not provided
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "🔍 Auto-detecting Cloudflare Zone ID..."
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
+          
+          ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+          
+          CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // empty')
+          
+          if [[ -z "$CF_ZONE_ID" ]]; then
+            echo "❌ Could not find Cloudflare zone for $ROOT_DOMAIN"
+            echo "Please provide zone-id manually or check domain configuration"
+            exit 1
+          fi
+          
+          echo "✅ Found Zone ID: $CF_ZONE_ID"
+        fi
+        
+        # Initialize counters
+        PAGE_RULES_COUNT=0
+        REDIRECTS_COUNT=0
+        SUCCESS=true
+        
+        # Function to create/update page rule
+        create_page_rule() {
+          local url_pattern="$1"
+          local settings="$2"
+          local description="$3"
+          
+          echo "📝 $description"
+          echo "  • Pattern: $url_pattern"
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "  • [DRY RUN] Would create page rule"
+            return 0
+          fi
+          
+          # Check if rule already exists
+          EXISTING_RULE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" | \
+            jq -r --arg pattern "$url_pattern" '.result[] | select(.targets[0].target.url==$pattern) | .id // empty')
+          
+          if [[ -n "$EXISTING_RULE" ]]; then
+            echo "  • ♻️  Updating existing rule: $EXISTING_RULE"
+            
+            RULE_DATA=$(jq -n \
+              --arg url "$url_pattern" \
+              --argjson actions "$settings" \
+              '{
+                targets: [{
+                  target: "url",
+                  constraint: {
+                    operator: "matches",
+                    value: $url
+                  }
+                }],
+                actions: $actions,
+                priority: 1,
+                status: "active"
+              }')
+            
+            RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules/$EXISTING_RULE" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$RULE_DATA")
+          else
+            echo "  • ➕ Creating new page rule"
+            
+            RULE_DATA=$(jq -n \
+              --arg url "$url_pattern" \
+              --argjson actions "$settings" \
+              '{
+                targets: [{
+                  target: "url",
+                  constraint: {
+                    operator: "matches",
+                    value: $url
+                  }
+                }],
+                actions: $actions,
+                priority: 1,
+                status: "active"
+              }')
+            
+            RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$RULE_DATA")
+          fi
+          
+          # Check response
+          RULE_SUCCESS=$(echo "$RESPONSE" | jq -r '.success // false')
+          if [[ "$RULE_SUCCESS" == "true" ]]; then
+            echo "  • ✅ Page rule configured successfully"
+            ((PAGE_RULES_COUNT++))
+          else
+            echo "  • ❌ Failed to configure page rule"
+            echo "$RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$RESPONSE"
+            SUCCESS=false
+          fi
+        }
+        
+        # Function to create redirect rule
+        create_redirect_rule() {
+          local from_pattern="$1"
+          local to_url="$2"
+          local description="$3"
+          
+          echo "📝 $description"
+          echo "  • From: $from_pattern"
+          echo "  • To: $to_url"
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "  • [DRY RUN] Would create redirect rule"
+            return 0
+          fi
+          
+          # Check if redirect rule already exists
+          EXISTING_REDIRECT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" | \
+            jq -r --arg pattern "$from_pattern" '.result[] | select(.targets[0].target.url==$pattern and (.actions[0].id=="forwarding_url" or .actions[0].id=="redirect")) | .id // empty')
+          
+          REDIRECT_SETTINGS='[{
+            "id": "forwarding_url",
+            "value": {
+              "url": "'"$to_url"'",
+              "status_code": 301
+            }
+          }]'
+          
+          if [[ -n "$EXISTING_REDIRECT" ]]; then
+            echo "  • ♻️  Updating existing redirect: $EXISTING_REDIRECT"
+            
+            REDIRECT_DATA=$(jq -n \
+              --arg url "$from_pattern" \
+              --argjson actions "$REDIRECT_SETTINGS" \
+              '{
+                targets: [{
+                  target: "url",
+                  constraint: {
+                    operator: "matches",
+                    value: $url
+                  }
+                }],
+                actions: $actions,
+                priority: 1,
+                status: "active"
+              }')
+            
+            RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules/$EXISTING_REDIRECT" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$REDIRECT_DATA")
+          else
+            echo "  • ➕ Creating new redirect rule"
+            
+            REDIRECT_DATA=$(jq -n \
+              --arg url "$from_pattern" \
+              --argjson actions "$REDIRECT_SETTINGS" \
+              '{
+                targets: [{
+                  target: "url",
+                  constraint: {
+                    operator: "matches",
+                    value: $url
+                  }
+                }],
+                actions: $actions,
+                priority: 1,
+                status: "active"
+              }')
+            
+            RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$REDIRECT_DATA")
+          fi
+          
+          # Check response
+          REDIRECT_SUCCESS=$(echo "$RESPONSE" | jq -r '.success // false')
+          if [[ "$REDIRECT_SUCCESS" == "true" ]]; then
+            echo "  • ✅ Redirect rule configured successfully"
+            ((REDIRECTS_COUNT++))
+          else
+            echo "  • ❌ Failed to configure redirect rule"
+            echo "$RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$RESPONSE"
+            SUCCESS=false
+          fi
+        }
+        
+        echo "🚫 Creating SEO blocking rules for development subdomains..."
+        
+        # Block development subdomains from search engines
+        IFS=',' read -ra SUBDOMAINS <<< "$BLOCKED_SUBDOMAINS"
+        for subdomain in "${SUBDOMAINS[@]}"; do
+          subdomain=$(echo "$subdomain" | xargs) # trim whitespace
+          if [[ -n "$subdomain" ]]; then
+            PATTERN="$subdomain.$DOMAIN/*"
+            SETTINGS='[{
+              "id": "cache_level",
+              "value": "bypass"
+            }, {
+              "id": "browser_check",
+              "value": "on"
+            }]'
+            
+            create_page_rule "$PATTERN" "$SETTINGS" "Blocking $subdomain.$DOMAIN from search engines"
+            
+            # Note: X-Robots-Tag header needs to be handled via Transform Rules or Workers
+            # Page Rules don't support custom headers directly
+            echo "  • ⚠️  Note: X-Robots-Tag header for $subdomain.$DOMAIN should be configured via Transform Rules"
+          fi
+        done
+        
+        # Create www redirect if enabled
+        if [[ "$ENABLE_WWW_REDIRECT" == "true" ]]; then
+          echo ""
+          echo "🔀 Creating www redirect..."
+          create_redirect_rule "www.$DOMAIN/*" "https://$DOMAIN/\$1" "WWW to non-WWW redirect"
+        fi
+        
+        # Enable Cloudflare optimizations if requested
+        if [[ "$ENABLE_OPTIMIZATIONS" == "true" ]]; then
+          echo ""
+          echo "⚡ Enabling Cloudflare optimizations..."
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "  • [DRY RUN] Would enable optimizations:"
+            echo "    - Auto Minify (CSS, JS, HTML)"
+            echo "    - Brotli compression"
+            echo "    - Always Use HTTPS"
+            echo "    - Security Level: Medium"
+          else
+            # Enable Auto Minify
+            curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/minify" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"value":{"css":"on","html":"on","js":"on"}}' > /dev/null
+            
+            # Enable Brotli
+            curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/brotli" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"value":"on"}' > /dev/null
+            
+            # Enable Always Use HTTPS
+            curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/always_use_https" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"value":"on"}' > /dev/null
+            
+            # Set Security Level to Medium
+            curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/security_level" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"value":"medium"}' > /dev/null
+            
+            echo "  • ✅ Cloudflare optimizations enabled"
+          fi
+        fi
+        
+        echo ""
+        echo "📊 SEO Configuration Summary:"
+        echo "  • Page rules created/updated: $PAGE_RULES_COUNT"
+        echo "  • Redirect rules created/updated: $REDIRECTS_COUNT"
+        echo "  • Overall success: $SUCCESS"
+        
+        # Important note about X-Robots-Tag headers
+        if [[ "$PAGE_RULES_COUNT" -gt 0 ]]; then
+          echo ""
+          echo "⚠️  IMPORTANT: To complete SEO blocking setup:"
+          echo "1. Go to Cloudflare Dashboard → Rules → Transform Rules"
+          echo "2. Create HTTP Response Header rules for each blocked subdomain:"
+          IFS=',' read -ra SUBDOMAINS <<< "$BLOCKED_SUBDOMAINS"
+          for subdomain in "${SUBDOMAINS[@]}"; do
+            subdomain=$(echo "$subdomain" | xargs)
+            if [[ -n "$subdomain" ]]; then
+              echo "   • When hostname equals '$subdomain.$DOMAIN' → Add header 'X-Robots-Tag: noindex, nofollow'"
+            fi
+          done
+          echo ""
+          echo "This cannot be automated via API currently and requires manual setup."
+        fi
+        
+        # Set outputs
+        echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+        echo "page-rules-count=$PAGE_RULES_COUNT" >> $GITHUB_OUTPUT
+        echo "redirects-count=$REDIRECTS_COUNT" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+        
+        if [[ "$SUCCESS" != "true" ]]; then
+          exit 1
+        fi

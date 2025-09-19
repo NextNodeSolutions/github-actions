@@ -1,0 +1,163 @@
+name: 'SEO Cloudflare Setup'
+
+# REUSABLE WORKFLOW - Automated Cloudflare SEO configuration
+# Blocks development subdomains, creates redirects, enables optimizations
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        description: 'Primary domain to configure (e.g., nextnode.fr)'
+        required: true
+        type: string
+      blocked-subdomains:
+        description: 'Comma-separated list of subdomains to block from search engines'
+        required: false
+        default: 'dev,staging,test,preview,demo'
+        type: string
+      enable-www-redirect:
+        description: 'Create www -> non-www redirect (301)'
+        required: false
+        default: true
+        type: boolean
+      enable-optimizations:
+        description: 'Enable Cloudflare performance optimizations'
+        required: false
+        default: true
+        type: boolean
+      dry-run:
+        description: 'Show what would be configured without making changes'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: 'Cloudflare API token with Zone:Edit permissions'
+        required: true
+      CLOUDFLARE_ZONE_ID:
+        description: 'Cloudflare Zone ID (auto-detected if not provided)'
+        required: false
+    outputs:
+      seo-configured:
+        description: 'Whether SEO configuration was successful'
+        value: ${{ jobs.setup.outputs.success }}
+      page-rules-created:
+        description: 'Number of page rules created'
+        value: ${{ jobs.setup.outputs.page-rules-count }}
+      redirects-created:
+        description: 'Number of redirect rules created'
+        value: ${{ jobs.setup.outputs.redirects-count }}
+      next-steps:
+        description: 'Manual steps required to complete setup'
+        value: ${{ jobs.setup.outputs.next-steps }}
+
+jobs:
+  setup:
+    name: Configure SEO
+    runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.seo.outputs.seo-configured }}
+      page-rules-count: ${{ steps.seo.outputs.page-rules-created }}
+      redirects-count: ${{ steps.seo.outputs.redirects-created }}
+      next-steps: ${{ steps.summary.outputs.next-steps }}
+    
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          token: ${{ github.token }}
+          path: .github-actions
+          
+      - name: 🎯 Configure Cloudflare SEO
+        id: seo
+        uses: ./.github-actions/actions/seo/cloudflare-seo-setup
+        with:
+          domain: ${{ inputs.domain }}
+          blocked-subdomains: ${{ inputs.blocked-subdomains }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          enable-www-redirect: ${{ inputs.enable-www-redirect }}
+          enable-optimizations: ${{ inputs.enable-optimizations }}
+          dry-run: ${{ inputs.dry-run }}
+          
+      - name: 📋 Generate Next Steps Summary
+        id: summary
+        if: steps.seo.outputs.seo-configured == 'true'
+        run: |
+          NEXT_STEPS="## ✅ SEO Configuration Complete!
+
+          ### 🎯 What was configured automatically:
+          - ✅ **${{ steps.seo.outputs.page-rules-created }}** page rules created/updated
+          - ✅ **${{ steps.seo.outputs.redirects-created }}** redirect rules created/updated
+          - ✅ Performance optimizations enabled
+          - ✅ HTTPS redirection configured
+
+          ### ⚠️ Manual steps required:
+          
+          **1. Complete X-Robots-Tag setup (Critical for SEO):**
+          - Go to [Cloudflare Dashboard](https://dash.cloudflare.com) → Your Zone → Rules → Transform Rules
+          - Create **HTTP Response Header** rules for each blocked subdomain:
+          "
+          
+          IFS=',' read -ra SUBDOMAINS <<< "${{ inputs.blocked-subdomains }}"
+          for subdomain in "\${SUBDOMAINS[@]}"; do
+            subdomain=\$(echo "\$subdomain" | xargs)
+            if [[ -n "\$subdomain" ]]; then
+              NEXT_STEPS+="\n    • When hostname equals **\$subdomain.${{ inputs.domain }}** → Add header **X-Robots-Tag: noindex, nofollow**"
+            fi
+          done
+          
+          NEXT_STEPS+="
+
+          **2. Verify Google Search Console:**
+          - Add property for **${{ inputs.domain }}** in [Search Console](https://search.google.com/search-console)
+          - Submit sitemap: **https://${{ inputs.domain }}/sitemap.xml**
+          - Request removal of blocked subdomains from search results
+
+          **3. Test configuration:**
+          - Verify redirects: \`curl -I https://www.${{ inputs.domain }}\`
+          - Check robots headers on dev subdomains
+          - Confirm site loads correctly with optimizations
+
+          ### 🔍 Monitor progress:
+          - Search Console performance data
+          - Cloudflare Analytics dashboard
+          - Page Rules effectiveness in Cloudflare
+
+          ---
+          *Configuration completed on \$(date) via NextNode GitHub Actions*"
+          
+          # Escape for GitHub output
+          NEXT_STEPS_ESCAPED=\$(echo "\$NEXT_STEPS" | sed 's/"/\\"/g' | tr '\n' '\\n')
+          echo "next-steps=\$NEXT_STEPS_ESCAPED" >> \$GITHUB_OUTPUT
+          
+      - name: 📊 Configuration Summary
+        run: |
+          echo "## 🎯 Cloudflare SEO Configuration Results"
+          echo ""
+          echo "**Domain:** ${{ inputs.domain }}"
+          echo "**Success:** ${{ steps.seo.outputs.seo-configured }}"
+          echo "**Page Rules:** ${{ steps.seo.outputs.page-rules-created }}"
+          echo "**Redirects:** ${{ steps.seo.outputs.redirects-created }}"
+          echo "**Blocked Subdomains:** ${{ inputs.blocked-subdomains }}"
+          echo ""
+          
+          if [[ "${{ steps.seo.outputs.seo-configured }}" == "true" ]]; then
+            echo "✅ **Configuration successful!**"
+            echo ""
+            echo "Your domain ${{ inputs.domain }} is now optimized for SEO with:"
+            echo "- Blocked development subdomains"
+            echo "- Performance optimizations enabled"
+            echo "- Proper redirects configured"
+            echo ""
+            echo "📋 **Next: Complete the manual X-Robots-Tag setup** (see job summary)"
+          else
+            echo "❌ **Configuration failed**"
+            echo "Check the logs above for error details."
+          fi
+
+      - name: ⚠️ Manual Steps Required
+        if: steps.seo.outputs.seo-configured == 'true'
+        run: |
+          echo "::warning title=Manual Steps Required::X-Robots-Tag headers must be configured manually in Cloudflare Transform Rules. See job summary for detailed instructions."
