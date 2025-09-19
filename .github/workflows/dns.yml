@@ -68,9 +68,8 @@ jobs:
     name: Update DNS
     runs-on: ubuntu-latest
     outputs:
-      success: ${{ steps.cloudflare.outputs.success == 'true' && steps.cloudflare-www.outputs.success == 'true' }}
+      success: ${{ steps.cloudflare.outputs.success == 'true' }}
       record-id: ${{ steps.cloudflare.outputs.record-id }}
-      www-record-id: ${{ steps.cloudflare-www.outputs.record-id }}
     steps:
       - name: Update Cloudflare DNS
         id: cloudflare
@@ -224,14 +223,14 @@ jobs:
             exit 1
           fi
           
-          # Add www subdomain (CNAME to main domain)
+          # Add www subdomain (CNAME to same Railway target)
           if [[ "${{ inputs.domain }}" != www.* ]]; then
-            echo "Adding www.${{ inputs.domain }} CNAME..."
+            echo "Adding www.${{ inputs.domain }} CNAME to same target..."
             
             WWW_DATA=$(jq -n \
               --arg type "CNAME" \
               --arg name "www.${{ inputs.domain }}" \
-              --arg content "${{ inputs.domain }}" \
+              --arg content "$TARGET_VALUE" \
               --argjson proxied true \
               --argjson ttl 1 \
               '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
