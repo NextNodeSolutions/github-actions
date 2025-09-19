@@ -113,20 +113,25 @@ jobs:
           echo "🔍 Test: curl -I https://dev.yoursite.com/"
 ```
 
-## 🎯 Reusable Workflow
+## 🎯 Integrated with DNS Workflow
 
-For multiple projects, use the reusable workflow:
+**Recommended:** Use the DNS workflow with automatic SEO configuration:
 
 ```yaml
 jobs:
-  seo:
-    uses: NextNodeSolutions/github-actions/.github/workflows/seo-cloudflare.yml@main
+  dns-and-seo:
+    uses: NextNodeSolutions/github-actions/.github/workflows/dns.yml@main
     with:
       domain: 'yoursite.com'
-      blocked-subdomains: 'dev,staging'
+      target: 'your-app.railway.app'
+      blocked-subdomains: 'dev,staging,test'
+      enable-seo-setup: true        # Automatic SEO (default)
+      enable-optimizations: true    # Cloudflare optimizations
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 ```
+
+This configures both DNS records AND SEO settings in one workflow!
 
 ## 🔍 Verification
 
