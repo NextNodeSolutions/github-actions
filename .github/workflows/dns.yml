@@ -29,6 +29,21 @@ on:
         required: false
         default: '1'
         type: string
+      enable-seo-setup:
+        description: 'Enable automatic SEO configuration'
+        required: false
+        default: true
+        type: boolean
+      blocked-subdomains:
+        description: 'Comma-separated list of subdomains to block from search engines'
+        required: false
+        default: 'dev,staging,test,preview'
+        type: string
+      enable-optimizations:
+        description: 'Enable Cloudflare performance optimizations'
+        required: false
+        default: true
+        type: boolean
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
@@ -41,6 +56,12 @@ on:
       record-id:
         description: 'Cloudflare DNS record ID'
         value: ${{ jobs.update.outputs.record-id }}
+      seo-configured:
+        description: 'Whether SEO configuration was successful'
+        value: ${{ jobs.seo-setup.outputs.seo-configured }}
+      page-rules-created:
+        description: 'Number of page rules created for SEO'
+        value: ${{ jobs.seo-setup.outputs.page-rules-created }}
 
 jobs:
   update:
@@ -220,3 +241,62 @@ jobs:
               -H "Content-Type: application/json" \
               --data "$WWW_DATA" || echo "www subdomain might already exist"
           fi
+
+  seo-setup:
+    name: Configure SEO
+    runs-on: ubuntu-latest
+    needs: update
+    if: ${{ inputs.enable-seo-setup == true && needs.update.outputs.success == 'true' }}
+    outputs:
+      seo-configured: ${{ steps.seo.outputs.seo-configured }}
+      page-rules-created: ${{ steps.seo.outputs.page-rules-created }}
+    
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          token: ${{ github.token }}
+          path: .github-actions
+          
+      - name: 🎯 Configure Cloudflare SEO
+        id: seo
+        uses: ./.github-actions/actions/seo/cloudflare-seo-setup
+        with:
+          domain: ${{ inputs.domain }}
+          blocked-subdomains: ${{ inputs.blocked-subdomains }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          enable-www-redirect: true
+          enable-optimizations: ${{ inputs.enable-optimizations }}
+          dry-run: false
+          
+      - name: 📊 SEO Configuration Summary
+        run: |
+          echo "## 🎯 SEO Configuration Complete!"
+          echo ""
+          echo "**Domain:** ${{ inputs.domain }}"
+          echo "**Success:** ${{ steps.seo.outputs.seo-configured }}"
+          echo "**Page Rules:** ${{ steps.seo.outputs.page-rules-created }}"
+          echo "**Blocked Subdomains:** ${{ inputs.blocked-subdomains }}"
+          echo ""
+          
+          if [[ "${{ steps.seo.outputs.seo-configured }}" == "true" ]]; then
+            echo "✅ **DNS + SEO configuration successful!**"
+            echo ""
+            echo "### Configured automatically:"
+            echo "- 🌐 DNS records for ${{ inputs.domain }}"
+            echo "- 🚫 SEO blocking for development subdomains"
+            echo "- 🔀 WWW redirects"
+            echo "- ⚡ Performance optimizations"
+            echo ""
+            echo "### ⚠️ Manual step required:"
+            echo "Configure X-Robots-Tag headers in Cloudflare Transform Rules"
+          else
+            echo "❌ **SEO configuration failed** (DNS was successful)"
+          fi
+
+      - name: ⚠️ Manual Steps Required
+        if: steps.seo.outputs.seo-configured == 'true'
+        run: |
+          echo "::warning title=Manual Steps Required::X-Robots-Tag headers must be configured manually in Cloudflare Transform Rules for blocked subdomains: ${{ inputs.blocked-subdomains }}"

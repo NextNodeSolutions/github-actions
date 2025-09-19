@@ -11,7 +11,6 @@ on:
         required: false
         default: '.'
         type: string
-      
       # Individual check toggles
       run-lint:
         description: 'Run linting'
@@ -38,7 +37,6 @@ on:
         required: false
         default: false
         type: boolean
-        
       # Test configuration
       test-coverage:
         description: 'Enable test coverage'
@@ -50,7 +48,6 @@ on:
         required: false
         default: '80'
         type: string
-        
       # Lint configuration
       lint-fix:
         description: 'Auto-fix lint issues'
@@ -62,7 +59,6 @@ on:
         required: false
         default: false
         type: boolean
-        
       # Build configuration
       build-command:
         description: 'Build command'
@@ -74,7 +70,6 @@ on:
         required: false
         default: 'dist'
         type: string
-        
       # Security configuration
       audit-level:
         description: 'Security audit level'
@@ -139,7 +134,8 @@ jobs:
     outputs:
       all-passed: ${{ steps.check.outputs.all-passed }}
     steps:
-      - uses: NextNodeSolutions/github-actions/actions/monitoring/check-job-results@main
+      - name: Check all job results
+        uses: NextNodeSolutions/github-actions/actions/monitoring/check-job-results@main
         id: check
         with:
           job-results: |
