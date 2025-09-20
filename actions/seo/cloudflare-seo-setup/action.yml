@@ -112,8 +112,8 @@ runs:
           # Check if API call was successful
           API_SUCCESS=$(echo "$RULESET_RESPONSE" | jq -r '.success // false')
           if [[ "$API_SUCCESS" != "true" ]]; then
-            echo "❌ Failed to get rulesets from Cloudflare API"
-            echo "$RULESET_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$RULESET_RESPONSE"
+            echo "❌ Failed to get rulesets from Cloudflare API" >&2
+            echo "$RULESET_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$RULESET_RESPONSE" >&2
             return 1
           fi
 
@@ -121,10 +121,10 @@ runs:
           RULESET_ID=$(echo "$RULESET_RESPONSE" | jq -r --arg phase "$phase" '.result // [] | .[] | select(.phase == $phase) | .id // empty')
 
           if [[ -z "$RULESET_ID" ]]; then
-            echo "📝 Creating new $phase ruleset..."
+            echo "📝 Creating new $phase ruleset..." >&2
 
             if [[ "$DRY_RUN" == "true" ]]; then
-              echo "  • [DRY RUN] Would create ruleset for phase: $phase"
+              echo "  • [DRY RUN] Would create ruleset for phase: $phase" >&2
               return 0
             fi
 
@@ -142,14 +142,14 @@ runs:
             RULESET_ID=$(echo "$CREATE_RESPONSE" | jq -r '.result.id // empty')
 
             if [[ -z "$RULESET_ID" ]]; then
-              echo "❌ Failed to create ruleset for phase: $phase"
-              echo "$CREATE_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$CREATE_RESPONSE"
+              echo "❌ Failed to create ruleset for phase: $phase" >&2
+              echo "$CREATE_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$CREATE_RESPONSE" >&2
               return 1
             fi
 
-            echo "✅ Created ruleset: $RULESET_ID"
+            echo "✅ Created ruleset: $RULESET_ID" >&2
           else
-            echo "✅ Found existing ruleset: $RULESET_ID"
+            echo "✅ Found existing ruleset: $RULESET_ID" >&2
           fi
 
           echo "$RULESET_ID"
