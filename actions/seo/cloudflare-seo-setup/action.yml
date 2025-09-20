@@ -118,7 +118,7 @@ runs:
           EXISTING_RULE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" | \
-            jq -r --arg pattern "$url_pattern" '.result[] | select(.targets[0].target.url==$pattern) | .id // empty')
+            jq -r --arg pattern "$url_pattern" '.result // [] | .[] | select(.targets[0].target.url==$pattern) | .id // empty')
           
           if [[ -n "$EXISTING_RULE" ]]; then
             echo "  • ♻️  Updating existing rule: $EXISTING_RULE"
@@ -199,7 +199,7 @@ runs:
           EXISTING_REDIRECT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" | \
-            jq -r --arg pattern "$from_pattern" '.result[] | select(.targets[0].target.url==$pattern and (.actions[0].id=="forwarding_url" or .actions[0].id=="redirect")) | .id // empty')
+            jq -r --arg pattern "$from_pattern" '.result // [] | .[] | select(.targets[0].target.url==$pattern and (.actions[0].id=="forwarding_url" or .actions[0].id=="redirect")) | .id // empty')
           
           REDIRECT_SETTINGS='[{
             "id": "forwarding_url",
