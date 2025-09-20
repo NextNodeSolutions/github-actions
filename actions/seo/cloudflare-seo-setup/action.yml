@@ -243,65 +243,58 @@ runs:
           fi
         }
 
-        # Function to create Single Redirect for www -> non-www
+        # Function to create Page Rule for www -> non-www redirect
         create_redirect_rules() {
           if [[ "$ENABLE_WWW_REDIRECT" != "true" ]]; then
             return 0
           fi
 
-          echo "🔀 Creating Single Redirect for www → non-www..."
-
-          # Get or create the http_request_dynamic_redirect ruleset
-          REDIRECT_RULESET_ID=$(get_transform_ruleset "http_request_dynamic_redirect")
-          local redirect_exit_code=$?
-
-          if [[ $redirect_exit_code -ne 0 ]] || [[ -z "$REDIRECT_RULESET_ID" ]]; then
-            echo "❌ Failed to get Single Redirects ruleset (exit code: $redirect_exit_code)"
-            echo "This may indicate insufficient API permissions for Single Redirects"
-            echo "Please ensure your Cloudflare API token has 'Zone:Edit' permissions"
-            SUCCESS=false
-            return 1
-          fi
+          echo "🔀 Creating Page Rule for www → non-www redirect..."
 
           if [[ "$DRY_RUN" == "true" ]]; then
-            echo "  • [DRY RUN] Would create www → non-www redirect rule"
+            echo "  • [DRY RUN] Would create Page Rule: www.$DOMAIN/* → https://$DOMAIN/\$1"
             REDIRECTS_COUNT=1
             return 0
           fi
 
-          # Create redirect rule
-          REDIRECT_RULE=$(jq -n \
-            --arg expression "http.host eq \"www.$DOMAIN\"" \
-            --arg target_url "concat(\"https://$DOMAIN\", http.request.uri.path)" \
-            --arg description "Redirect www.$DOMAIN to $DOMAIN" \
+          # Create Page Rule for www -> non-www redirect
+          PAGE_RULE_DATA=$(jq -n \
+            --arg pattern "www.$DOMAIN/*" \
+            --arg target_url "https://$DOMAIN/\$1" \
             '{
-              action: "redirect",
-              expression: $expression,
-              description: $description,
-              action_parameters: {
-                from_value: {
-                  target_url: {
-                    expression: $target_url
-                  },
-                  status_code: 301,
-                  preserve_query_string: true
+              actions: [{
+                id: "forwarding_url",
+                value: {
+                  url: $target_url,
+                  status_code: 301
                 }
-              }
+              }],
+              targets: [{
+                constraint: {
+                  operator: "matches",
+                  value: $pattern
+                },
+                target: "url"
+              }],
+              status: "active"
             }')
 
-          # Update the ruleset with redirect rule
-          REDIRECT_RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/$REDIRECT_RULESET_ID" \
+          echo "  • Creating Page Rule: www.$DOMAIN/* → https://$DOMAIN/\$1"
+
+          # Create the Page Rule via API
+          REDIRECT_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data "$(jq -n --argjson rules "[$REDIRECT_RULE]" '{rules: $rules}')")
+            --data "$PAGE_RULE_DATA")
 
           REDIRECT_SUCCESS=$(echo "$REDIRECT_RESPONSE" | jq -r '.success // false')
 
           if [[ "$REDIRECT_SUCCESS" == "true" ]]; then
             REDIRECTS_COUNT=1
-            echo "  • ✅ Created www → non-www redirect successfully"
+            PAGE_RULE_ID=$(echo "$REDIRECT_RESPONSE" | jq -r '.result.id // empty')
+            echo "  • ✅ Created Page Rule redirect successfully (ID: $PAGE_RULE_ID)"
           else
-            echo "  • ❌ Failed to create redirect rule"
+            echo "  • ❌ Failed to create Page Rule redirect"
             echo "$REDIRECT_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$REDIRECT_RESPONSE"
             SUCCESS=false
           fi
@@ -359,7 +352,7 @@ runs:
         echo ""
         echo "✅ All SEO configuration completed automatically!"
         echo "   • X-Robots-Tag headers configured via Transform Rules"
-        echo "   • WWW redirects configured via Single Redirects"
+        echo "   • WWW redirects configured via Page Rules"
         echo "   • No manual Cloudflare dashboard steps required"
 
         # Set outputs
