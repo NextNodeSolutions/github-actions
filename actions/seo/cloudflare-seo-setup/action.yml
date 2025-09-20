@@ -161,10 +161,12 @@ runs:
 
           # Get or create the http_response_headers_transform ruleset
           TRANSFORM_RULESET_ID=$(get_transform_ruleset "http_response_headers_transform")
+          local ruleset_exit_code=$?
 
-          if [[ -z "$TRANSFORM_RULESET_ID" ]]; then
-            echo "❌ Failed to get Transform Rules ruleset"
+          if [[ $ruleset_exit_code -ne 0 ]] || [[ -z "$TRANSFORM_RULESET_ID" ]]; then
+            echo "❌ Failed to get Transform Rules ruleset (exit code: $ruleset_exit_code)"
             echo "This may indicate insufficient API permissions for Transform Rules"
+            echo "Please ensure your Cloudflare API token has 'Zone:Edit' permissions"
             SUCCESS=false
             return 1
           fi
@@ -210,6 +212,19 @@ runs:
             return 0
           fi
 
+          # Validate required data before API call
+          echo "  • Debug: CF_ZONE_ID='$CF_ZONE_ID'"
+          echo "  • Debug: TRANSFORM_RULESET_ID='$TRANSFORM_RULESET_ID'"
+          echo "  • Debug: Rules count=$(echo "$RULES_JSON" | jq 'length')"
+          
+          if [[ -z "$CF_ZONE_ID" ]] || [[ -z "$TRANSFORM_RULESET_ID" ]] || [[ "$TRANSFORM_RULESET_ID" == "null" ]]; then
+            echo "  • ❌ Missing required data for API call"
+            echo "    CF_ZONE_ID: '$CF_ZONE_ID'"
+            echo "    TRANSFORM_RULESET_ID: '$TRANSFORM_RULESET_ID'"
+            SUCCESS=false
+            return 1
+          fi
+
           # Update the ruleset with new rules
           UPDATE_RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/$TRANSFORM_RULESET_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -238,9 +253,12 @@ runs:
 
           # Get or create the http_request_dynamic_redirect ruleset
           REDIRECT_RULESET_ID=$(get_transform_ruleset "http_request_dynamic_redirect")
+          local redirect_exit_code=$?
 
-          if [[ -z "$REDIRECT_RULESET_ID" ]]; then
-            echo "❌ Failed to get Single Redirects ruleset"
+          if [[ $redirect_exit_code -ne 0 ]] || [[ -z "$REDIRECT_RULESET_ID" ]]; then
+            echo "❌ Failed to get Single Redirects ruleset (exit code: $redirect_exit_code)"
+            echo "This may indicate insufficient API permissions for Single Redirects"
+            echo "Please ensure your Cloudflare API token has 'Zone:Edit' permissions"
             SUCCESS=false
             return 1
           fi
