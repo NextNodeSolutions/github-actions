@@ -59,9 +59,9 @@ on:
       seo-configured:
         description: 'Whether SEO configuration was successful'
         value: ${{ jobs.seo-setup.outputs.seo-configured }}
-      page-rules-created:
-        description: 'Number of page rules created for SEO'
-        value: ${{ jobs.seo-setup.outputs.page-rules-created }}
+      transform-rules-created:
+        description: 'Number of transform rules created for SEO'
+        value: ${{ jobs.seo-setup.outputs.transform-rules-created }}
 
 jobs:
   update:
@@ -248,7 +248,7 @@ jobs:
     if: ${{ inputs.enable-seo-setup == true && needs.update.outputs.success == 'true' }}
     outputs:
       seo-configured: ${{ steps.seo.outputs.seo-configured }}
-      page-rules-created: ${{ steps.seo.outputs.page-rules-created }}
+      transform-rules-created: ${{ steps.seo.outputs.transform-rules-created }}
     
     steps:
       - name: Checkout Actions Repository
@@ -276,7 +276,7 @@ jobs:
           echo ""
           echo "**Domain:** ${{ inputs.domain }}"
           echo "**Success:** ${{ steps.seo.outputs.seo-configured }}"
-          echo "**Page Rules:** ${{ steps.seo.outputs.page-rules-created }}"
+          echo "**Transform Rules:** ${{ steps.seo.outputs.transform-rules-created }}"
           echo "**Blocked Subdomains:** ${{ inputs.blocked-subdomains }}"
           echo ""
           
@@ -285,17 +285,15 @@ jobs:
             echo ""
             echo "### Configured automatically:"
             echo "- 🌐 DNS records for ${{ inputs.domain }}"
-            echo "- 🚫 SEO blocking for development subdomains"
-            echo "- 🔀 WWW redirects"
+            echo "- 🚫 SEO blocking for development subdomains (via Transform Rules)"
+            echo "- 🔀 WWW redirects (via Single Redirects)"
             echo "- ⚡ Performance optimizations"
-            echo ""
-            echo "### ⚠️ Manual step required:"
-            echo "Configure X-Robots-Tag headers in Cloudflare Transform Rules"
+            echo "- 🤖 X-Robots-Tag headers (automated)"
           else
             echo "❌ **SEO configuration failed** (DNS was successful)"
           fi
 
-      - name: ⚠️ Manual Steps Required
+      - name: ✅ SEO Configuration Complete
         if: steps.seo.outputs.seo-configured == 'true'
         run: |
-          echo "::warning title=Manual Steps Required::X-Robots-Tag headers must be configured manually in Cloudflare Transform Rules for blocked subdomains: ${{ inputs.blocked-subdomains }}"
+          echo "::notice title=SEO Configuration Complete::All SEO configuration completed automatically via Transform Rules and Single Redirects. No manual steps required."
