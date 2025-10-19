@@ -42,6 +42,22 @@ on:
     secrets:
       RAILWAY_API_TOKEN:
         required: true
+    outputs:
+      deployment-url:
+        description: 'PR preview deployment URL (https://pr-X.dev.domain)'
+        value: ${{ jobs.deploy-preview.outputs.deployment-url }}
+      custom-domain:
+        description: 'Custom domain for PR preview (pr-X.dev.domain)'
+        value: ${{ jobs.deploy-preview.outputs.custom-domain }}
+      railway-url:
+        description: 'Railway internal URL'
+        value: ${{ jobs.deploy-preview.outputs.railway-url }}
+      service-name:
+        description: 'Railway service name'
+        value: ${{ jobs.deploy-preview.outputs.service-name }}
+      deployment-status:
+        description: 'Deployment status (SUCCESS/FAILURE)'
+        value: ${{ jobs.deploy-preview.outputs.deployment-status }}
 
 jobs:
   quality-checks:
@@ -77,6 +93,7 @@ jobs:
       (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
     outputs:
       deployment-url: ${{ steps.domain.outputs.deployment-url }}
+      custom-domain: ${{ steps.domain.outputs.custom-domain }}
       service-name: ${{ steps.domain.outputs.service-name }}
       railway-url: ${{ steps.url.outputs.railway-url }}
       deployment-status: ${{ steps.wait.outputs.status }}
