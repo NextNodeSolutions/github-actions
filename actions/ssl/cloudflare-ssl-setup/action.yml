@@ -1,0 +1,187 @@
+name: 'Cloudflare SSL/TLS Setup'
+description: 'Configure Cloudflare SSL/TLS mode for Railway deployments'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected if not provided)'
+    required: false
+  domain:
+    description: 'Domain to configure (used for auto-detecting zone if zone-id not provided)'
+    required: true
+  ssl-mode:
+    description: 'SSL/TLS mode: off, flexible, full, strict (Railway requires "full")'
+    required: false
+    default: 'full'
+
+outputs:
+  ssl-configured:
+    description: 'Whether SSL/TLS was successfully configured'
+    value: ${{ steps.configure-ssl.outputs.configured }}
+  current-mode:
+    description: 'Current SSL/TLS mode before configuration'
+    value: ${{ steps.configure-ssl.outputs.current-mode }}
+  new-mode:
+    description: 'New SSL/TLS mode after configuration'
+    value: ${{ steps.configure-ssl.outputs.new-mode }}
+  zone-id:
+    description: 'Cloudflare Zone ID (for reuse in subsequent steps)'
+    value: ${{ steps.configure-ssl.outputs.zone-id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure Cloudflare SSL/TLS Mode
+      id: configure-ssl
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        SSL_MODE: ${{ inputs.ssl-mode }}
+      run: |
+        echo "::group::🔒 Configuring Cloudflare SSL/TLS Mode"
+
+        # Validate inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "❌ Cloudflare API token is required"
+          exit 1
+        fi
+
+        if [[ -z "$DOMAIN" ]]; then
+          echo "❌ Domain is required"
+          exit 1
+        fi
+
+        echo "🔧 Configuration:"
+        echo "  • Domain: $DOMAIN"
+        echo "  • Target SSL mode: $SSL_MODE"
+        echo ""
+
+        # Get Zone ID if not provided
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "🔍 Auto-detecting Cloudflare Zone ID..."
+
+          # Extract root domain (last 2 parts: domain.tld)
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+
+          ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+
+          CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // empty')
+
+          if [[ -z "$CF_ZONE_ID" ]]; then
+            echo "❌ Could not find Cloudflare zone for $ROOT_DOMAIN"
+            echo "Please provide zone-id manually or check domain configuration"
+            echo "configured=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "✅ Found Zone ID: $CF_ZONE_ID"
+        else
+          echo "✅ Using provided Zone ID: $CF_ZONE_ID"
+        fi
+
+        # Set zone-id output for reuse
+        echo "zone-id=$CF_ZONE_ID" >> $GITHUB_OUTPUT
+
+        # Get current SSL/TLS mode
+        echo ""
+        echo "🔍 Checking current SSL/TLS configuration..."
+
+        SSL_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/ssl" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        CURRENT_MODE=$(echo "$SSL_RESPONSE" | jq -r '.result.value // empty')
+
+        if [[ -z "$CURRENT_MODE" ]]; then
+          echo "❌ Failed to get current SSL/TLS mode"
+          echo "Debug response:"
+          echo "$SSL_RESPONSE" | jq '.'
+          echo "configured=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "  • Current mode: $CURRENT_MODE"
+        echo "current-mode=$CURRENT_MODE" >> $GITHUB_OUTPUT
+
+        # Check if mode needs to be changed
+        if [[ "$CURRENT_MODE" == "$SSL_MODE" ]]; then
+          echo ""
+          echo "✅ SSL/TLS mode already set to '$SSL_MODE' - no changes needed"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "new-mode=$CURRENT_MODE" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Update SSL/TLS mode
+        echo ""
+        echo "🔧 Updating SSL/TLS mode from '$CURRENT_MODE' to '$SSL_MODE'..."
+
+        UPDATE_RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/ssl" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data "{\"value\":\"$SSL_MODE\"}")
+
+        UPDATE_SUCCESS=$(echo "$UPDATE_RESPONSE" | jq -r '.success // false')
+
+        if [[ "$UPDATE_SUCCESS" == "true" ]]; then
+          NEW_MODE=$(echo "$UPDATE_RESPONSE" | jq -r '.result.value // empty')
+          echo "  • ✅ SSL/TLS mode updated successfully!"
+          echo "  • New mode: $NEW_MODE"
+          echo ""
+          echo "📋 Summary:"
+          echo "  • Previous mode: $CURRENT_MODE"
+          echo "  • New mode: $NEW_MODE"
+          echo "  • Domain: $DOMAIN"
+
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "new-mode=$NEW_MODE" >> $GITHUB_OUTPUT
+
+          # Add helpful information based on the mode
+          case "$NEW_MODE" in
+            "full")
+              echo ""
+              echo "ℹ️  SSL/TLS Mode: Full"
+              echo "   • Cloudflare encrypts traffic to the origin server"
+              echo "   • Accepts self-signed certificates from Railway"
+              echo "   • ✅ Recommended for Railway deployments"
+              ;;
+            "strict")
+              echo ""
+              echo "⚠️  SSL/TLS Mode: Full (Strict)"
+              echo "   • Requires valid SSL certificate on Railway"
+              echo "   • May fail if Railway hasn't provisioned the certificate yet"
+              echo "   • Consider using 'full' mode instead"
+              ;;
+            "flexible")
+              echo ""
+              echo "⚠️  SSL/TLS Mode: Flexible"
+              echo "   • Not recommended for production"
+              echo "   • May cause SSL/TLS errors with Railway"
+              echo "   • Consider using 'full' mode instead"
+              ;;
+          esac
+        else
+          echo "  • ❌ Failed to update SSL/TLS mode"
+          echo "Debug response:"
+          echo "$UPDATE_RESPONSE" | jq '.'
+
+          # Check for common errors
+          ERRORS=$(echo "$UPDATE_RESPONSE" | jq -r '.errors[]?' 2>/dev/null)
+          if [[ -n "$ERRORS" ]]; then
+            echo ""
+            echo "API Errors:"
+            echo "$UPDATE_RESPONSE" | jq '.errors[]?'
+          fi
+
+          echo "configured=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "::endgroup::"

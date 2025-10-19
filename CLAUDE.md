@@ -51,6 +51,8 @@ github-actions/
 │   │   └── npm-provenance/        # NPM provenance attestation
 │   ├── domain/                    # 🌐 Domain Management domain
 │   │   └── railway-domain-setup/  # Domain configuration
+│   ├── ssl/                       # 🔒 SSL/TLS Configuration domain
+│   │   └── cloudflare-ssl-setup/  # Cloudflare SSL/TLS mode configuration
 │   ├── monitoring/                # 🔍 Monitoring domain
 │   │   └── check-job-results/     # Job result verification
 │   ├── utilities/                 # 🛠️ Generic Utilities domain
@@ -87,6 +89,7 @@ The actions are organized into logical domains to improve maintainability and di
 - **🚀 deploy/**: Railway platform deployment and infrastructure management
 - **📦 release/**: NPM package release management with changesets and provenance
 - **🌐 domain/**: Domain and DNS management (separate from deployment)
+- **🔒 ssl/**: SSL/TLS configuration and certificate management
 - **🔍 monitoring/**: Health checks and job result verification
 - **🛠️ utilities/**: Generic helper actions used across domains
 - **Root level**: Only globally-used actions that external projects depend on
@@ -128,6 +131,9 @@ uses: nextnodesolutions/github-actions/actions/quality/typecheck@main
 # Deploy domain
 uses: nextnodesolutions/github-actions/actions/deploy/railway-deploy@main
 
+# SSL domain
+uses: nextnodesolutions/github-actions/actions/ssl/cloudflare-ssl-setup@main
+
 # Release domain
 uses: nextnodesolutions/github-actions/actions/release/changesets-publish@main
 ```
@@ -139,7 +145,7 @@ Internal testing uses `internal-tests.yml` with manual trigger only to avoid rec
 ## Important Notes for Development
 
 ### When Adding New Actions
-1. **Choose appropriate domain**: Place in correct domain folder (`build/`, `quality/`, `deploy/`, `domain/`, `monitoring/`, `utilities/`)
+1. **Choose appropriate domain**: Place in correct domain folder (`build/`, `quality/`, `deploy/`, `domain/`, `ssl/`, `monitoring/`, `utilities/`)
 2. Create a new folder in `/actions/{domain}/` with descriptive name
 3. Add `action.yml` (not `action.yaml`)
 4. Use inputs with sensible defaults
@@ -188,6 +194,7 @@ touch actions/utilities/my-new-action/action.yml
 - **deploy/**: Railway deployment and infrastructure
 - **release/**: NPM package release management, changesets, provenance
 - **domain/**: Domain and DNS management
+- **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks, job verification
 - **utilities/**: Generic helpers and tools
 - **Global level**: Complete setups and externally-used actions
@@ -207,7 +214,17 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: PR Preview Deployments Refactor (2025)
+### Latest Migration: SSL/TLS Configuration Integration (2025)
+Added automatic SSL/TLS mode configuration for Railway + Cloudflare deployments:
+- **Added**: New `ssl/` domain with `cloudflare-ssl-setup` action
+- **Enhanced**: DNS workflow now includes automatic SSL/TLS configuration (enabled by default)
+- **Feature**: Configures Cloudflare SSL/TLS to "Full" mode for Railway compatibility
+- **Inputs**: `enable-ssl-setup` (default: true) and `ssl-mode` (default: "full")
+- **Outputs**: `ssl-configured`, `ssl-mode` for workflow visibility
+- **Fix**: Resolves `ERR_SSL_VERSION_OR_CIPHER_MISMATCH` errors with Railway deployments
+- **Best Practice**: Railway requires "Full" SSL mode, not "Full (Strict)" or "Flexible"
+
+### Previous Migration: PR Preview Deployments Refactor (2025)
 Refactored PR preview system to maximize action reuse and flexibility:
 - **Refactored**: PR preview workflow now composes existing atomic actions (removed `railway-pr-preview` action)
 - **Enhanced**: `railway-service-setup` now supports `service-name-override` input for custom service names
