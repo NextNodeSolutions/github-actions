@@ -44,6 +44,31 @@ on:
         required: false
         default: true
         type: boolean
+      enable-health-check:
+        description: 'Enable health check after DNS configuration'
+        required: false
+        default: true
+        type: boolean
+      health-check-mandatory:
+        description: 'Make health check mandatory (workflow fails if health check fails)'
+        required: false
+        default: false
+        type: boolean
+      health-check-max-attempts:
+        description: 'Max health check attempts'
+        required: false
+        default: '4'
+        type: string
+      health-check-delay:
+        description: 'Delay between health check attempts (seconds)'
+        required: false
+        default: '30'
+        type: string
+      dns-propagation-wait:
+        description: 'Wait time for DNS propagation (seconds)'
+        required: false
+        default: '60'
+        type: string
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
@@ -358,3 +383,26 @@ jobs:
         if: steps.seo.outputs.seo-configured == 'true'
         run: |
           echo "::notice title=SEO Configuration Complete::All SEO configuration completed automatically via Transform Rules and Single Redirects. No manual steps required."
+
+  health-check:
+    name: Health Check
+    runs-on: ubuntu-latest
+    needs: [seo-setup]
+    if: ${{ inputs.enable-health-check == true }}
+    steps:
+      - name: Wait for DNS Propagation
+        shell: bash
+        run: |
+          echo "::group::⏱️ Waiting for DNS Propagation"
+          echo "Waiting ${{ inputs.dns-propagation-wait }} seconds for DNS records to propagate..."
+          sleep ${{ inputs.dns-propagation-wait }}
+          echo "::endgroup::"
+
+      - name: Check Deployment Health
+        uses: NextNodeSolutions/github-actions/actions/health-check@main
+        with:
+          url: https://${{ inputs.domain }}
+          max-attempts: ${{ inputs.health-check-max-attempts }}
+          retry-delay: ${{ inputs.health-check-delay }}
+          expected-status: '200'
+        continue-on-error: ${{ inputs.health-check-mandatory == false }}
