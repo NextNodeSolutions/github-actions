@@ -131,7 +131,7 @@ jobs:
 
       - name: Cleanup DNS Records
         id: dns-cleanup
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && steps.service-info.outputs.custom-domain != '' }}
+        if: ${{ steps.service-info.outputs.custom-domain != '' }}
         uses: ./.github-actions/actions/domain/cloudflare-dns-cleanup
         with:
           domain: ${{ steps.service-info.outputs.custom-domain }}
