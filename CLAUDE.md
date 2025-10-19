@@ -16,6 +16,8 @@ github-actions/
 ├── .github/workflows/              # Reusable workflows (external + internal)
 │   ├── quality-checks.yml         # Full quality pipeline (workflow_call)
 │   ├── deploy.yml                 # Railway deployment (workflow_call)
+│   ├── pr-preview.yml             # PR preview deployments (workflow_call)
+│   ├── pr-preview-cleanup.yml     # PR preview cleanup (workflow_call)
 │   ├── release.yml                # NPM library release (workflow_call)
 │   ├── publish-release.yml        # Publish workflow with repository_dispatch
 │   ├── version-management.yml     # Automated versioning with changesets
@@ -38,6 +40,8 @@ github-actions/
 │   │   ├── railway-deploy/        # Main deployment action
 │   │   ├── railway-deploy-trigger/ # Deployment triggering
 │   │   ├── railway-deployment-wait/ # Deployment monitoring
+│   │   ├── railway-pr-preview/    # PR preview deployment
+│   │   ├── railway-pr-cleanup/    # PR preview cleanup
 │   │   ├── railway-variables/     # Environment variables
 │   │   └── railway-url-generate/  # URL generation
 │   ├── release/                   # 📦 NPM Release Management domain
@@ -98,6 +102,8 @@ External projects can call workflows in two ways:
 ```yaml
 uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/pr-preview-cleanup.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/release.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/version-management.yml@main
 ```
@@ -202,7 +208,17 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: Changesets Publish Action Refactor (2025)
+### Latest Migration: PR Preview Deployments (2025)
+Added automated PR preview deployment system for Railway:
+- **Added**: New `pr-preview.yml` and `pr-preview-cleanup.yml` reusable workflows
+- **Added**: `railway-pr-preview/` and `railway-pr-cleanup/` actions in deploy domain
+- **Feature**: Automatic deployment to `pr-{number}.dev.{base-domain}` for each PR
+- **Feature**: Auto-cleanup when PR is closed (removes service but keeps development environment)
+- **Feature**: PR comments with deployment status, URL, and quality check results
+- **Architecture**: Reuses development environment, creates one service per PR
+- **Integration**: Works with all existing Railway actions and infrastructure
+
+### Previous Migration: Changesets Publish Action Refactor (2025)
 Simplified and fixed the changesets publish action:
 - **Fixed**: "Invalid format '[]'" error by removing problematic JSON package parsing
 - **Simplified**: Reduced complex nested conditionals from 50+ lines to clean 25 lines

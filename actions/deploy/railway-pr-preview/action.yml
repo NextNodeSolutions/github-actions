@@ -1,0 +1,215 @@
+name: 'Railway PR Preview Deploy'
+description: 'Deploy PR preview to Railway using development environment'
+author: 'NextNodeSolutions'
+
+inputs:
+  app-name:
+    description: 'Application name'
+    required: true
+  base-domain:
+    description: 'Base domain for custom domain calculation (e.g. nextnode.fr)'
+    required: true
+  railway-token:
+    description: 'Railway API token'
+    required: true
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  memory-mb:
+    description: 'Memory allocation in MB'
+    required: false
+    default: '512'
+  variables:
+    description: 'Additional environment variables as JSON object'
+    required: false
+    default: '{}'
+  timeout-seconds:
+    description: 'Deployment timeout in seconds'
+    required: false
+    default: '300'
+
+outputs:
+  service-name:
+    description: 'Railway service name for PR preview'
+    value: ${{ steps.setup.outputs.service-name }}
+  deployment-url:
+    description: 'Custom domain URL for PR preview'
+    value: ${{ steps.setup.outputs.deployment-url }}
+  railway-url:
+    description: 'Railway internal URL'
+    value: ${{ steps.url.outputs.railway-url }}
+  deployment-status:
+    description: 'Deployment status'
+    value: ${{ steps.wait.outputs.status }}
+  deployment-id:
+    description: 'Railway deployment ID'
+    value: ${{ steps.wait.outputs.deployment-id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup PR Preview Configuration
+      id: setup
+      shell: bash
+      run: |
+        echo "::group::🔧 Setting up PR Preview Configuration"
+
+        START_TIME=$(date +%s)
+
+        PR_NUMBER="${{ inputs.pr-number }}"
+        APP_NAME="${{ inputs.app-name }}"
+        BASE_DOMAIN="${{ inputs.base-domain }}"
+
+        # Generate service name and custom domain
+        SERVICE_NAME="pr-${PR_NUMBER}_${APP_NAME}"
+        CUSTOM_DOMAIN="pr-${PR_NUMBER}.dev.${BASE_DOMAIN}"
+        DEPLOYMENT_URL="https://${CUSTOM_DOMAIN}"
+
+        echo "• PR Number: $PR_NUMBER"
+        echo "• App Name: $APP_NAME"
+        echo "• Service Name: $SERVICE_NAME"
+        echo "• Custom Domain: $CUSTOM_DOMAIN"
+        echo "• Deployment URL: $DEPLOYMENT_URL"
+
+        # Set outputs
+        echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+        echo "custom-domain=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
+        echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        echo "✅ Configuration setup completed in ${DURATION}s"
+
+        echo "::endgroup::"
+
+    - name: Setup Railway CLI
+      uses: NextNodeSolutions/github-actions/actions/deploy/railway-cli-setup@main
+      with:
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Setup Project
+      id: project
+      uses: NextNodeSolutions/github-actions/actions/deploy/railway-project-setup@main
+      with:
+        app-name: ${{ inputs.app-name }}
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Link to Development Environment
+      shell: bash
+      run: |
+        echo "::group::🔗 Linking to Development Environment"
+
+        PROJECT_ID="${{ steps.project.outputs.project-id }}"
+
+        echo "• Project ID: ${PROJECT_ID:0:8}..."
+        echo "• Environment: development"
+
+        # Link to development environment
+        railway link --project "$PROJECT_ID" --environment development
+
+        echo "✅ Linked to development environment"
+
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true
+
+    - name: Create or Update PR Service
+      id: service
+      shell: bash
+      run: |
+        echo "::group::🚀 Creating/Updating PR Service"
+
+        START_TIME=$(date +%s)
+        SERVICE_NAME="${{ steps.setup.outputs.service-name }}"
+
+        echo "• Service Name: $SERVICE_NAME"
+
+        # Check if service already exists
+        SERVICE_INFO=$(railway status --json 2>/dev/null | jq -r '.services.edges[]? | .node | select(.name=="'"$SERVICE_NAME"'")' 2>/dev/null || echo "{}")
+        SERVICE_ID=$(echo "$SERVICE_INFO" | jq -r '.id // empty' 2>/dev/null || echo "")
+
+        if [ -n "$SERVICE_ID" ] && [ "$SERVICE_ID" != "empty" ]; then
+          echo "✅ Service already exists: $SERVICE_NAME"
+        else
+          echo "• Creating new service: $SERVICE_NAME"
+
+          if railway add --service "$SERVICE_NAME"; then
+            sleep 3
+            echo "✅ Service created successfully"
+          else
+            echo "❌ Failed to create service"
+            exit 1
+          fi
+        fi
+
+        # Activate service context
+        railway service "$SERVICE_NAME"
+
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        echo "✅ Service setup completed in ${DURATION}s"
+
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true
+
+    - name: Configure Memory
+      shell: bash
+      run: |
+        echo "::group::⚙️ Configuring Service Memory"
+
+        SERVICE_NAME="${{ steps.setup.outputs.service-name }}"
+        MEMORY_MB="${{ inputs.memory-mb }}"
+
+        echo "• Service: $SERVICE_NAME"
+        echo "• Memory: ${MEMORY_MB}MB"
+
+        railway variables --set "RAILWAY_SERVICE_MEMORY=${MEMORY_MB}" --service "$SERVICE_NAME"
+
+        echo "✅ Memory configured"
+
+        echo "::endgroup::"
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
+        CI: true
+
+    - name: Configure Additional Variables
+      if: inputs.variables != '{}'
+      uses: NextNodeSolutions/github-actions/actions/deploy/railway-variables@main
+      with:
+        service-name: ${{ steps.setup.outputs.service-name }}
+        environment: development
+        variables: ${{ inputs.variables }}
+        memory-mb: ${{ inputs.memory-mb }}
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Deploy Application
+      uses: NextNodeSolutions/github-actions/actions/deploy/railway-deploy-trigger@main
+      with:
+        service-name: ${{ steps.setup.outputs.service-name }}
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Wait for Deployment
+      id: wait
+      uses: NextNodeSolutions/github-actions/actions/deploy/railway-deployment-wait@main
+      with:
+        service-name: ${{ steps.setup.outputs.service-name }}
+        timeout-seconds: ${{ inputs.timeout-seconds }}
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Generate Railway URL
+      id: url
+      uses: NextNodeSolutions/github-actions/actions/deploy/railway-url-generate@main
+      with:
+        service-name: ${{ steps.setup.outputs.service-name }}
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Configure Custom Domain
+      uses: NextNodeSolutions/github-actions/actions/domain/railway-domain-setup@main
+      with:
+        service-name: ${{ steps.setup.outputs.service-name }}
+        custom-domain: ${{ steps.setup.outputs.custom-domain }}
+        railway-token: ${{ inputs.railway-token }}
+        remove-existing: true

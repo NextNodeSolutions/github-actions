@@ -9,7 +9,9 @@ github-actions/
 ├── .github/workflows/          # Reusable workflows (external + internal)
 │   ├── quality-checks.yml     # Full quality pipeline (workflow_call)
 │   ├── deploy.yml             # Railway deployment (workflow_call)
-│   ├── release.yml            # NPM library release (workflow_call) 
+│   ├── pr-preview.yml         # PR preview deployments (workflow_call)
+│   ├── pr-preview-cleanup.yml # PR preview cleanup (workflow_call)
+│   ├── release.yml            # NPM library release (workflow_call)
 │   ├── publish-release.yml    # Publish workflow with repository_dispatch
 │   ├── version-management.yml # Automated versioning with changesets
 │   └── [additional workflows] # Security, health checks, etc.
@@ -116,6 +118,25 @@ jobs:
 ```
 
 ```yaml
+# PR preview deployment workflow
+name: PR Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
+    with:
+      app-name: my-app
+      base-domain: my-domain.com
+      run-quality-checks: true
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+```yaml
 # NPM library release workflow
 name: Release
 
@@ -163,6 +184,8 @@ jobs:
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
 | `deploy/railway-deploy` | Deploy to Railway platform | `service-name`, `environment` |
+| `deploy/railway-pr-preview` | Deploy PR preview to Railway | `app-name`, `base-domain`, `pr-number` |
+| `deploy/railway-pr-cleanup` | Clean up PR preview deployment | `app-name`, `pr-number` |
 | `deploy/railway-cli-setup` | Setup Railway CLI | `token`, `version` |
 | `deploy/railway-variables` | Set Railway environment variables | `variables`, `service-name` |
 
@@ -234,6 +257,71 @@ jobs:
     secrets:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
 ```
+
+### PR Preview Workflows
+**Files:** `.github/workflows/pr-preview.yml` & `.github/workflows/pr-preview-cleanup.yml`
+
+Automated PR preview deployments to Railway with automatic cleanup.
+
+**Features:**
+- Automatic deployment on PR open/update
+- Custom domain per PR: `pr-{number}.dev.{base-domain}`
+- Optional quality checks before deployment
+- Automatic cleanup when PR is closed
+- PR comments with deployment status and URL
+- Health checks after deployment
+- Shares development environment resources
+
+**PR Preview Deployment Example:**
+```yaml
+# .github/workflows/pr-preview.yml
+name: PR Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
+    with:
+      app-name: nextnode-front
+      base-domain: nextnode.fr
+      run-quality-checks: true  # Lint + Typecheck before deploy
+      memory-mb: '512'
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+**PR Preview Cleanup Example:**
+```yaml
+# .github/workflows/pr-preview-cleanup.yml
+name: PR Preview Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview-cleanup.yml@main
+    with:
+      app-name: nextnode-front
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+**How it works:**
+1. **PR Opened**: Creates new Railway service `pr-{number}_{app-name}` in development environment
+2. **PR Updated**: Redeploys to same service with latest changes
+3. **PR Closed**: Automatically removes the service and domain
+4. **Comments**: Adds/updates PR comment with deployment URL and status
+
+**Domain Structure:**
+- Production: `nextnode.fr`
+- Development: `dev.nextnode.fr`
+- PR #123: `pr-123.dev.nextnode.fr`
+- PR #456: `pr-456.dev.nextnode.fr`
 
 ### NPM Release Workflow
 **File:** `.github/workflows/release.yml`

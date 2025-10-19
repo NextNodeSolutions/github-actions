@@ -1,0 +1,184 @@
+name: Railway PR Preview
+
+# EXTERNAL WORKFLOW - Automated PR preview deployments to Railway
+# Deploys each PR to pr-{number}.dev.{base-domain}
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: 'Application name for Railway project'
+        required: true
+        type: string
+      base-domain:
+        description: 'Base domain for PR previews (e.g. nextnode.fr)'
+        required: true
+        type: string
+      run-quality-checks:
+        description: 'Run quality checks (lint + typecheck) before deployment'
+        required: false
+        default: true
+        type: boolean
+      working-directory:
+        description: 'Working directory'
+        required: false
+        default: '.'
+        type: string
+      memory-mb:
+        description: 'Memory allocation in MB for PR preview'
+        required: false
+        default: '512'
+        type: string
+      variables:
+        description: 'Additional environment variables as JSON object'
+        required: false
+        default: '{}'
+        type: string
+      timeout-seconds:
+        description: 'Deployment timeout in seconds'
+        required: false
+        default: '300'
+        type: string
+    secrets:
+      RAILWAY_API_TOKEN:
+        required: true
+
+jobs:
+  quality-checks:
+    name: Quality Checks
+    if: inputs.run-quality-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js and pnpm
+        uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Lint
+        uses: NextNodeSolutions/github-actions/actions/quality/lint@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          fail-on-warning: false
+
+      - name: Type Check
+        uses: NextNodeSolutions/github-actions/actions/quality/typecheck@main
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+  deploy-preview:
+    name: Deploy PR Preview
+    runs-on: ubuntu-latest
+    needs: [quality-checks]
+    if: |
+      always() &&
+      (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      service-name: ${{ steps.deploy.outputs.service-name }}
+      railway-url: ${{ steps.deploy.outputs.railway-url }}
+      deployment-status: ${{ steps.deploy.outputs.deployment-status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy PR Preview
+        id: deploy
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-pr-preview@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          base-domain: ${{ inputs.base-domain }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          memory-mb: ${{ inputs.memory-mb }}
+          variables: ${{ inputs.variables }}
+          timeout-seconds: ${{ inputs.timeout-seconds }}
+
+      - name: Comment PR with Deployment Info
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const deploymentUrl = '${{ steps.deploy.outputs.deployment-url }}';
+            const serviceName = '${{ steps.deploy.outputs.service-name }}';
+            const railwayUrl = '${{ steps.deploy.outputs.railway-url }}';
+            const status = '${{ steps.deploy.outputs.deployment-status }}';
+            const prNumber = ${{ github.event.pull_request.number }};
+            const runQuality = ${{ inputs.run-quality-checks }};
+
+            // Calculate deployment duration from job start
+            const jobStart = new Date('${{ github.event.pull_request.updated_at }}');
+            const now = new Date();
+            const durationMinutes = Math.floor((now - jobStart) / 1000 / 60);
+            const durationSeconds = Math.floor((now - jobStart) / 1000 % 60);
+            const durationStr = `${durationMinutes}m ${durationSeconds}s`;
+
+            let qualityChecks = '';
+            if (runQuality) {
+              qualityChecks = `
+            ✅ Lint passed
+            ✅ Typecheck passed`;
+            }
+
+            const comment = `## 🚀 PR Preview Deployment Ready!
+
+            📍 **Preview URL:** ${deploymentUrl}
+            🔧 **Service:** \`${serviceName}\`
+            🌍 **Environment:** development
+            📊 **Status:** ${status}
+            ⏱️ **Deployed in:** ${durationStr}${qualityChecks}
+
+            ---
+            <details>
+            <summary>🔍 Railway Details</summary>
+
+            - **Railway URL:** ${railwayUrl}
+            - **PR Number:** #${prNumber}
+            - **Memory:** ${{ inputs.memory-mb }}MB
+
+            </details>
+
+            > Preview deployments are automatically updated on each commit and cleaned up when the PR is closed.
+            `;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('🚀 PR Preview Deployment')
+            );
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment,
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: comment,
+              });
+            }
+
+      - name: Health Check
+        if: steps.deploy.outputs.deployment-status == 'SUCCESS'
+        uses: NextNodeSolutions/github-actions/actions/health-check@main
+        with:
+          url: ${{ steps.deploy.outputs.deployment-url }}
+          max-attempts: 10
+          retry-delay: 30
+          expected-status: '200'
+        continue-on-error: true
