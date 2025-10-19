@@ -185,7 +185,68 @@ jobs:
           else
             echo "No existing record found - will create new record"
           fi
-          
+
+          # Detect and create wildcard for sub-subdomains (e.g., pr-56.dev.nextnode.fr)
+          DOMAIN="${{ inputs.domain }}"
+          # Extract TLD (last 2 parts: domain.tld)
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
+          # Remove TLD to get subdomain parts
+          SUBDOMAIN_PARTS=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
+          # Count dots in subdomain parts (0 = direct subdomain, 1+ = sub-subdomain)
+          DOT_COUNT=$(echo "$SUBDOMAIN_PARTS" | grep -o '\.' | wc -l | xargs)
+
+          echo "DEBUG: Wildcard detection:"
+          echo "  • Full domain: $DOMAIN"
+          echo "  • Root domain: $ROOT_DOMAIN"
+          echo "  • Subdomain parts: $SUBDOMAIN_PARTS"
+          echo "  • Dot count in subdomain: $DOT_COUNT"
+
+          if [[ $DOT_COUNT -ge 1 ]]; then
+            # This is a sub-subdomain (e.g., pr-56.dev.nextnode.fr → *.dev.nextnode.fr)
+            PARENT_SUBDOMAIN=$(echo "$SUBDOMAIN_PARTS" | cut -d'.' -f2-)
+            WILDCARD_DOMAIN="*.${PARENT_SUBDOMAIN}.${ROOT_DOMAIN}"
+
+            echo "🔍 Detected sub-subdomain pattern"
+            echo "  • Creating wildcard: $WILDCARD_DOMAIN"
+
+            # Check if wildcard already exists
+            WILDCARD_CHECK=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$WILDCARD_DOMAIN" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json")
+
+            WILDCARD_EXISTS=$(echo "$WILDCARD_CHECK" | jq -r '.result | length')
+
+            if [[ $WILDCARD_EXISTS -eq 0 ]]; then
+              echo "✨ Creating wildcard DNS record: $WILDCARD_DOMAIN"
+
+              WILDCARD_DATA=$(jq -n \
+                --arg type "${{ inputs.record-type }}" \
+                --arg name "$WILDCARD_DOMAIN" \
+                --arg content "$TARGET_VALUE" \
+                --argjson proxied "${{ inputs.proxied }}" \
+                --argjson ttl "${{ inputs.ttl }}" \
+                '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
+
+              WILDCARD_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data "$WILDCARD_DATA")
+
+              WILDCARD_SUCCESS=$(echo "$WILDCARD_RESPONSE" | jq -r '.success')
+
+              if [[ "$WILDCARD_SUCCESS" == "true" ]]; then
+                echo "✅ Wildcard record created successfully"
+              else
+                echo "⚠️ Wildcard creation failed (non-blocking):"
+                echo "$WILDCARD_RESPONSE" | jq '.errors'
+              fi
+            else
+              echo "✅ Wildcard record already exists: $WILDCARD_DOMAIN"
+            fi
+          else
+            echo "ℹ️  Direct subdomain - no wildcard needed"
+          fi
+
           # Prepare record data
           RECORD_DATA=$(jq -n \
             --arg type "${{ inputs.record-type }}" \
