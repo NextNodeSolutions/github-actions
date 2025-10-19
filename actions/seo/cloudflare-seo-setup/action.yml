@@ -181,10 +181,18 @@ runs:
           # Extract root domain
           ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
 
+          # Extract current subdomain from domain
+          # For pr-56.dev.nextnode.fr:
+          #   - Remove root (nextnode.fr) → pr-56.dev
+          #   - Get rightmost part → dev
+          SUBDOMAIN_PARTS=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
+          CURRENT_SUBDOMAIN=$(echo "$SUBDOMAIN_PARTS" | awk -F. '{print $NF}')
+
           echo "  • Domain: $DOMAIN"
           echo "  • Root domain: $ROOT_DOMAIN"
+          echo "  • Current subdomain: $CURRENT_SUBDOMAIN"
           echo ""
-          echo "🎯 Using WILDCARD rules strategy (1 rule per blocked subdomain)"
+          echo "🎯 Smart SEO blocking: Only create rule for current subdomain"
 
           # Get existing rules from ruleset
           echo "  • Fetching existing rules from ruleset..."
@@ -198,59 +206,63 @@ runs:
 
           # Build new rules array starting from existing rules
           RULES_JSON="$EXISTING_RULES"
-
-          # Process each blocked subdomain
-          IFS=',' read -ra SUBDOMAINS <<< "$BLOCKED_SUBDOMAINS"
           NEW_RULES_COUNT=0
 
-          for subdomain in "${SUBDOMAINS[@]}"; do
-            subdomain=$(echo "$subdomain" | xargs) # trim whitespace
-            if [[ -z "$subdomain" ]]; then
-              continue
-            fi
+          # Check if current subdomain should be blocked
+          SHOULD_BLOCK=false
 
-            # Check whitelist first
-            if [[ -n "$ALLOWED_SUBDOMAINS" ]]; then
-              if [[ ",$ALLOWED_SUBDOMAINS," == *",$subdomain,"* ]]; then
-                echo "  • ⏭️  Skipping $subdomain (whitelisted)"
-                continue
-              fi
+          # Check whitelist first
+          if [[ -n "$ALLOWED_SUBDOMAINS" ]]; then
+            if [[ ",$ALLOWED_SUBDOMAINS," == *",$CURRENT_SUBDOMAIN,"* ]]; then
+              echo "  • ⏭️  Current subdomain '$CURRENT_SUBDOMAIN' is whitelisted - skipping SEO blocking"
+              SHOULD_BLOCK=false
             fi
+          fi
 
+          # Check if current subdomain is in blocked list
+          if [[ ",$BLOCKED_SUBDOMAINS," == *",$CURRENT_SUBDOMAIN,"* ]]; then
+            if [[ "$SHOULD_BLOCK" != "false" ]]; then
+              SHOULD_BLOCK=true
+            fi
+          else
+            echo "  • ℹ️  Current subdomain '$CURRENT_SUBDOMAIN' not in blocked list - skipping SEO blocking"
+          fi
+
+          # Only create rule if current subdomain should be blocked
+          if [[ "$SHOULD_BLOCK" == "true" ]]; then
             # Create wildcard domain pattern
-            WILDCARD_DOMAIN=".${subdomain}.${ROOT_DOMAIN}"
+            WILDCARD_DOMAIN=".${CURRENT_SUBDOMAIN}.${ROOT_DOMAIN}"
 
-            # Check if rule already exists for this wildcard (check expression contains the domain)
+            # Check if rule already exists for this wildcard
             RULE_EXISTS=$(echo "$EXISTING_RULES" | jq --arg domain "$WILDCARD_DOMAIN" '[.[] | select(.expression | contains($domain))] | length')
 
             if [[ "$RULE_EXISTS" -gt 0 ]]; then
               echo "  • ✅ Rule already exists for *${WILDCARD_DOMAIN} (skipped)"
-              continue
-            fi
+            else
+              # Create new wildcard rule
+              echo "  • 🆕 Creating wildcard rule for *${WILDCARD_DOMAIN}"
 
-            # Create new wildcard rule
-            echo "  • 🆕 Creating wildcard rule for *${WILDCARD_DOMAIN}"
-
-            NEW_RULE=$(jq -n \
-              --arg expression "http.host ends_with \".${subdomain}.${ROOT_DOMAIN}\"" \
-              --arg description "Block *.${subdomain}.${ROOT_DOMAIN} from search engines (SEO protection)" \
-              '{
-                action: "rewrite",
-                expression: $expression,
-                description: $description,
-                action_parameters: {
-                  headers: {
-                    "X-Robots-Tag": {
-                      operation: "set",
-                      value: "noindex, nofollow"
+              NEW_RULE=$(jq -n \
+                --arg expression "http.host ends_with \".${CURRENT_SUBDOMAIN}.${ROOT_DOMAIN}\"" \
+                --arg description "Block *.${CURRENT_SUBDOMAIN}.${ROOT_DOMAIN} from search engines (SEO protection)" \
+                '{
+                  action: "rewrite",
+                  expression: $expression,
+                  description: $description,
+                  action_parameters: {
+                    headers: {
+                      "X-Robots-Tag": {
+                        operation: "set",
+                        value: "noindex, nofollow"
+                      }
                     }
                   }
-                }
-              }')
+                }')
 
-            RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$NEW_RULE" '. + [$rule]')
-            ((NEW_RULES_COUNT++))
-          done
+              RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$NEW_RULE" '. + [$rule]')
+              ((NEW_RULES_COUNT++))
+            fi
+          fi
 
           echo ""
           echo "📋 Summary:"
