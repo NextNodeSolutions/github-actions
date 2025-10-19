@@ -78,7 +78,7 @@ runs:
         # Get Zone ID if not provided
         if [[ -z "$CF_ZONE_ID" ]]; then
           echo "🔍 Auto-detecting Cloudflare Zone ID..."
-          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
 
           ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -247,7 +247,7 @@ runs:
         is_subdomain() {
           local domain="$1"
           # Extract root domain (last two segments: example.com)
-          local root_domain=$(echo "$domain" | awk -F. '{print $(NF-1)"."$NF}')
+          local root_domain=$(echo "$domain" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
 
           # If domain equals root domain, it's not a subdomain
           if [[ "$domain" == "$root_domain" ]]; then

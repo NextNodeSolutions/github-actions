@@ -80,7 +80,7 @@ jobs:
           # Get zone ID if not provided
           if [[ -z "$CF_ZONE_ID" ]]; then
             # Extract root domain from full domain
-            ROOT_DOMAIN=$(echo "${{ inputs.domain }}" | awk -F. '{print $(NF-1)"."$NF}')
+            ROOT_DOMAIN=$(echo "${{ inputs.domain }}" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
             
             ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
               -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -189,7 +189,7 @@ jobs:
           # Detect and create wildcard for sub-subdomains (e.g., pr-56.dev.nextnode.fr)
           DOMAIN="${{ inputs.domain }}"
           # Extract TLD (last 2 parts: domain.tld)
-          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
           # Remove TLD to get subdomain parts
           SUBDOMAIN_PARTS=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
           # Count dots in subdomain parts (0 = direct subdomain, 1+ = sub-subdomain)

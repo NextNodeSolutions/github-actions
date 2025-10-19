@@ -263,11 +263,26 @@ jobs:
               });
             }
 
-      - name: Health Check
-        if: steps.wait.outputs.status == 'SUCCESS'
+  health-check:
+    name: Health Check
+    runs-on: ubuntu-latest
+    needs: [deploy-preview]
+    if: |
+      always() &&
+      needs.deploy-preview.outputs.deployment-status == 'SUCCESS'
+    steps:
+      - name: Wait for DNS Propagation
+        shell: bash
+        run: |
+          echo "::group::⏱️ Waiting for DNS Propagation"
+          echo "Waiting 60 seconds for DNS records to propagate..."
+          sleep 60
+          echo "::endgroup::"
+
+      - name: Check Deployment Health
         uses: NextNodeSolutions/github-actions/actions/health-check@main
         with:
-          url: ${{ steps.domain.outputs.deployment-url }}
+          url: ${{ needs.deploy-preview.outputs.deployment-url }}
           max-attempts: 10
           retry-delay: 30
           expected-status: '200'
