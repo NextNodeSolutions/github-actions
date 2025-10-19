@@ -237,11 +237,11 @@ jobs:
           echo "  • CURRENT_CONTENT: '$CURRENT_CONTENT'"
           echo "  • CURRENT_PROXIED: '$CURRENT_PROXIED'"
           
-          # Clean target URL for CNAME records (remove https:// if present)
+          # Clean target URL for CNAME records (remove ALL protocol prefixes)
           TARGET_VALUE="${{ inputs.target }}"
           if [[ "${{ inputs.record-type }}" == "CNAME" ]]; then
-            # Remove protocol and trailing slash if present
-            TARGET_VALUE=$(echo "$TARGET_VALUE" | sed 's|^https\?://||g' | sed 's|/$||g')
+            # Remove ALL occurrences of http:// or https:// (not just first one)
+            TARGET_VALUE=$(echo "$TARGET_VALUE" | sed -E 's|https?://||g' | sed 's|/$||g')
             echo "Original target: ${{ inputs.target }}"
             echo "Cleaned CNAME target: $TARGET_VALUE"
           fi

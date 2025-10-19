@@ -41,8 +41,10 @@ runs:
         # Check if a Railway domain already exists
         echo "• Checking for existing domain..."
         SERVICE_DOMAIN=$(railway status --json 2>/dev/null | jq -r "$JQ_SERVICE_SELECTOR | .serviceInstances.edges[].node.domains.serviceDomains[0].domain // empty" 2>/dev/null)
-        
+
         if [ -n "$SERVICE_DOMAIN" ] && [ "$SERVICE_DOMAIN" != "empty" ]; then
+          # Strip any existing protocol prefix before adding https://
+          SERVICE_DOMAIN=$(echo "$SERVICE_DOMAIN" | sed -E 's|^https?://||g')
           RAILWAY_URL="https://$SERVICE_DOMAIN"
           echo "• Found existing domain: $SERVICE_DOMAIN"
           echo "url=$RAILWAY_URL" >> $GITHUB_OUTPUT
@@ -53,11 +55,13 @@ runs:
           
           # Generate Railway domain
           DOMAIN_OUTPUT=$(railway domain --json --service "$SERVICE_NAME" 2>/dev/null || echo "{}")
-          
+
           if [ "$DOMAIN_OUTPUT" != "{}" ]; then
             RAILWAY_DOMAIN=$(echo "$DOMAIN_OUTPUT" | jq -r '.domain // empty' 2>/dev/null)
-            
+
             if [ -n "$RAILWAY_DOMAIN" ] && [ "$RAILWAY_DOMAIN" != "empty" ]; then
+              # Strip any existing protocol prefix before adding https://
+              RAILWAY_DOMAIN=$(echo "$RAILWAY_DOMAIN" | sed -E 's|^https?://||g')
               RAILWAY_URL="https://$RAILWAY_DOMAIN"
               echo "• Generated new domain: $RAILWAY_DOMAIN"
               echo "url=$RAILWAY_URL" >> $GITHUB_OUTPUT
