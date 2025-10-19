@@ -243,9 +243,32 @@ runs:
           fi
         }
 
+        # Function to check if domain is a subdomain
+        is_subdomain() {
+          local domain="$1"
+          # Extract root domain (last two segments: example.com)
+          local root_domain=$(echo "$domain" | awk -F. '{print $(NF-1)"."$NF}')
+
+          # If domain equals root domain, it's not a subdomain
+          if [[ "$domain" == "$root_domain" ]]; then
+            return 1  # Not a subdomain
+          else
+            return 0  # Is a subdomain
+          fi
+        }
+
         # Function to create Page Rule for www -> non-www redirect
         create_redirect_rules() {
           if [[ "$ENABLE_WWW_REDIRECT" != "true" ]]; then
+            return 0
+          fi
+
+          # Skip www redirect for subdomains (e.g., dev.nextnode.fr, staging.nextnode.fr)
+          # Page Rules don't work well with sub-subdomains like www.dev.nextnode.fr
+          if is_subdomain "$DOMAIN"; then
+            echo "🔀 Skipping www redirect for subdomain: $DOMAIN"
+            echo "  • Page Rules don't support www redirects on subdomains"
+            echo "  • This is expected for dev/staging environments"
             return 0
           fi
 
