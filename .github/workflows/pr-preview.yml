@@ -14,6 +14,11 @@ on:
         description: 'Base domain for PR previews (e.g. nextnode.fr)'
         required: true
         type: string
+      base-environment:
+        description: 'Base Railway environment for PR previews'
+        required: false
+        default: 'development'
+        type: string
       run-quality-checks:
         description: 'Run quality checks (lint + typecheck) before deployment'
         required: false
@@ -28,11 +33,6 @@ on:
         description: 'Memory allocation in MB for PR preview'
         required: false
         default: '512'
-        type: string
-      variables:
-        description: 'Additional environment variables as JSON object'
-        required: false
-        default: '{}'
         type: string
       timeout-seconds:
         description: 'Deployment timeout in seconds'
@@ -76,39 +76,129 @@ jobs:
       always() &&
       (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
     outputs:
-      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
-      service-name: ${{ steps.deploy.outputs.service-name }}
-      railway-url: ${{ steps.deploy.outputs.railway-url }}
-      deployment-status: ${{ steps.deploy.outputs.deployment-status }}
+      deployment-url: ${{ steps.domain.outputs.deployment-url }}
+      service-name: ${{ steps.domain.outputs.service-name }}
+      railway-url: ${{ steps.url.outputs.railway-url }}
+      deployment-status: ${{ steps.wait.outputs.status }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy PR Preview
-        id: deploy
-        uses: NextNodeSolutions/github-actions/actions/deploy/railway-pr-preview@main
+      - name: Calculate PR Service Name and Domain
+        id: domain
+        shell: bash
+        run: |
+          echo "::group::🔧 Calculating PR Preview Configuration"
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          APP_NAME="${{ inputs.app-name }}"
+          BASE_DOMAIN="${{ inputs.base-domain }}"
+
+          # Generate service name and custom domain
+          SERVICE_NAME="pr-${PR_NUMBER}_${APP_NAME}"
+          CUSTOM_DOMAIN="pr-${PR_NUMBER}.dev.${BASE_DOMAIN}"
+          DEPLOYMENT_URL="https://${CUSTOM_DOMAIN}"
+
+          echo "• PR Number: $PR_NUMBER"
+          echo "• App Name: $APP_NAME"
+          echo "• Service Name: $SERVICE_NAME"
+          echo "• Custom Domain: $CUSTOM_DOMAIN"
+          echo "• Deployment URL: $DEPLOYMENT_URL"
+
+          # Set outputs
+          echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+          echo "custom-domain=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
+          echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+          echo "::endgroup::"
+
+      - name: Setup Railway CLI
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-cli-setup@main
+        with:
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+      - name: Setup Project
+        id: project
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-project-setup@main
         with:
           app-name: ${{ inputs.app-name }}
-          base-domain: ${{ inputs.base-domain }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
-          pr-number: ${{ github.event.pull_request.number }}
-          memory-mb: ${{ inputs.memory-mb }}
-          variables: ${{ inputs.variables }}
+
+      - name: Setup PR Service
+        id: service
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-service-setup@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          environment: ${{ inputs.base-environment }}
+          project-id: ${{ steps.project.outputs.project-id }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          service-name-override: ${{ steps.domain.outputs.service-name }}
+
+      - name: Configure URL Variable
+        shell: bash
+        run: |
+          echo "::group::🌐 Configuring Site URL"
+
+          SERVICE_NAME="${{ steps.domain.outputs.service-name }}"
+          SITE_URL="${{ steps.domain.outputs.deployment-url }}"
+
+          echo "• Service: $SERVICE_NAME"
+          echo "• Site URL: $SITE_URL"
+
+          railway variables --set "URL=${SITE_URL}" --service "$SERVICE_NAME"
+
+          echo "✅ URL variable configured"
+
+          echo "::endgroup::"
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          CI: true
+
+      - name: Deploy Application
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-deploy-trigger@main
+        with:
+          service-name: ${{ steps.domain.outputs.service-name }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+      - name: Wait for Deployment
+        id: wait
+        if: always()
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-deployment-wait@main
+        with:
+          service-name: ${{ steps.domain.outputs.service-name }}
           timeout-seconds: ${{ inputs.timeout-seconds }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+      - name: Generate Railway URL
+        id: url
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-url-generate@main
+        with:
+          service-name: ${{ steps.domain.outputs.service-name }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+      - name: Configure Custom Domain
+        uses: NextNodeSolutions/github-actions/actions/domain/railway-domain-setup@main
+        with:
+          service-name: ${{ steps.domain.outputs.service-name }}
+          custom-domain: ${{ steps.domain.outputs.custom-domain }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          remove-existing: true
 
       - name: Comment PR with Deployment Info
         uses: actions/github-script@v7
+        if: always()
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const deploymentUrl = '${{ steps.deploy.outputs.deployment-url }}';
-            const serviceName = '${{ steps.deploy.outputs.service-name }}';
-            const railwayUrl = '${{ steps.deploy.outputs.railway-url }}';
-            const status = '${{ steps.deploy.outputs.deployment-status }}';
+            const deploymentUrl = '${{ steps.domain.outputs.deployment-url }}';
+            const serviceName = '${{ steps.domain.outputs.service-name }}';
+            const railwayUrl = '${{ steps.url.outputs.railway-url }}';
+            const status = '${{ steps.wait.outputs.status }}';
             const prNumber = ${{ github.event.pull_request.number }};
             const runQuality = ${{ inputs.run-quality-checks }};
+            const baseEnv = '${{ inputs.base-environment }}';
 
-            // Calculate deployment duration from job start
+            // Calculate deployment duration
             const jobStart = new Date('${{ github.event.pull_request.updated_at }}');
             const now = new Date();
             const durationMinutes = Math.floor((now - jobStart) / 1000 / 60);
@@ -122,11 +212,11 @@ jobs:
             ✅ Typecheck passed`;
             }
 
-            const comment = `## 🚀 PR Preview Deployment Ready!
+            const comment = `## 🚀 PR Preview Deployment ${status === 'SUCCESS' ? 'Ready!' : 'Status'}
 
             📍 **Preview URL:** ${deploymentUrl}
             🔧 **Service:** \`${serviceName}\`
-            🌍 **Environment:** development
+            🌍 **Environment:** ${baseEnv}
             📊 **Status:** ${status}
             ⏱️ **Deployed in:** ${durationStr}${qualityChecks}
 
@@ -174,10 +264,10 @@ jobs:
             }
 
       - name: Health Check
-        if: steps.deploy.outputs.deployment-status == 'SUCCESS'
+        if: steps.wait.outputs.status == 'SUCCESS'
         uses: NextNodeSolutions/github-actions/actions/health-check@main
         with:
-          url: ${{ steps.deploy.outputs.deployment-url }}
+          url: ${{ steps.domain.outputs.deployment-url }}
           max-attempts: 10
           retry-delay: 30
           expected-status: '200'

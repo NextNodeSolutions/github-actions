@@ -36,11 +36,10 @@ github-actions/
 │   ├── deploy/                    # 🚀 Railway Deployment domain
 │   │   ├── railway-cli-setup/     # Railway CLI configuration
 │   │   ├── railway-project-setup/ # Railway project management
-│   │   ├── railway-service-setup/ # Railway service configuration
+│   │   ├── railway-service-setup/ # Railway service configuration (supports custom service names)
 │   │   ├── railway-deploy/        # Main deployment action
 │   │   ├── railway-deploy-trigger/ # Deployment triggering
 │   │   ├── railway-deployment-wait/ # Deployment monitoring
-│   │   ├── railway-pr-preview/    # PR preview deployment
 │   │   ├── railway-pr-cleanup/    # PR preview cleanup
 │   │   ├── railway-variables/     # Environment variables
 │   │   └── railway-url-generate/  # URL generation
@@ -208,15 +207,16 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: PR Preview Deployments (2025)
-Added automated PR preview deployment system for Railway:
-- **Added**: New `pr-preview.yml` and `pr-preview-cleanup.yml` reusable workflows
-- **Added**: `railway-pr-preview/` and `railway-pr-cleanup/` actions in deploy domain
+### Latest Migration: PR Preview Deployments Refactor (2025)
+Refactored PR preview system to maximize action reuse and flexibility:
+- **Refactored**: PR preview workflow now composes existing atomic actions (removed `railway-pr-preview` action)
+- **Enhanced**: `railway-service-setup` now supports `service-name-override` input for custom service names
+- **Added**: `base-environment` input to PR preview workflow (configurable, defaults to 'development')
 - **Feature**: Automatic deployment to `pr-{number}.dev.{base-domain}` for each PR
-- **Feature**: Auto-cleanup when PR is closed (removes service but keeps development environment)
+- **Feature**: Auto-cleanup when PR is closed (removes service but keeps base environment)
 - **Feature**: PR comments with deployment status, URL, and quality check results
-- **Architecture**: Reuses development environment, creates one service per PR
-- **Integration**: Works with all existing Railway actions and infrastructure
+- **Architecture**: Follows DRY principle by composing atomic Railway actions
+- **Flexibility**: Can be adapted for staging PRs, feature branches, etc.
 
 ### Previous Migration: Changesets Publish Action Refactor (2025)
 Simplified and fixed the changesets publish action:

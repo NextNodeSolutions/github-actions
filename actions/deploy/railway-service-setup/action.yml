@@ -15,6 +15,10 @@ inputs:
   railway-token:
     description: 'Railway API token'
     required: true
+  service-name-override:
+    description: 'Override service name (e.g., pr-123_app-name). If not provided, generates from environment.'
+    required: false
+    default: ''
 
 outputs:
   service-id:
@@ -46,19 +50,30 @@ runs:
         # Use project ID directly
         PROJECT_ID="${{ inputs.project-id }}"
         log_info "Project ID: ${PROJECT_ID:0:8}..."
-        
-        # Generate service name based on environment
-        if [[ "${{ inputs.environment }}" == "production" ]]; then
-          SERVICE_PREFIX="prod"
-        elif [[ "${{ inputs.environment }}" == "staging" ]]; then
-          SERVICE_PREFIX="staging"
+
+        # Generate service name based on environment or override
+        SERVICE_NAME_OVERRIDE="${{ inputs.service-name-override }}"
+
+        if [[ -n "$SERVICE_NAME_OVERRIDE" ]]; then
+          # Use provided override
+          SERVICE_NAME="$SERVICE_NAME_OVERRIDE"
+          log_info "Using service name override: $SERVICE_NAME"
         else
-          SERVICE_PREFIX="dev"
+          # Generate from environment (default behavior)
+          if [[ "${{ inputs.environment }}" == "production" ]]; then
+            SERVICE_PREFIX="prod"
+          elif [[ "${{ inputs.environment }}" == "staging" ]]; then
+            SERVICE_PREFIX="staging"
+          else
+            SERVICE_PREFIX="dev"
+          fi
+
+          SERVICE_NAME="${SERVICE_PREFIX}_${{ inputs.app-name }}"
+          log_info "Generated service name: $SERVICE_NAME"
         fi
-        
-        SERVICE_NAME="${SERVICE_PREFIX}_${{ inputs.app-name }}"
+
         ENVIRONMENT="${{ inputs.environment }}"
-        
+
         log_info "Service: $SERVICE_NAME"
         log_info "Environment: $ENVIRONMENT"
         

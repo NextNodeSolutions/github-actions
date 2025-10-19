@@ -184,7 +184,7 @@ jobs:
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
 | `deploy/railway-deploy` | Deploy to Railway platform | `service-name`, `environment` |
-| `deploy/railway-pr-preview` | Deploy PR preview to Railway | `app-name`, `base-domain`, `pr-number` |
+| `deploy/railway-service-setup` | Setup Railway service and environment | `app-name`, `environment`, `service-name-override` (optional) |
 | `deploy/railway-pr-cleanup` | Clean up PR preview deployment | `app-name`, `pr-number` |
 | `deploy/railway-cli-setup` | Setup Railway CLI | `token`, `version` |
 | `deploy/railway-variables` | Set Railway environment variables | `variables`, `service-name` |
@@ -266,11 +266,13 @@ Automated PR preview deployments to Railway with automatic cleanup.
 **Features:**
 - Automatic deployment on PR open/update
 - Custom domain per PR: `pr-{number}.dev.{base-domain}`
-- Optional quality checks before deployment
+- Configurable base environment (defaults to `development`)
+- Optional quality checks before deployment (lint + typecheck)
 - Automatic cleanup when PR is closed
 - PR comments with deployment status and URL
 - Health checks after deployment
-- Shares development environment resources
+- Composes existing Railway actions (no duplication)
+- Shares configured base environment resources
 
 **PR Preview Deployment Example:**
 ```yaml
@@ -287,6 +289,7 @@ jobs:
     with:
       app-name: nextnode-front
       base-domain: nextnode.fr
+      base-environment: 'development'  # Optional, defaults to 'development'
       run-quality-checks: true  # Lint + Typecheck before deploy
       memory-mb: '512'
     secrets:
