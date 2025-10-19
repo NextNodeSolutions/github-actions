@@ -168,7 +168,27 @@ jobs:
               exit 1
             fi
           fi
-          
+
+          # Detect sub-subdomain depth for Railway compatibility
+          # Railway + Cloudflare proxy: sub-subdomains (3+ levels) require proxied=false
+          # Example: pr-56.dev.nextnode.fr (3 levels) → proxied=false
+          # Example: dev.nextnode.fr (2 levels) → proxied=true (default)
+          DOMAIN="${{ inputs.domain }}"
+          DOT_COUNT=$(echo "$DOMAIN" | grep -o '\.' | wc -l | xargs)
+
+          # Override proxied setting if sub-subdomain detected
+          PROXIED_OVERRIDE="${{ inputs.proxied }}"
+          if [[ $DOT_COUNT -ge 2 ]]; then
+            # This is a sub-subdomain (e.g., pr-56.dev.nextnode.fr)
+            echo "⚠️  Sub-subdomain detected ($DOMAIN)"
+            echo "   Railway requires DNS-only mode (proxied=false) for sub-subdomains"
+            echo "   Cloudflare proxy blocks Railway CNAME detection & SSL provisioning"
+            PROXIED_OVERRIDE="false"
+          else
+            echo "✅ First-level subdomain or apex ($DOMAIN)"
+            echo "   Using proxied=$PROXIED_OVERRIDE (Cloudflare proxy compatible)"
+          fi
+
           # Check if ANY record exists for this domain (A, AAAA, CNAME)
           # First check for the exact type we want
           EXISTING_EXACT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}&type=${{ inputs.record-type }}" \
@@ -235,10 +255,10 @@ jobs:
             echo "  • New type: ${{ inputs.record-type }}"
             echo "  • New content: $TARGET_VALUE"
             echo "  • Current proxied: $CURRENT_PROXIED"
-            echo "  • New proxied: ${{ inputs.proxied }}"
-            
+            echo "  • New proxied: $PROXIED_OVERRIDE"
+
             # Convert boolean values for comparison
-            EXPECTED_PROXIED="${{ inputs.proxied }}"
+            EXPECTED_PROXIED="$PROXIED_OVERRIDE"
             EXPECTED_TYPE="${{ inputs.record-type }}"
             
             if [[ "$CURRENT_TYPE" == "$EXPECTED_TYPE" && "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "$EXPECTED_PROXIED" ]]; then
@@ -298,7 +318,7 @@ jobs:
                 --arg type "${{ inputs.record-type }}" \
                 --arg name "$WILDCARD_DOMAIN" \
                 --arg content "$TARGET_VALUE" \
-                --argjson proxied "${{ inputs.proxied }}" \
+                --argjson proxied "$PROXIED_OVERRIDE" \
                 --argjson ttl "${{ inputs.ttl }}" \
                 '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
 
@@ -327,7 +347,7 @@ jobs:
             --arg type "${{ inputs.record-type }}" \
             --arg name "${{ inputs.domain }}" \
             --arg content "$TARGET_VALUE" \
-            --argjson proxied "${{ inputs.proxied }}" \
+            --argjson proxied "$PROXIED_OVERRIDE" \
             --argjson ttl "${{ inputs.ttl }}" \
             '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
           
@@ -358,7 +378,52 @@ jobs:
             echo "$RESPONSE" | jq '.errors'
             exit 1
           fi
-          
+
+          # Create _acme-challenge record for Railway SSL validation (DNS-only)
+          # Required for Railway to issue Let's Encrypt certificates for custom domains
+          # Must be DNS-only (proxied=false) to allow Railway ACME validation
+          if [[ "${{ inputs.record-type }}" == "CNAME" && "$PROXIED_OVERRIDE" == "false" ]]; then
+            ACME_DOMAIN="_acme-challenge.${{ inputs.domain }}"
+            echo ""
+            echo "🔐 Creating ACME challenge record for Railway SSL validation"
+            echo "  • Record: $ACME_DOMAIN"
+            echo "  • Target: $TARGET_VALUE"
+            echo "  • Proxied: false (required for ACME validation)"
+
+            # Check if ACME record already exists
+            ACME_CHECK=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$ACME_DOMAIN&type=CNAME" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json")
+
+            ACME_EXISTS=$(echo "$ACME_CHECK" | jq -r '.result | length')
+
+            if [[ $ACME_EXISTS -eq 0 ]]; then
+              ACME_DATA=$(jq -n \
+                --arg type "CNAME" \
+                --arg name "$ACME_DOMAIN" \
+                --arg content "$TARGET_VALUE" \
+                --argjson proxied false \
+                --argjson ttl 1 \
+                '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
+
+              ACME_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data "$ACME_DATA")
+
+              ACME_SUCCESS=$(echo "$ACME_RESPONSE" | jq -r '.success')
+
+              if [[ "$ACME_SUCCESS" == "true" ]]; then
+                echo "✅ ACME challenge record created successfully"
+              else
+                echo "⚠️  ACME challenge creation failed (non-blocking):"
+                echo "$ACME_RESPONSE" | jq '.errors'
+              fi
+            else
+              echo "✅ ACME challenge record already exists"
+            fi
+          fi
+
           # Add www subdomain (CNAME to same Railway target)
           if [[ "${{ inputs.domain }}" != www.* ]]; then
             echo "Adding www.${{ inputs.domain }} CNAME to same target..."
@@ -449,6 +514,6 @@ jobs:
         with:
           url: https://${{ inputs.domain }}
           max-attempts: ${{ inputs.health-check-max-attempts }}
-          retry-delay: ${{ inputs.health-check-delay }}
+          delay-seconds: ${{ inputs.health-check-delay }}
           expected-status: '200'
         continue-on-error: ${{ inputs.health-check-mandatory == false }}

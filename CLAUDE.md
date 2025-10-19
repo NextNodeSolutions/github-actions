@@ -214,7 +214,22 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: SSL/TLS Configuration Integration (2025)
+### Latest Migration: Railway + Cloudflare Sub-subdomain Fix (2025)
+Fixed critical Railway CNAME detection issue with Cloudflare proxied sub-subdomains:
+- **Problem**: Railway couldn't detect CNAME for `pr-56.dev.nextnode.fr` (3+ level domains)
+- **Root Cause**: Cloudflare proxy converts CNAME → A records, blocking Railway SSL provisioning
+- **Railway Limitation**: Sub-subdomains (*.subdomain.domain.com) incompatible with Cloudflare proxy without Advanced Certificate Manager
+- **Solution**: Auto-detect sub-subdomain depth and disable Cloudflare proxy (`proxied=false`)
+- **Detection Logic**: Count dots in domain - if ≥2 dots → sub-subdomain → `proxied=false`
+- **ACME Challenge**: Auto-create `_acme-challenge.{domain}` CNAME (DNS-only) for Railway SSL validation
+- **Examples**:
+  - `pr-56.dev.nextnode.fr` (3 levels) → `proxied=false` ✅ Railway can detect CNAME
+  - `dev.nextnode.fr` (2 levels) → `proxied=true` ✅ Cloudflare proxy enabled
+  - `nextnode.fr` (apex) → `proxied=true` ✅ Cloudflare proxy enabled
+- **Trade-off**: PR previews lose Cloudflare CDN/DDoS protection (acceptable for dev environments)
+- **Documentation**: Railway requires CNAME visibility for Let's Encrypt certificate provisioning
+
+### Previous Migration: SSL/TLS Configuration Integration (2025)
 Added automatic SSL/TLS mode configuration for Railway + Cloudflare deployments:
 - **Added**: New `ssl/` domain with `cloudflare-ssl-setup` action
 - **Enhanced**: DNS workflow now includes automatic SSL/TLS configuration (enabled by default)
