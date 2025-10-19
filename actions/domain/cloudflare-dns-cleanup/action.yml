@@ -1,0 +1,125 @@
+name: 'Cloudflare DNS Cleanup'
+description: 'Clean up DNS records from Cloudflare for PR previews'
+author: 'NextNodeSolutions'
+
+inputs:
+  domain:
+    description: 'Domain to clean up (e.g., pr-56.dev.nextnode.fr)'
+    required: true
+  cloudflare-api-token:
+    description: 'Cloudflare API token'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (optional, will be auto-detected)'
+    required: false
+
+outputs:
+  records-deleted:
+    description: 'Number of DNS records deleted'
+    value: ${{ steps.cleanup.outputs.records-deleted }}
+  success:
+    description: 'Whether cleanup was successful'
+    value: ${{ steps.cleanup.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cleanup Cloudflare DNS Records
+      id: cleanup
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+      run: |
+        echo "::group::🧹 Cleaning up Cloudflare DNS records"
+
+        DOMAIN="${{ inputs.domain }}"
+        RECORDS_DELETED=0
+
+        echo "• Target domain: $DOMAIN"
+
+        # Get zone ID if not provided
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          # Extract root domain from full domain
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+
+          echo "• Detecting zone for: $ROOT_DOMAIN"
+
+          ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+
+          CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // empty')
+
+          if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
+            echo "❌ Could not find Cloudflare zone for $ROOT_DOMAIN"
+            echo "records-deleted=0" >> $GITHUB_OUTPUT
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "• Zone ID: ${CF_ZONE_ID:0:8}..."
+        fi
+
+        # List of records to delete
+        RECORDS_TO_DELETE=(
+          "$DOMAIN"
+          "_acme-challenge.$DOMAIN"
+          "www.$DOMAIN"
+        )
+
+        echo ""
+        echo "📋 Records to delete:"
+        for record in "${RECORDS_TO_DELETE[@]}"; do
+          echo "  • $record"
+        done
+        echo ""
+
+        # Delete each record
+        for RECORD_NAME in "${RECORDS_TO_DELETE[@]}"; do
+          echo "🔍 Searching for: $RECORD_NAME"
+
+          # Get all DNS records matching this name
+          RECORDS=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$RECORD_NAME" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+
+          RECORD_IDS=$(echo "$RECORDS" | jq -r '.result[].id // empty')
+
+          if [[ -z "$RECORD_IDS" ]]; then
+            echo "  ℹ️  No record found (already deleted or never created)"
+            continue
+          fi
+
+          # Delete each matching record ID
+          echo "$RECORD_IDS" | while read -r RECORD_ID; do
+            if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" ]]; then
+              echo "  🗑️  Deleting record ID: ${RECORD_ID:0:8}..."
+
+              DELETE_RESPONSE=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+                -H "Authorization: Bearer $CF_API_TOKEN" \
+                -H "Content-Type: application/json")
+
+              SUCCESS=$(echo "$DELETE_RESPONSE" | jq -r '.success // false')
+
+              if [[ "$SUCCESS" == "true" ]]; then
+                echo "  ✅ Deleted successfully"
+                RECORDS_DELETED=$((RECORDS_DELETED + 1))
+              else
+                echo "  ⚠️  Deletion failed:"
+                echo "$DELETE_RESPONSE" | jq '.errors' 2>/dev/null || echo "$DELETE_RESPONSE"
+              fi
+            fi
+          done
+        done
+
+        echo ""
+        echo "📊 Cleanup Summary:"
+        echo "  • Records deleted: $RECORDS_DELETED"
+
+        # Set outputs
+        echo "records-deleted=$RECORDS_DELETED" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"

@@ -13,10 +13,10 @@ inputs:
 outputs:
   railway-url:
     description: 'Railway service URL'
-    value: ${{ steps.generate.outputs.url }}
+    value: ${{ steps.info.outputs.railway-url }}
   domain:
     description: 'Railway domain (without protocol)'
-    value: ${{ steps.generate.outputs.domain }}
+    value: ${{ steps.info.outputs.railway-domain }}
   generated:
     description: 'Whether URL was generated (true) or retrieved (false)'
     value: ${{ steps.generate.outputs.generated }}
@@ -24,73 +24,63 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Generate Railway URL
+    - name: Get Railway Service Info
+      id: info
+      uses: NextNodeSolutions/github-actions/actions/utilities/railway-service-info@main
+      with:
+        service-name: ${{ inputs.service-name }}
+        railway-token: ${{ inputs.railway-token }}
+
+    - name: Generate Railway URL if Missing
       id: generate
       shell: bash
       run: |
         echo "::group::🔗 Getting Railway URL"
-        
+
         START_TIME=$(date +%s)
         SERVICE_NAME="${{ inputs.service-name }}"
-        
-        echo "• Service: $SERVICE_NAME"
-        
-        # JQ selector for reuse
-        JQ_SERVICE_SELECTOR='.services.edges[] | .node | select(.name=="'"$SERVICE_NAME"'")'
-        
-        # Check if a Railway domain already exists
-        echo "• Checking for existing domain..."
-        SERVICE_DOMAIN=$(railway status --json 2>/dev/null | jq -r "$JQ_SERVICE_SELECTOR | .serviceInstances.edges[].node.domains.serviceDomains[0].domain // empty" 2>/dev/null)
+        RAILWAY_DOMAIN="${{ steps.info.outputs.railway-domain }}"
 
-        if [ -n "$SERVICE_DOMAIN" ] && [ "$SERVICE_DOMAIN" != "empty" ]; then
-          # Strip any existing protocol prefix before adding https://
-          SERVICE_DOMAIN=$(echo "$SERVICE_DOMAIN" | sed -E 's|^https?://||g')
-          RAILWAY_URL="https://$SERVICE_DOMAIN"
-          echo "• Found existing domain: $SERVICE_DOMAIN"
-          echo "url=$RAILWAY_URL" >> $GITHUB_OUTPUT
-          echo "domain=$SERVICE_DOMAIN" >> $GITHUB_OUTPUT
+        echo "• Service: $SERVICE_NAME"
+
+        if [ -n "$RAILWAY_DOMAIN" ] && [ "$RAILWAY_DOMAIN" != "empty" ]; then
+          echo "• Found existing domain: $RAILWAY_DOMAIN"
           echo "generated=false" >> $GITHUB_OUTPUT
         else
           echo "• No existing domain found, generating new one..."
-          
+
           # Generate Railway domain
           DOMAIN_OUTPUT=$(railway domain --json --service "$SERVICE_NAME" 2>/dev/null || echo "{}")
 
           if [ "$DOMAIN_OUTPUT" != "{}" ]; then
-            RAILWAY_DOMAIN=$(echo "$DOMAIN_OUTPUT" | jq -r '.domain // empty' 2>/dev/null)
+            NEW_DOMAIN=$(echo "$DOMAIN_OUTPUT" | jq -r '.domain // empty' 2>/dev/null)
 
-            if [ -n "$RAILWAY_DOMAIN" ] && [ "$RAILWAY_DOMAIN" != "empty" ]; then
+            if [ -n "$NEW_DOMAIN" ] && [ "$NEW_DOMAIN" != "empty" ]; then
               # Strip any existing protocol prefix before adding https://
-              RAILWAY_DOMAIN=$(echo "$RAILWAY_DOMAIN" | sed -E 's|^https?://||g')
-              RAILWAY_URL="https://$RAILWAY_DOMAIN"
-              echo "• Generated new domain: $RAILWAY_DOMAIN"
-              echo "url=$RAILWAY_URL" >> $GITHUB_OUTPUT
-              echo "domain=$RAILWAY_DOMAIN" >> $GITHUB_OUTPUT
+              NEW_DOMAIN=$(echo "$NEW_DOMAIN" | sed -E 's|^https?://||g')
+              echo "• Generated new domain: $NEW_DOMAIN"
               echo "generated=true" >> $GITHUB_OUTPUT
             else
               echo "⚠️ Failed to generate Railway domain"
-              echo "url=" >> $GITHUB_OUTPUT
-              echo "domain=" >> $GITHUB_OUTPUT
               echo "generated=false" >> $GITHUB_OUTPUT
             fi
           else
             echo "⚠️ Failed to generate Railway domain"
-            echo "url=" >> $GITHUB_OUTPUT
-            echo "domain=" >> $GITHUB_OUTPUT
             echo "generated=false" >> $GITHUB_OUTPUT
           fi
         fi
-        
+
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
-        
-        if [ -n "$RAILWAY_URL" ]; then
-          echo "✅ Railway URL: $RAILWAY_URL"
+
+        FINAL_URL="${{ steps.info.outputs.railway-url }}"
+        if [ -n "$FINAL_URL" ]; then
+          echo "✅ Railway URL: $FINAL_URL"
           echo "• Retrieved in ${DURATION}s"
         else
           echo "❌ No Railway URL available"
         fi
-        
+
         echo "::endgroup::"
       env:
         RAILWAY_API_TOKEN: ${{ inputs.railway-token }}

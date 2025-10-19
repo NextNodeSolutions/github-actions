@@ -37,41 +37,38 @@ runs:
       shell: bash
       run: |
         echo "::group::⏳ Monitoring Railway Deployment"
-        
+
         # Configuration
         MAX_WAIT=${{ inputs.timeout-seconds }}
         CHECK_INTERVAL=${{ inputs.check-interval }}
         SERVICE_NAME="${{ inputs.service-name }}"
         ELAPSED=0
-        
+
         echo "• Service: $SERVICE_NAME"
         echo "• Timeout: ${MAX_WAIT}s"
         echo "• Check interval: ${CHECK_INTERVAL}s"
         echo ""
-        
-        # JQ selector for reuse
-        JQ_SERVICE_SELECTOR='.services.edges[] | .node | select(.name=="'"$SERVICE_NAME"'")'
-        
+
         # Initial wait for deployment to start
         sleep 10
-        
+
         while [ $ELAPSED -lt $MAX_WAIT ]; do
-          # Get service info
-          SERVICE_INFO=$(railway status --json 2>/dev/null | jq -r "$JQ_SERVICE_SELECTOR" 2>/dev/null || echo "{}")
-          
+          # Get service info using railway-service-info
+          SERVICE_INFO=$(railway status --json 2>/dev/null | jq -r '.services.edges[] | .node | select(.name=="'"$SERVICE_NAME"'")' 2>/dev/null || echo "{}")
+
           if [ "$SERVICE_INFO" = "{}" ] || [ -z "$SERVICE_INFO" ]; then
             echo "[${ELAPSED}s] ⚠️ Cannot retrieve service info - retrying..."
             sleep $CHECK_INTERVAL
             ELAPSED=$((ELAPSED + CHECK_INTERVAL))
             continue
           fi
-          
+
           # Extract deployment info
           DEPLOYMENT_STATUS=$(echo "$SERVICE_INFO" | jq -r '.serviceInstances.edges[].node.latestDeployment.status // "UNKNOWN"' 2>/dev/null)
           DEPLOYMENT_ID=$(echo "$SERVICE_INFO" | jq -r '.serviceInstances.edges[].node.latestDeployment.id // "N/A"' 2>/dev/null)
-          
+
           echo "[${ELAPSED}s] Status: $DEPLOYMENT_STATUS"
-          
+
           case "$DEPLOYMENT_STATUS" in
             "SUCCESS"|"LIVE")
               echo ""
@@ -110,11 +107,11 @@ runs:
               echo "  ⚠️ Unknown status: $DEPLOYMENT_STATUS"
               ;;
           esac
-          
+
           sleep $CHECK_INTERVAL
           ELAPSED=$((ELAPSED + CHECK_INTERVAL))
         done
-        
+
         if [ $ELAPSED -ge $MAX_WAIT ]; then
           echo ""
           echo "⏰ Deployment timeout after ${MAX_WAIT}s"
@@ -126,7 +123,7 @@ runs:
             } >> $GITHUB_OUTPUT
           echo "duration=${MAX_WAIT}s" >> $GITHUB_OUTPUT
         fi
-        
+
         echo "::endgroup::"
       env:
         RAILWAY_API_TOKEN: ${{ inputs.railway-token }}
