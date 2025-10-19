@@ -145,7 +145,7 @@ jobs:
           echo "• Service: $SERVICE_NAME"
           echo "• Site URL: $SITE_URL"
 
-          railway variables --set "URL=${SITE_URL}" --service "$SERVICE_NAME"
+          railway variables --set "URL=${SITE_URL}" --service "$SERVICE_NAME" --skip-deploys
 
           echo "✅ URL variable configured"
 
