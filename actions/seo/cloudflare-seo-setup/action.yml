@@ -178,50 +178,62 @@ runs:
 
           echo "  • Using ruleset ID: $TRANSFORM_RULESET_ID"
 
-          # Extract root domain and first subdomain
+          # Extract root domain
           ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
-          FULL_WITHOUT_ROOT=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
-
-          # Get first subdomain (rightmost part before root)
-          if [[ -n "$FULL_WITHOUT_ROOT" && "$FULL_WITHOUT_ROOT" != "$DOMAIN" ]]; then
-            FIRST_SUBDOMAIN=$(echo "$FULL_WITHOUT_ROOT" | awk -F. '{print $NF}')
-          else
-            FIRST_SUBDOMAIN=""
-          fi
 
           echo "  • Domain: $DOMAIN"
           echo "  • Root domain: $ROOT_DOMAIN"
-          echo "  • First subdomain: ${FIRST_SUBDOMAIN:-'(none - apex domain)'}"
+          echo ""
+          echo "🎯 Using WILDCARD rules strategy (1 rule per blocked subdomain)"
 
-          # Check if domain should be blocked
-          SHOULD_BLOCK=false
-          BLOCK_REASON=""
+          # Get existing rules from ruleset
+          echo "  • Fetching existing rules from ruleset..."
+          EXISTING_RULESET=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/$TRANSFORM_RULESET_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
 
-          # 1. Check whitelist first (if defined)
-          if [[ -n "$ALLOWED_SUBDOMAINS" && -n "$FIRST_SUBDOMAIN" ]]; then
-            if [[ ",$ALLOWED_SUBDOMAINS," == *",$FIRST_SUBDOMAIN,"* ]]; then
-              echo "  • ✅ Allowing $DOMAIN (whitelisted: $FIRST_SUBDOMAIN)"
-              SHOULD_BLOCK=false
+          EXISTING_RULES=$(echo "$EXISTING_RULESET" | jq -r '.result.rules // []')
+          EXISTING_COUNT=$(echo "$EXISTING_RULES" | jq 'length')
+          echo "  • Found $EXISTING_COUNT existing rule(s)"
+
+          # Build new rules array starting from existing rules
+          RULES_JSON="$EXISTING_RULES"
+
+          # Process each blocked subdomain
+          IFS=',' read -ra SUBDOMAINS <<< "$BLOCKED_SUBDOMAINS"
+          NEW_RULES_COUNT=0
+
+          for subdomain in "${SUBDOMAINS[@]}"; do
+            subdomain=$(echo "$subdomain" | xargs) # trim whitespace
+            if [[ -z "$subdomain" ]]; then
+              continue
             fi
-          fi
 
-          # 2. Check blacklist (only if not whitelisted)
-          if [[ "$SHOULD_BLOCK" == "false" && -n "$FIRST_SUBDOMAIN" ]]; then
-            if [[ ",$BLOCKED_SUBDOMAINS," == *",$FIRST_SUBDOMAIN,"* ]]; then
-              echo "  • 🚫 Blocking $DOMAIN (blacklisted: $FIRST_SUBDOMAIN)"
-              SHOULD_BLOCK=true
-              BLOCK_REASON="Subdomain '$FIRST_SUBDOMAIN' is in blocked list"
+            # Check whitelist first
+            if [[ -n "$ALLOWED_SUBDOMAINS" ]]; then
+              if [[ ",$ALLOWED_SUBDOMAINS," == *",$subdomain,"* ]]; then
+                echo "  • ⏭️  Skipping $subdomain (whitelisted)"
+                continue
+              fi
             fi
-          fi
 
-          # Build rules array
-          RULES_JSON="[]"
+            # Create wildcard domain pattern
+            WILDCARD_DOMAIN=".${subdomain}.${ROOT_DOMAIN}"
 
-          if [[ "$SHOULD_BLOCK" == "true" ]]; then
-            # Add rule to block this domain
-            RULE=$(jq -n \
-              --arg expression "http.host eq \"$DOMAIN\"" \
-              --arg description "Block $DOMAIN from search engines ($BLOCK_REASON)" \
+            # Check if rule already exists for this wildcard (check expression contains the domain)
+            RULE_EXISTS=$(echo "$EXISTING_RULES" | jq --arg domain "$WILDCARD_DOMAIN" '[.[] | select(.expression | contains($domain))] | length')
+
+            if [[ "$RULE_EXISTS" -gt 0 ]]; then
+              echo "  • ✅ Rule already exists for *${WILDCARD_DOMAIN} (skipped)"
+              continue
+            fi
+
+            # Create new wildcard rule
+            echo "  • 🆕 Creating wildcard rule for *${WILDCARD_DOMAIN}"
+
+            NEW_RULE=$(jq -n \
+              --arg expression "http.host ends_with \".${subdomain}.${ROOT_DOMAIN}\"" \
+              --arg description "Block *.${subdomain}.${ROOT_DOMAIN} from search engines (SEO protection)" \
               '{
                 action: "rewrite",
                 expression: $expression,
@@ -236,22 +248,30 @@ runs:
                 }
               }')
 
-            RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$RULE" '. + [$rule]')
-          else
-            echo "  • ✅ Allowing $DOMAIN (default: not in blocked list)"
-          fi
+            RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$NEW_RULE" '. + [$rule]')
+            ((NEW_RULES_COUNT++))
+          done
+
+          echo ""
+          echo "📋 Summary:"
+          echo "  • Existing rules: $EXISTING_COUNT"
+          echo "  • New rules to create: $NEW_RULES_COUNT"
+          echo "  • Total rules: $(echo "$RULES_JSON" | jq 'length')"
 
           if [[ "$DRY_RUN" == "true" ]]; then
-            echo "  • [DRY RUN] Would create $(echo "$RULES_JSON" | jq 'length') transform rules"
-            TRANSFORM_RULES_COUNT=$(echo "$RULES_JSON" | jq 'length')
+            echo "  • [DRY RUN] Would update ruleset with $NEW_RULES_COUNT new wildcard rules"
+            TRANSFORM_RULES_COUNT=$NEW_RULES_COUNT
+            return 0
+          fi
+
+          # Skip API call if no new rules to create
+          if [[ $NEW_RULES_COUNT -eq 0 ]]; then
+            echo "  • ✅ All wildcard rules already exist - no update needed"
+            TRANSFORM_RULES_COUNT=0
             return 0
           fi
 
           # Validate required data before API call
-          echo "  • Debug: CF_ZONE_ID='$CF_ZONE_ID'"
-          echo "  • Debug: TRANSFORM_RULESET_ID='$TRANSFORM_RULESET_ID'"
-          echo "  • Debug: Rules count=$(echo "$RULES_JSON" | jq 'length')"
-          
           if [[ -z "$CF_ZONE_ID" ]] || [[ -z "$TRANSFORM_RULESET_ID" ]] || [[ "$TRANSFORM_RULESET_ID" == "null" ]]; then
             echo "  • ❌ Missing required data for API call"
             echo "    CF_ZONE_ID: '$CF_ZONE_ID'"
@@ -261,6 +281,8 @@ runs:
           fi
 
           # Update the ruleset with new rules
+          echo ""
+          echo "📤 Updating Cloudflare Transform Rules..."
           UPDATE_RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/$TRANSFORM_RULESET_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
@@ -269,10 +291,11 @@ runs:
           TRANSFORM_SUCCESS=$(echo "$UPDATE_RESPONSE" | jq -r '.success // false')
 
           if [[ "$TRANSFORM_SUCCESS" == "true" ]]; then
-            TRANSFORM_RULES_COUNT=$(echo "$RULES_JSON" | jq 'length')
-            echo "  • ✅ Created $TRANSFORM_RULES_COUNT Transform Rules successfully"
+            TRANSFORM_RULES_COUNT=$NEW_RULES_COUNT
+            echo "  • ✅ Successfully created $NEW_RULES_COUNT new wildcard rule(s)"
+            echo "  • 🎯 Total active rules: $(echo "$RULES_JSON" | jq 'length')"
           else
-            echo "  • ❌ Failed to create Transform Rules"
+            echo "  • ❌ Failed to update Transform Rules"
             echo "$UPDATE_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$UPDATE_RESPONSE"
             SUCCESS=false
           fi
