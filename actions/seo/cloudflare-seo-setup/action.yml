@@ -9,6 +9,10 @@ inputs:
     description: 'Comma-separated list of subdomains to block from search engines'
     required: false
     default: 'dev,staging,test,preview'
+  allowed-subdomains:
+    description: 'Comma-separated list of subdomains to ALWAYS allow (whitelist)'
+    required: false
+    default: ''
   cloudflare-api-token:
     description: 'Cloudflare API token with Zone:Edit permissions'
     required: true
@@ -50,6 +54,7 @@ runs:
         CF_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
         DOMAIN: ${{ inputs.domain }}
         BLOCKED_SUBDOMAINS: ${{ inputs.blocked-subdomains }}
+        ALLOWED_SUBDOMAINS: ${{ inputs.allowed-subdomains }}
         ENABLE_WWW_REDIRECT: ${{ inputs.enable-www-redirect }}
         ENABLE_OPTIMIZATIONS: ${{ inputs.enable-optimizations }}
         DRY_RUN: ${{ inputs.dry-run }}
@@ -173,38 +178,68 @@ runs:
 
           echo "  • Using ruleset ID: $TRANSFORM_RULESET_ID"
 
-          # Build rules array for all blocked subdomains
+          # Extract root domain and first subdomain
+          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+          FULL_WITHOUT_ROOT=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
+
+          # Get first subdomain (rightmost part before root)
+          if [[ -n "$FULL_WITHOUT_ROOT" && "$FULL_WITHOUT_ROOT" != "$DOMAIN" ]]; then
+            FIRST_SUBDOMAIN=$(echo "$FULL_WITHOUT_ROOT" | awk -F. '{print $NF}')
+          else
+            FIRST_SUBDOMAIN=""
+          fi
+
+          echo "  • Domain: $DOMAIN"
+          echo "  • Root domain: $ROOT_DOMAIN"
+          echo "  • First subdomain: ${FIRST_SUBDOMAIN:-'(none - apex domain)'}"
+
+          # Check if domain should be blocked
+          SHOULD_BLOCK=false
+          BLOCK_REASON=""
+
+          # 1. Check whitelist first (if defined)
+          if [[ -n "$ALLOWED_SUBDOMAINS" && -n "$FIRST_SUBDOMAIN" ]]; then
+            if [[ ",$ALLOWED_SUBDOMAINS," == *",$FIRST_SUBDOMAIN,"* ]]; then
+              echo "  • ✅ Allowing $DOMAIN (whitelisted: $FIRST_SUBDOMAIN)"
+              SHOULD_BLOCK=false
+            fi
+          fi
+
+          # 2. Check blacklist (only if not whitelisted)
+          if [[ "$SHOULD_BLOCK" == "false" && -n "$FIRST_SUBDOMAIN" ]]; then
+            if [[ ",$BLOCKED_SUBDOMAINS," == *",$FIRST_SUBDOMAIN,"* ]]; then
+              echo "  • 🚫 Blocking $DOMAIN (blacklisted: $FIRST_SUBDOMAIN)"
+              SHOULD_BLOCK=true
+              BLOCK_REASON="Subdomain '$FIRST_SUBDOMAIN' is in blocked list"
+            fi
+          fi
+
+          # Build rules array
           RULES_JSON="[]"
 
-          IFS=',' read -ra SUBDOMAINS <<< "$BLOCKED_SUBDOMAINS"
-          for subdomain in "${SUBDOMAINS[@]}"; do
-            subdomain=$(echo "$subdomain" | xargs) # trim whitespace
-            if [[ -n "$subdomain" ]]; then
-              FULL_DOMAIN="$subdomain.$DOMAIN"
-
-              # Add rule to JSON array
-              RULE=$(jq -n \
-                --arg expression "http.host eq \"$FULL_DOMAIN\"" \
-                --arg description "Block $FULL_DOMAIN from search engines" \
-                '{
-                  action: "rewrite",
-                  expression: $expression,
-                  description: $description,
-                  action_parameters: {
-                    headers: {
-                      "X-Robots-Tag": {
-                        operation: "set",
-                        value: "noindex, nofollow"
-                      }
+          if [[ "$SHOULD_BLOCK" == "true" ]]; then
+            # Add rule to block this domain
+            RULE=$(jq -n \
+              --arg expression "http.host eq \"$DOMAIN\"" \
+              --arg description "Block $DOMAIN from search engines ($BLOCK_REASON)" \
+              '{
+                action: "rewrite",
+                expression: $expression,
+                description: $description,
+                action_parameters: {
+                  headers: {
+                    "X-Robots-Tag": {
+                      operation: "set",
+                      value: "noindex, nofollow"
                     }
                   }
-                }')
+                }
+              }')
 
-              RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$RULE" '. + [$rule]')
-
-              echo "  • 🚫 Blocking $FULL_DOMAIN from search engines"
-            fi
-          done
+            RULES_JSON=$(echo "$RULES_JSON" | jq --argjson rule "$RULE" '. + [$rule]')
+          else
+            echo "  • ✅ Allowing $DOMAIN (default: not in blocked list)"
+          fi
 
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "  • [DRY RUN] Would create $(echo "$RULES_JSON" | jq 'length') transform rules"

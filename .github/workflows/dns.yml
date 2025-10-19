@@ -39,6 +39,11 @@ on:
         required: false
         default: 'dev,staging,test,preview'
         type: string
+      allowed-subdomains:
+        description: 'Comma-separated list of subdomains to ALWAYS allow (whitelist, overrides blocked list)'
+        required: false
+        default: ''
+        type: string
       enable-optimizations:
         description: 'Enable Cloudflare performance optimizations'
         required: false
@@ -69,6 +74,16 @@ on:
         required: false
         default: '60'
         type: string
+      enable-ssl-setup:
+        description: 'Enable automatic SSL/TLS mode configuration (recommended for Railway)'
+        required: false
+        default: true
+        type: boolean
+      ssl-mode:
+        description: 'SSL/TLS mode: off, flexible, full, strict (Railway requires "full")'
+        required: false
+        default: 'full'
+        type: string
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
@@ -81,6 +96,12 @@ on:
       record-id:
         description: 'Cloudflare DNS record ID'
         value: ${{ jobs.update.outputs.record-id }}
+      ssl-configured:
+        description: 'Whether SSL/TLS was successfully configured'
+        value: ${{ jobs.ssl-setup.outputs.ssl-configured }}
+      ssl-mode:
+        description: 'SSL/TLS mode configured'
+        value: ${{ jobs.ssl-setup.outputs.ssl-mode }}
       seo-configured:
         description: 'Whether SEO configuration was successful'
         value: ${{ jobs.seo-setup.outputs.seo-configured }}
@@ -89,9 +110,38 @@ on:
         value: ${{ jobs.seo-setup.outputs.transform-rules-created }}
 
 jobs:
+  ssl-setup:
+    name: Configure SSL/TLS
+    if: ${{ inputs.enable-ssl-setup == true }}
+    runs-on: ubuntu-latest
+    outputs:
+      ssl-configured: ${{ steps.ssl.outputs.ssl-configured }}
+      ssl-mode: ${{ steps.ssl.outputs.new-mode }}
+      zone-id: ${{ steps.ssl.outputs.zone-id }}
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          token: ${{ github.token }}
+          path: .github-actions
+
+      - name: Configure Cloudflare SSL/TLS
+        id: ssl
+        uses: ./.github-actions/actions/ssl/cloudflare-ssl-setup
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          domain: ${{ inputs.domain }}
+          ssl-mode: ${{ inputs.ssl-mode }}
+
   update:
     name: Update DNS
     runs-on: ubuntu-latest
+    needs: [ssl-setup]
+    if: |
+      always() &&
+      (needs.ssl-setup.result == 'success' || needs.ssl-setup.result == 'skipped')
     outputs:
       success: ${{ steps.cloudflare.outputs.success == 'true' }}
       record-id: ${{ steps.cloudflare.outputs.record-id }}
@@ -350,33 +400,29 @@ jobs:
         with:
           domain: ${{ inputs.domain }}
           blocked-subdomains: ${{ inputs.blocked-subdomains }}
+          allowed-subdomains: ${{ inputs.allowed-subdomains }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           enable-www-redirect: true
           enable-optimizations: ${{ inputs.enable-optimizations }}
           dry-run: false
           
-      - name: 📊 SEO Configuration Summary
+      - name: 📊 Configuration Summary
         run: |
-          echo "## 🎯 SEO Configuration Complete!"
+          echo "## 📊 Configuration Summary"
           echo ""
-          echo "**Domain:** ${{ inputs.domain }}"
-          echo "**Success:** ${{ steps.seo.outputs.seo-configured }}"
-          echo "**Transform Rules:** ${{ steps.seo.outputs.transform-rules-created }}"
-          echo "**Blocked Subdomains:** ${{ inputs.blocked-subdomains }}"
+          echo "| Component | Status | Details |"
+          echo "|-----------|--------|---------|"
+          echo "| 🌐 DNS Records | ${{ needs.update.outputs.success == 'true' && '✅ Updated' || '❌ Failed' }} | ${{ inputs.domain }} |"
+          echo "| 🎯 SEO Config | ${{ steps.seo.outputs.seo-configured == 'true' && '✅ Configured' || '⚠️ Skipped' }} | Transform Rules + Redirects |"
+          echo "| 🤖 Transform Rules | ${{ steps.seo.outputs.transform-rules-created > '0' && '✅ Active' || '➖ None' }} | ${{ steps.seo.outputs.transform-rules-created }} created |"
+          echo "| 🔀 Redirects | ${{ steps.seo.outputs.redirects-count > '0' && '✅ Active' || '➖ None' }} | ${{ steps.seo.outputs.redirects-count || '0' }} created |"
+          echo "| ⚡ Optimizations | ${{ inputs.enable-optimizations == true && '✅ Enabled' || '➖ Disabled' }} | Minify, Brotli, HTTPS |"
+          echo "| 🏥 Health Check | ${{ inputs.enable-health-check == true && '✅ Enabled' || '➖ Disabled' }} | ${{ inputs.health-check-mandatory == true && 'Mandatory' || 'Optional' }} |"
           echo ""
-          
-          if [[ "${{ steps.seo.outputs.seo-configured }}" == "true" ]]; then
-            echo "✅ **DNS + SEO configuration successful!**"
-            echo ""
-            echo "### Configured automatically:"
-            echo "- 🌐 DNS records for ${{ inputs.domain }}"
-            echo "- 🚫 SEO blocking for development subdomains (via Transform Rules)"
-            echo "- 🔀 WWW redirects (via Single Redirects)"
-            echo "- ⚡ Performance optimizations"
-            echo "- 🤖 X-Robots-Tag headers (automated)"
-          else
-            echo "❌ **SEO configuration failed** (DNS was successful)"
+          echo "**Blocked subdomains:** ${{ inputs.blocked-subdomains }}"
+          if [[ -n "${{ inputs.allowed-subdomains }}" ]]; then
+            echo "**Allowed subdomains (whitelist):** ${{ inputs.allowed-subdomains }}"
           fi
 
       - name: ✅ SEO Configuration Complete
