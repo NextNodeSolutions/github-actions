@@ -344,6 +344,28 @@ runs:
 
           echo "🔀 Creating Page Rule for www → non-www redirect..."
 
+          # Check for existing Page Rules with same pattern
+          echo "  • Checking for existing Page Rules..."
+          EXISTING_RULES_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+
+          EXISTING_RULES_SUCCESS=$(echo "$EXISTING_RULES_RESPONSE" | jq -r '.success // false')
+
+          if [[ "$EXISTING_RULES_SUCCESS" != "true" ]]; then
+            echo "  • ⚠️  Could not fetch existing Page Rules (continuing anyway)"
+          else
+            # Check if a rule already exists for www.{domain}/*
+            WWW_PATTERN="www.$DOMAIN/*"
+            DUPLICATE_EXISTS=$(echo "$EXISTING_RULES_RESPONSE" | jq --arg pattern "$WWW_PATTERN" '[.result[] | select(.targets[0].constraint.value == $pattern)] | length')
+
+            if [[ "$DUPLICATE_EXISTS" -gt 0 ]]; then
+              echo "  • ✅ Page Rule already exists for $WWW_PATTERN (skipped)"
+              REDIRECTS_COUNT=0
+              return 0
+            fi
+          fi
+
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "  • [DRY RUN] Would create Page Rule: www.$DOMAIN/* → https://$DOMAIN/\$1"
             REDIRECTS_COUNT=1
@@ -369,6 +391,7 @@ runs:
                 },
                 target: "url"
               }],
+              priority: 1,
               status: "active"
             }')
 
@@ -388,7 +411,13 @@ runs:
             echo "  • ✅ Created Page Rule redirect successfully (ID: $PAGE_RULE_ID)"
           else
             echo "  • ❌ Failed to create Page Rule redirect"
-            echo "$REDIRECT_RESPONSE" | jq '.errors[]?' 2>/dev/null || echo "$REDIRECT_RESPONSE"
+            echo ""
+            echo "  📋 Full API Response:"
+            echo "$REDIRECT_RESPONSE" | jq '.' 2>/dev/null || echo "$REDIRECT_RESPONSE"
+            echo ""
+            echo "  🔍 Error Details:"
+            echo "$REDIRECT_RESPONSE" | jq -r '.errors[] | "    • Code: \(.code) - \(.message)"' 2>/dev/null || echo "    • Could not parse error details"
+            echo "$REDIRECT_RESPONSE" | jq -r '.messages[]? | "    • \(.)"' 2>/dev/null
             SUCCESS=false
           fi
         }
