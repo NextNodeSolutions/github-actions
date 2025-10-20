@@ -52,6 +52,9 @@ on:
       railway-url:
         description: 'Railway internal URL'
         value: ${{ jobs.deploy-preview.outputs.railway-url }}
+      cname-target:
+        description: 'CNAME target from Railway for DNS configuration'
+        value: ${{ jobs.deploy-preview.outputs.cname-target }}
       service-name:
         description: 'Railway service name'
         value: ${{ jobs.deploy-preview.outputs.service-name }}
@@ -96,6 +99,7 @@ jobs:
       custom-domain: ${{ steps.domain.outputs.custom-domain }}
       service-name: ${{ steps.domain.outputs.service-name }}
       railway-url: ${{ steps.url.outputs.railway-url }}
+      cname-target: ${{ steps.railway-domain.outputs.cname-target }}
       deployment-status: ${{ steps.wait.outputs.status }}
     steps:
       - name: Checkout
@@ -194,6 +198,7 @@ jobs:
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
 
       - name: Configure Custom Domain
+        id: railway-domain
         uses: NextNodeSolutions/github-actions/actions/domain/railway-domain-setup@main
         with:
           service-name: ${{ steps.domain.outputs.service-name }}
