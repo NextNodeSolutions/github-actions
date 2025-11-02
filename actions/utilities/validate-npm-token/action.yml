@@ -1,0 +1,127 @@
+name: 'Validate NPM Token'
+description: 'Validates NPM registry token and verifies authentication'
+
+inputs:
+  npm-token:
+    description: 'NPM authentication token to validate'
+    required: true
+  registry-url:
+    description: 'NPM registry URL'
+    required: false
+    default: 'https://registry.npmjs.org'
+  fail-on-invalid:
+    description: 'Fail the action if token is invalid'
+    required: false
+    default: 'true'
+
+outputs:
+  is-valid:
+    description: 'Whether the token is valid (true/false)'
+    value: ${{ steps.validate.outputs.is-valid }}
+  username:
+    description: 'NPM username associated with the token'
+    value: ${{ steps.validate.outputs.username }}
+  registry:
+    description: 'NPM registry URL'
+    value: ${{ steps.validate.outputs.registry }}
+  error-message:
+    description: 'Detailed error message if validation fails'
+    value: ${{ steps.validate.outputs.error-message }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate NPM Token
+      id: validate
+      shell: bash
+      env:
+        NPM_TOKEN: ${{ inputs.npm-token }}
+        REGISTRY_URL: ${{ inputs.registry-url }}
+        FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
+      run: |
+        echo "::group::🔍 Validating NPM Token"
+
+        echo "Registry: $REGISTRY_URL"
+        echo ""
+
+        # Validate token via NPM whoami endpoint
+        VERIFY_RESPONSE=$(curl -s -X GET "$REGISTRY_URL/-/whoami" \
+          -H "Authorization: Bearer $NPM_TOKEN" \
+          -H "Content-Type: application/json")
+
+        echo "API Response:"
+        echo "$VERIFY_RESPONSE"
+        echo ""
+
+        # Try to parse as JSON first
+        USERNAME=$(echo "$VERIFY_RESPONSE" | jq -r '.username // empty' 2>/dev/null)
+
+        # If jq fails or returns empty, try plain text response
+        if [[ -z "$USERNAME" ]]; then
+          # Some registries return plain text: {"username":"foo"}
+          USERNAME=$(echo "$VERIFY_RESPONSE" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+        fi
+
+        # Check if we got a username
+        if [[ -n "$USERNAME" ]]; then
+          IS_VALID="true"
+          ERROR_MESSAGE=""
+
+          echo "✅ Token is VALID"
+          echo "  • Username: $USERNAME"
+          echo "  • Registry: $REGISTRY_URL"
+        else
+          # Token is invalid
+          IS_VALID="false"
+
+          # Check for common error patterns
+          if echo "$VERIFY_RESPONSE" | grep -qi "unauthorized\|unauthenticated\|401"; then
+            ERROR_MESSAGE="Token is invalid or unauthorized"
+
+            echo "❌ Token is INVALID"
+            echo "  • Error: Unauthorized (401)"
+            echo ""
+            echo "Possible causes:"
+            echo "  1. Token has been revoked or expired"
+            echo "  2. Token doesn't have correct permissions"
+            echo "  3. Token format is incorrect"
+            echo ""
+            echo "→ Generate new token: https://www.npmjs.com/settings/<username>/tokens"
+            echo "  Note: As of October 2025, NPM tokens have 90-day lifetime limit"
+            echo "  Token types:"
+            echo "    • Automation - For CI/CD pipelines (recommended)"
+            echo "    • Publish - For package publishing"
+            echo "    • Read-only - For private package installation"
+
+          elif echo "$VERIFY_RESPONSE" | grep -qi "forbidden\|403"; then
+            ERROR_MESSAGE="Token lacks required permissions"
+
+            echo "❌ Token FORBIDDEN"
+            echo "  • Error: Forbidden (403)"
+            echo "  • Token may lack whoami permission"
+
+          else
+            ERROR_MESSAGE="Failed to validate NPM token"
+
+            echo "❌ Token validation FAILED"
+            echo "  • Response: $VERIFY_RESPONSE"
+            echo "  • Could not determine username"
+          fi
+
+          USERNAME=""
+        fi
+
+        # Set outputs
+        echo "is-valid=$IS_VALID" >> $GITHUB_OUTPUT
+        echo "username=${USERNAME:-}" >> $GITHUB_OUTPUT
+        echo "registry=$REGISTRY_URL" >> $GITHUB_OUTPUT
+        echo "error-message=${ERROR_MESSAGE:-}" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+        # Fail if requested and token is invalid
+        if [[ "$IS_VALID" == "false" && "$FAIL_ON_INVALID" == "true" ]]; then
+          echo ""
+          echo "::error::NPM token validation failed: $ERROR_MESSAGE"
+          exit 1
+        fi

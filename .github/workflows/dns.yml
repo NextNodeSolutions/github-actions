@@ -110,8 +110,18 @@ on:
         value: ${{ jobs.seo-setup.outputs.transform-rules-created }}
 
 jobs:
+  validate-tokens:
+    name: Validate Tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/utilities/validate-tokens@main
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          fail-on-invalid: true
+
   ssl-setup:
     name: Configure SSL/TLS
+    needs: [validate-tokens]
     if: ${{ inputs.enable-ssl-setup == true }}
     runs-on: ubuntu-latest
     outputs:
@@ -138,9 +148,10 @@ jobs:
   update:
     name: Update DNS
     runs-on: ubuntu-latest
-    needs: [ssl-setup]
+    needs: [validate-tokens, ssl-setup]
     if: |
       always() &&
+      needs.validate-tokens.result == 'success' &&
       (needs.ssl-setup.result == 'success' || needs.ssl-setup.result == 'skipped')
     outputs:
       success: ${{ steps.cloudflare.outputs.success == 'true' }}

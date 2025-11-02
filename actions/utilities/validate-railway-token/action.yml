@@ -1,0 +1,129 @@
+name: 'Validate Railway Token'
+description: 'Validates Railway API token and verifies authentication'
+
+inputs:
+  railway-api-token:
+    description: 'Railway API token to validate'
+    required: true
+  fail-on-invalid:
+    description: 'Fail the action if token is invalid'
+    required: false
+    default: 'true'
+
+outputs:
+  is-valid:
+    description: 'Whether the token is valid (true/false)'
+    value: ${{ steps.validate.outputs.is-valid }}
+  user-id:
+    description: 'Railway user ID'
+    value: ${{ steps.validate.outputs.user-id }}
+  user-name:
+    description: 'Railway user name'
+    value: ${{ steps.validate.outputs.user-name }}
+  user-email:
+    description: 'Railway user email'
+    value: ${{ steps.validate.outputs.user-email }}
+  error-message:
+    description: 'Detailed error message if validation fails'
+    value: ${{ steps.validate.outputs.error-message }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate Railway Token
+      id: validate
+      shell: bash
+      env:
+        RAILWAY_API_TOKEN: ${{ inputs.railway-api-token }}
+        FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
+      run: |
+        echo "::group::🔍 Validating Railway API Token"
+
+        # Validate token via Railway GraphQL API
+        VERIFY_RESPONSE=$(curl -s -X POST "https://backboard.railway.com/graphql/v2" \
+          -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data '{"query":"query { me { id name email } }"}')
+
+        echo "API Response:"
+        echo "$VERIFY_RESPONSE" | jq '.'
+        echo ""
+
+        # Check for errors
+        ERRORS=$(echo "$VERIFY_RESPONSE" | jq -r '.errors // []')
+        HAS_ERRORS=$(echo "$VERIFY_RESPONSE" | jq -r '.errors | length > 0')
+
+        if [[ "$HAS_ERRORS" == "true" ]]; then
+          # Token is invalid
+          IS_VALID="false"
+          ERROR_MSG=$(echo "$VERIFY_RESPONSE" | jq -r '.errors[0].message // "Unknown error"')
+          ERROR_CODE=$(echo "$VERIFY_RESPONSE" | jq -r '.errors[0].extensions.code // "UNKNOWN"')
+
+          echo "❌ Token is INVALID"
+          echo "  • Error: $ERROR_MSG"
+          echo "  • Code: $ERROR_CODE"
+          echo ""
+
+          if [[ "$ERROR_CODE" == "UNAUTHENTICATED" || "$ERROR_MSG" =~ "Unauthorized" || "$ERROR_MSG" =~ "Invalid" ]]; then
+            ERROR_MESSAGE="Token is invalid or has been revoked"
+            echo "Possible causes:"
+            echo "  1. Token has been revoked"
+            echo "  2. Token was deleted from Railway"
+            echo "  3. Token format is incorrect"
+            echo ""
+            echo "→ Generate new token: https://railway.app/account/tokens"
+            echo "  Token types:"
+            echo "    • Account Token - Access to all resources"
+            echo "    • Team Token - Access to team resources"
+            echo "    • Project Token - Scoped to specific environment"
+          else
+            ERROR_MESSAGE="Railway API error: $ERROR_MSG"
+          fi
+
+          USER_ID=""
+          USER_NAME=""
+          USER_EMAIL=""
+        else
+          # Parse user data
+          USER_ID=$(echo "$VERIFY_RESPONSE" | jq -r '.data.me.id // ""')
+          USER_NAME=$(echo "$VERIFY_RESPONSE" | jq -r '.data.me.name // ""')
+          USER_EMAIL=$(echo "$VERIFY_RESPONSE" | jq -r '.data.me.email // ""')
+
+          if [[ -n "$USER_ID" ]]; then
+            IS_VALID="true"
+            ERROR_MESSAGE=""
+
+            echo "✅ Token is VALID"
+            echo "  • User ID: $USER_ID"
+            echo "  • User Name: $USER_NAME"
+            echo "  • User Email: $USER_EMAIL"
+          else
+            # No errors but no user data either
+            IS_VALID="false"
+            ERROR_MESSAGE="Token validation returned empty user data"
+
+            echo "❌ Token validation FAILED"
+            echo "  • No user data returned"
+            echo "  • This may indicate an expired or invalid token"
+
+            USER_ID=""
+            USER_NAME=""
+            USER_EMAIL=""
+          fi
+        fi
+
+        # Set outputs
+        echo "is-valid=$IS_VALID" >> $GITHUB_OUTPUT
+        echo "user-id=${USER_ID:-}" >> $GITHUB_OUTPUT
+        echo "user-name=${USER_NAME:-}" >> $GITHUB_OUTPUT
+        echo "user-email=${USER_EMAIL:-}" >> $GITHUB_OUTPUT
+        echo "error-message=${ERROR_MESSAGE:-}" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+        # Fail if requested and token is invalid
+        if [[ "$IS_VALID" == "false" && "$FAIL_ON_INVALID" == "true" ]]; then
+          echo ""
+          echo "::error::Railway token validation failed: $ERROR_MESSAGE"
+          exit 1
+        fi

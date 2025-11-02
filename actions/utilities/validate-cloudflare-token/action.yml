@@ -1,0 +1,158 @@
+name: 'Validate Cloudflare Token'
+description: 'Validates Cloudflare API token and detects expiration, invalidity, or revocation'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token to validate'
+    required: true
+  fail-on-invalid:
+    description: 'Fail the action if token is invalid'
+    required: false
+    default: 'true'
+
+outputs:
+  is-valid:
+    description: 'Whether the token is valid (true/false)'
+    value: ${{ steps.validate.outputs.is-valid }}
+  status:
+    description: 'Token status (active/expired/invalid/unknown)'
+    value: ${{ steps.validate.outputs.status }}
+  expires-on:
+    description: 'Token expiration date (ISO 8601 format)'
+    value: ${{ steps.validate.outputs.expires-on }}
+  days-until-expiry:
+    description: 'Days remaining until token expires (negative if expired)'
+    value: ${{ steps.validate.outputs.days-until-expiry }}
+  error-message:
+    description: 'Detailed error message if validation fails'
+    value: ${{ steps.validate.outputs.error-message }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate Cloudflare Token
+      id: validate
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
+      run: |
+        echo "::group::🔍 Validating Cloudflare API Token"
+
+        # Validate token via Cloudflare API
+        VERIFY_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        # Parse response
+        SUCCESS=$(echo "$VERIFY_RESPONSE" | jq -r '.success // false')
+        STATUS_VALUE=$(echo "$VERIFY_RESPONSE" | jq -r '.result.status // "unknown"')
+        EXPIRES_ON=$(echo "$VERIFY_RESPONSE" | jq -r '.result.expires_on // ""')
+        ERROR_CODE=$(echo "$VERIFY_RESPONSE" | jq -r '.errors[0].code // 0')
+        ERROR_MSG=$(echo "$VERIFY_RESPONSE" | jq -r '.errors[0].message // ""')
+
+        echo "API Response:"
+        echo "$VERIFY_RESPONSE" | jq '.'
+        echo ""
+
+        # Determine if token is valid
+        if [[ "$SUCCESS" == "true" && "$STATUS_VALUE" == "active" ]]; then
+          IS_VALID="true"
+
+          # Calculate days until expiry
+          if [[ -n "$EXPIRES_ON" && "$EXPIRES_ON" != "null" ]]; then
+            EXPIRY_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EXPIRES_ON" +%s 2>/dev/null || date -d "$EXPIRES_ON" +%s 2>/dev/null)
+            CURRENT_EPOCH=$(date +%s)
+            DAYS_UNTIL_EXPIRY=$(( ($EXPIRY_EPOCH - $CURRENT_EPOCH) / 86400 ))
+
+            echo "✅ Token is VALID and ACTIVE"
+            echo "  • Status: $STATUS_VALUE"
+            echo "  • Expires on: $EXPIRES_ON"
+            echo "  • Days until expiry: $DAYS_UNTIL_EXPIRY"
+
+            if [[ $DAYS_UNTIL_EXPIRY -lt 30 ]]; then
+              echo ""
+              echo "⚠️  WARNING: Token expires in $DAYS_UNTIL_EXPIRY days"
+              echo "   Consider regenerating soon: https://dash.cloudflare.com/profile/api-tokens"
+            fi
+          else
+            DAYS_UNTIL_EXPIRY=""
+            echo "✅ Token is VALID and ACTIVE (no expiration)"
+          fi
+
+          ERROR_MESSAGE=""
+        else
+          IS_VALID="false"
+
+          # Determine specific failure reason
+          if [[ "$ERROR_CODE" == "1000" ]]; then
+            # Invalid API Token
+            STATUS_VALUE="invalid"
+            ERROR_MESSAGE="Token is invalid or has been revoked"
+
+            echo "❌ Token is INVALID"
+            echo "  • Error: $ERROR_MSG"
+            echo ""
+            echo "Possible causes:"
+            echo "  1. Token has been revoked"
+            echo "  2. Token was deleted"
+            echo "  3. Token format is incorrect"
+            echo ""
+            echo "→ Regenerate token: https://dash.cloudflare.com/profile/api-tokens"
+            echo "  Required permissions:"
+            echo "    • Zone → Zone → Read"
+            echo "    • Zone → Zone Settings → Edit"
+            echo "    • Zone → DNS → Edit"
+
+          elif [[ "$SUCCESS" == "true" && "$STATUS_VALUE" != "active" ]]; then
+            # Token exists but not active (expired/disabled)
+            if [[ -n "$EXPIRES_ON" && "$EXPIRES_ON" != "null" ]]; then
+              EXPIRY_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EXPIRES_ON" +%s 2>/dev/null || date -d "$EXPIRES_ON" +%s 2>/dev/null)
+              CURRENT_EPOCH=$(date +%s)
+              DAYS_SINCE_EXPIRY=$(( ($CURRENT_EPOCH - $EXPIRY_EPOCH) / 86400 ))
+
+              if [[ $DAYS_SINCE_EXPIRY -gt 0 ]]; then
+                STATUS_VALUE="expired"
+                DAYS_UNTIL_EXPIRY=$(( -$DAYS_SINCE_EXPIRY ))
+                ERROR_MESSAGE="Token expired $DAYS_SINCE_EXPIRY days ago on $EXPIRES_ON"
+
+                echo "❌ Token is EXPIRED"
+                echo "  • Expired on: $EXPIRES_ON"
+                echo "  • Days since expiry: $DAYS_SINCE_EXPIRY"
+                echo ""
+                echo "→ Regenerate token: https://dash.cloudflare.com/profile/api-tokens"
+              fi
+            else
+              STATUS_VALUE="inactive"
+              ERROR_MESSAGE="Token is not active (status: $STATUS_VALUE)"
+              echo "❌ Token is NOT ACTIVE"
+              echo "  • Status: $STATUS_VALUE"
+            fi
+          else
+            # Unknown error
+            STATUS_VALUE="unknown"
+            ERROR_MESSAGE="Failed to verify token: $ERROR_MSG"
+            echo "❌ Token validation FAILED"
+            echo "  • Error: $ERROR_MSG"
+            echo "  • Success: $SUCCESS"
+            echo "  • Status: $STATUS_VALUE"
+          fi
+
+          DAYS_UNTIL_EXPIRY="${DAYS_UNTIL_EXPIRY:-}"
+        fi
+
+        # Set outputs
+        echo "is-valid=$IS_VALID" >> $GITHUB_OUTPUT
+        echo "status=$STATUS_VALUE" >> $GITHUB_OUTPUT
+        echo "expires-on=${EXPIRES_ON:-}" >> $GITHUB_OUTPUT
+        echo "days-until-expiry=${DAYS_UNTIL_EXPIRY:-}" >> $GITHUB_OUTPUT
+        echo "error-message=${ERROR_MESSAGE:-}" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+        # Fail if requested and token is invalid
+        if [[ "$IS_VALID" == "false" && "$FAIL_ON_INVALID" == "true" ]]; then
+          echo ""
+          echo "::error::Cloudflare token validation failed: $ERROR_MESSAGE"
+          exit 1
+        fi

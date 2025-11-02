@@ -19,8 +19,21 @@ on:
         required: false
 
 jobs:
+  validate-tokens:
+    name: Validate Tokens
+    runs-on: ubuntu-latest
+    # Don't fail cleanup if token validation fails - allow manual cleanup
+    continue-on-error: true
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/utilities/validate-tokens@main
+        with:
+          railway-api-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          fail-on-invalid: false  # Warn only, don't block PR closure
+
   cleanup-preview:
     name: Cleanup PR Preview
+    needs: [validate-tokens]
     runs-on: ubuntu-latest
     # Continue even if cleanup fails - don't block PR closure
     continue-on-error: true

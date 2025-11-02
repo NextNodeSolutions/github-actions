@@ -82,8 +82,18 @@ on:
 # Note: Concurrency is managed by calling workflow
 
 jobs:
+  validate-tokens:
+    name: Validate Tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/utilities/validate-tokens@main
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          fail-on-invalid: true
+
   quality:
     name: Quality Checks
+    needs: [validate-tokens]
     if: inputs.run-quality-checks
     uses: NextNodeSolutions/github-actions/.github/workflows/quality-checks.yml@main
     with:
@@ -97,8 +107,8 @@ jobs:
   # Setup and version management (separate from publishing for security)
   version:
     name: Version Management
-    needs: [quality]
-    if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    needs: [validate-tokens, quality]
+    if: always() && needs.validate-tokens.result == 'success' && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       has-changesets: ${{ steps.version.outputs.has-changesets }}
