@@ -66,16 +66,52 @@ runs:
 
           # Extract root domain (last 2 parts: domain.tld)
           ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+          echo "  • Extracted root domain: $ROOT_DOMAIN"
 
           ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json")
 
+          # Debug: Show full API response
+          echo ""
+          echo "📋 Cloudflare API Response:"
+          echo "$ZONE_RESPONSE" | jq '.' || echo "$ZONE_RESPONSE"
+          echo ""
+
+          # Check API success first
+          API_SUCCESS=$(echo "$ZONE_RESPONSE" | jq -r '.success // false')
+          if [[ "$API_SUCCESS" != "true" ]]; then
+            echo "❌ Cloudflare API call failed"
+            echo "Errors:"
+            echo "$ZONE_RESPONSE" | jq '.errors // []'
+            echo ""
+            echo "Possible causes:"
+            echo "  1. Token is invalid or expired"
+            echo "  2. Token missing 'Zone:Read' permission"
+            echo "  3. Rate limit exceeded"
+            echo ""
+            echo "Debug workflow: gh workflow run debug-cloudflare-token.yml -R NextNodeSolutions/github-actions"
+            echo "configured=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
           CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // empty')
 
-          if [[ -z "$CF_ZONE_ID" ]]; then
+          if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
             echo "❌ Could not find Cloudflare zone for $ROOT_DOMAIN"
-            echo "Please provide zone-id manually or check domain configuration"
+            echo ""
+            echo "API returned success but no zones found."
+            echo "Result count: $(echo "$ZONE_RESPONSE" | jq -r '.result | length')"
+            echo ""
+            echo "Possible causes:"
+            echo "  1. Domain '$ROOT_DOMAIN' doesn't exist in this Cloudflare account"
+            echo "  2. Token doesn't have access to this zone"
+            echo "  3. Domain managed by different Cloudflare account"
+            echo ""
+            echo "Available zones in this account:"
+            echo "$ZONE_RESPONSE" | jq -r '.result[].name // "No zones accessible"'
+            echo ""
+            echo "Debug workflow: gh workflow run debug-cloudflare-token.yml -R NextNodeSolutions/github-actions"
             echo "configured=false" >> $GITHUB_OUTPUT
             exit 1
           fi
