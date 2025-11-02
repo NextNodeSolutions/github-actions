@@ -79,8 +79,18 @@ concurrency:
 # Note: This workflow expects to receive event data via github.event.client_payload.data
 
 jobs:
+  validate-tokens:
+    name: Validate Tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/utilities/validate-tokens@main
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          fail-on-invalid: true
+
   validate-event:
     name: Validate Event Data
+    needs: [validate-tokens]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.validate.outputs.version }}
@@ -235,7 +245,7 @@ jobs:
 
   tag:
     name: Create Git Tag
-    needs: [validate-event]
+    needs: [validate-tokens, validate-event]
     runs-on: ubuntu-latest
     outputs:
       tag-name: ${{ steps.tag.outputs.tag-name }}

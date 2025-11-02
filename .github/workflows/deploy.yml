@@ -68,8 +68,18 @@ on:
         value: ${{ jobs.deploy.outputs.status }}
 
 jobs:
+  validate-tokens:
+    name: Validate Tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NextNodeSolutions/github-actions/actions/utilities/validate-tokens@main
+        with:
+          railway-api-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          fail-on-invalid: true
+
   deploy:
     name: Deploy to Railway
+    needs: [validate-tokens]
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.environment }}
