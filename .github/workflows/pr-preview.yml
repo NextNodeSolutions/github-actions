@@ -177,9 +177,38 @@ jobs:
           echo "• Service: $SERVICE_NAME"
           echo "• Site URL: $SITE_URL"
 
-          railway variables --set "URL=${SITE_URL}" --service "$SERVICE_NAME" --skip-deploys
+          # Explicitly select the service context to ensure CLI targets correct service
+          echo "• Selecting service context..."
+          if ! railway service "$SERVICE_NAME"; then
+            echo "❌ Failed to select service context"
+            exit 1
+          fi
 
-          echo "✅ URL variable configured"
+          # Verify service context with status check
+          echo "• Verifying service status..."
+          if ! railway status --json > /tmp/railway-status.json 2>&1; then
+            echo "❌ Failed to get service status"
+            cat /tmp/railway-status.json
+            exit 1
+          fi
+
+          # Validate JSON response to ensure Railway API is responding correctly
+          if ! command -v jq &> /dev/null || ! jq empty /tmp/railway-status.json 2>/dev/null; then
+            echo "⚠️  Warning: Could not validate JSON response (jq not available or invalid JSON)"
+            echo "Response content:"
+            cat /tmp/railway-status.json
+          else
+            echo "✅ Service status validated"
+          fi
+
+          # Set URL variable
+          echo "• Setting URL variable..."
+          if railway variables --set "URL=${SITE_URL}" --skip-deploys; then
+            echo "✅ URL variable configured"
+          else
+            echo "❌ Failed to set URL variable"
+            exit 1
+          fi
 
           echo "::endgroup::"
         env:
