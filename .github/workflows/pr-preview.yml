@@ -2,7 +2,7 @@ name: Railway PR Preview
 
 # EXTERNAL WORKFLOW - Automated PR preview deployments to Railway
 # Deploys each PR to pr-{number}.dev.{base-domain}
-# Uses Railway GraphQL API for proper variable timing (fixes canonical URL issue)
+# Uses Railway GraphQL API via atomic workflows
 
 on:
   workflow_call:
@@ -98,169 +98,94 @@ jobs:
         with:
           working-directory: ${{ inputs.working-directory }}
 
-  deploy-preview:
-    name: Deploy PR Preview
-    runs-on: ubuntu-latest
+  discover-railway-ids:
+    name: Discover Railway IDs
     needs: [validate-tokens, quality-checks]
     if: |
       always() &&
       needs.validate-tokens.result == 'success' &&
       (needs.quality-checks.result == 'success' || needs.quality-checks.result == 'skipped')
+    uses: ./.github/workflows/railway-graphql-discover.yml
+    with:
+      project-name: ${{ inputs.app-name }}
+      environment-name: ${{ inputs.base-environment }}
+      service-name: pr-${{ github.event.pull_request.number }}_${{ inputs.app-name }}
+    secrets:
+      railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+  deploy-preview:
+    name: Deploy PR Preview
+    runs-on: ubuntu-latest
+    needs: [discover-railway-ids]
     outputs:
-      deployment-url: ${{ steps.domain.outputs.deployment-url }}
-      custom-domain: ${{ steps.domain.outputs.custom-domain }}
-      service-name: ${{ steps.domain.outputs.service-name }}
-      railway-url: ${{ steps.deploy.outputs.railway-url }}
-      cname-target: ${{ steps.deploy.outputs.cname-target }}
-      deployment-status: ${{ steps.monitor.outputs.status }}
+      deployment-url: ${{ steps.config.outputs.deployment-url }}
+      custom-domain: ${{ steps.config.outputs.custom-domain }}
+      service-name: ${{ steps.config.outputs.service-name }}
+      railway-url: ${{ steps.config.outputs.railway-url }}
+      cname-target: ${{ steps.config.outputs.cname-target }}
+      deployment-status: ${{ needs.deploy-service.outputs.deployment-status }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Calculate PR Service Name and Domain
-        id: domain
-        shell: bash
+      - name: Calculate Configuration
+        id: config
         run: |
-          echo "::group::🔧 Calculating PR Preview Configuration"
-
           PR_NUMBER="${{ github.event.pull_request.number }}"
           APP_NAME="${{ inputs.app-name }}"
           BASE_DOMAIN="${{ inputs.base-domain }}"
 
-          # Generate service name and custom domain
           SERVICE_NAME="pr-${PR_NUMBER}_${APP_NAME}"
           CUSTOM_DOMAIN="pr-${PR_NUMBER}.dev.${BASE_DOMAIN}"
           DEPLOYMENT_URL="https://${CUSTOM_DOMAIN}"
           CNAME_TARGET="pr-${PR_NUMBER}.up.railway.app"
+          RAILWAY_URL="https://${CNAME_TARGET}"
 
-          echo "• PR Number: $PR_NUMBER"
-          echo "• App Name: $APP_NAME"
-          echo "• Service Name: $SERVICE_NAME"
-          echo "• Custom Domain: $CUSTOM_DOMAIN"
-          echo "• Deployment URL: $DEPLOYMENT_URL"
-          echo "• CNAME Target: $CNAME_TARGET"
-
-          # Set outputs
           echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
           echo "custom-domain=$CUSTOM_DOMAIN" >> $GITHUB_OUTPUT
           echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
           echo "cname-target=$CNAME_TARGET" >> $GITHUB_OUTPUT
+          echo "railway-url=$RAILWAY_URL" >> $GITHUB_OUTPUT
 
-          echo "::endgroup::"
+          echo "::notice::PR Preview Configuration: $DEPLOYMENT_URL"
 
-      - name: Discover Railway IDs
-        id: discover
-        shell: bash
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-        run: |
-          echo "::group::🔍 Discovering Railway Resource IDs"
+  deploy-service:
+    name: Deploy to Railway
+    needs: [discover-railway-ids, deploy-preview]
+    uses: ./.github/workflows/railway-graphql-deploy.yml
+    with:
+      project-id: ${{ needs.discover-railway-ids.outputs.project-id }}
+      environment-id: ${{ needs.discover-railway-ids.outputs.environment-id }}
+      service-id: ${{ needs.discover-railway-ids.outputs.service-id }}
+      service-name: ${{ needs.deploy-preview.outputs.service-name }}
+      repository: ${{ github.repository }}
+      branch: ${{ github.head_ref }}
+      commit-sha: ${{ github.event.pull_request.head.sha }}
+      custom-domain: ${{ needs.deploy-preview.outputs.custom-domain }}
+      variables-json: |
+        {
+          "URL": "${{ needs.deploy-preview.outputs.deployment-url }}",
+          "NODE_ENV": "production",
+          "HOST": "0.0.0.0",
+          "PORT": "3000",
+          "RAILWAY_SERVICE_MEMORY_LIMIT_MB": "${{ inputs.memory-mb }}"
+        }
+      timeout-seconds: ${{ fromJSON(inputs.timeout-seconds) }}
+    secrets:
+      railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
 
-          eval $(.github/scripts/railway-get-ids.sh \
-            --project-name "${{ inputs.app-name }}" \
-            --environment-name "${{ inputs.base-environment }}" \
-            --service-name "${{ steps.domain.outputs.service-name }}")
-
-          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
-          echo "environment-id=$ENVIRONMENT_ID" >> $GITHUB_OUTPUT
-          echo "service-exists=$SERVICE_EXISTS" >> $GITHUB_OUTPUT
-
-          if [[ "$SERVICE_EXISTS" == "true" ]]; then
-            echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
-            echo "✅ Service already exists: $SERVICE_ID"
-          else
-            echo "ℹ️  Service will be created"
-          fi
-
-          echo "::endgroup::"
-
-      - name: Deploy Railway Service
-        id: deploy
-        shell: bash
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-        run: |
-          echo "::group::🚀 Deploying Service with GraphQL API"
-
-          # Prepare environment variables
-          VARIABLES=$(jq -n \
-            --arg url "${{ steps.domain.outputs.deployment-url }}" \
-            --arg node_env "production" \
-            --arg host "0.0.0.0" \
-            --arg port "3000" \
-            --arg memory "${{ inputs.memory-mb }}" \
-            '{
-              URL: $url,
-              NODE_ENV: $node_env,
-              HOST: $host,
-              PORT: $port,
-              RAILWAY_SERVICE_MEMORY_LIMIT_MB: $memory
-            }')
-
-          echo "📦 Variables configured:"
-          echo "$VARIABLES" | jq '.'
-
-          # Build service ID flag if exists
-          SERVICE_ID_FLAG=""
-          if [[ "${{ steps.discover.outputs.service-exists }}" == "true" ]]; then
-            SERVICE_ID_FLAG="--service-id ${{ steps.discover.outputs.service-id }}"
-            echo "♻️  Updating existing service"
-          else
-            echo "🆕 Creating new service"
-          fi
-
-          # Deploy service
-          eval $(.github/scripts/railway-service-deploy.sh \
-            --project-id "${{ steps.discover.outputs.project-id }}" \
-            --environment-id "${{ steps.discover.outputs.environment-id }}" \
-            --service-name "${{ steps.domain.outputs.service-name }}" \
-            $SERVICE_ID_FLAG \
-            --repo "${{ github.repository }}" \
-            --branch "${{ github.head_ref }}" \
-            --domain "${{ steps.domain.outputs.custom-domain }}" \
-            --variables "$VARIABLES")
-
-          echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
-          echo "railway-url=https://${{ steps.domain.outputs.cname-target }}" >> $GITHUB_OUTPUT
-          echo "cname-target=${{ steps.domain.outputs.cname-target }}" >> $GITHUB_OUTPUT
-
-          echo "✅ Service deployed: $SERVICE_ID"
-          echo "::endgroup::"
-
-      - name: Monitor Deployment
-        id: monitor
-        shell: bash
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-        run: |
-          echo "::group::⏳ Monitoring Deployment Status"
-
-          if eval $(.github/scripts/railway-monitor-deployment.sh \
-            --service-id "${{ steps.deploy.outputs.service-id }}" \
-            --environment-id "${{ steps.discover.outputs.environment-id }}" \
-            --timeout "${{ inputs.timeout-seconds }}" \
-            --interval 15); then
-            echo "status=SUCCESS" >> $GITHUB_OUTPUT
-          else
-            echo "status=FAILED" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "::endgroup::"
-
+  comment-pr:
+    name: Comment on PR
+    runs-on: ubuntu-latest
+    needs: [deploy-preview, deploy-service]
+    if: always()
+    steps:
       - name: Comment PR with Deployment Info
         uses: actions/github-script@v7
-        if: always()
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const deploymentUrl = '${{ steps.domain.outputs.deployment-url }}';
-            const serviceName = '${{ steps.domain.outputs.service-name }}';
-            const railwayUrl = '${{ steps.deploy.outputs.railway-url }}';
-            const status = '${{ steps.monitor.outputs.status }}';
+            const deploymentUrl = '${{ needs.deploy-preview.outputs.deployment-url }}';
+            const serviceName = '${{ needs.deploy-preview.outputs.service-name }}';
+            const railwayUrl = '${{ needs.deploy-preview.outputs.railway-url }}';
+            const status = '${{ needs.deploy-service.outputs.deployment-status }}';
             const prNumber = ${{ github.event.pull_request.number }};
             const runQuality = ${{ inputs.run-quality-checks }};
             const baseEnv = '${{ inputs.base-environment }}';
@@ -279,9 +204,10 @@ jobs:
             ✅ Typecheck passed`;
             }
 
+            const statusEmoji = status === 'SUCCESS' ? '✅' : '❌';
             const comment = `## 🚀 PR Preview Deployment ${status === 'SUCCESS' ? 'Ready!' : 'Status'}
 
-            📍 **Preview URL:** ${deploymentUrl}
+            ${statusEmoji} **Preview URL:** ${deploymentUrl}
             🔧 **Service:** \`${serviceName}\`
             🌍 **Environment:** ${baseEnv}
             📊 **Status:** ${status}
@@ -293,8 +219,10 @@ jobs:
 
             - **Railway URL:** ${railwayUrl}
             - **PR Number:** #${prNumber}
+            - **Branch:** \`${{ github.head_ref }}\`
+            - **Commit:** \`${{ github.event.pull_request.head.sha }}\`
             - **Memory:** ${{ inputs.memory-mb }}MB
-            - **Deployment Method:** GraphQL API ✨
+            - **Method:** GraphQL API ✨
 
             </details>
 

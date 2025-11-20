@@ -1,0 +1,165 @@
+name: Railway GraphQL - Discover IDs
+
+# ATOMIC WORKFLOW - Discover Railway resource IDs via GraphQL API
+# Finds Project, Environment, and optionally Service IDs
+
+on:
+  workflow_call:
+    inputs:
+      project-name:
+        description: 'Railway project name'
+        required: true
+        type: string
+      environment-name:
+        description: 'Railway environment name'
+        required: true
+        type: string
+      service-name:
+        description: 'Service name to check existence (optional)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      railway-token:
+        required: true
+    outputs:
+      project-id:
+        description: 'Railway project ID'
+        value: ${{ jobs.discover.outputs.project-id }}
+      environment-id:
+        description: 'Railway environment ID'
+        value: ${{ jobs.discover.outputs.environment-id }}
+      service-id:
+        description: 'Railway service ID (if service-name provided and exists)'
+        value: ${{ jobs.discover.outputs.service-id }}
+      service-exists:
+        description: 'Whether the service exists (true/false)'
+        value: ${{ jobs.discover.outputs.service-exists }}
+
+jobs:
+  discover:
+    name: Discover Railway IDs
+    runs-on: ubuntu-latest
+    outputs:
+      project-id: ${{ steps.discover.outputs.project-id }}
+      environment-id: ${{ steps.discover.outputs.environment-id }}
+      service-id: ${{ steps.discover.outputs.service-id }}
+      service-exists: ${{ steps.discover.outputs.service-exists }}
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Discover Railway Resource IDs
+        id: discover
+        env:
+          RAILWAY_TOKEN: ${{ secrets.railway-token }}
+          PROJECT_NAME: ${{ inputs.project-name }}
+          ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+        run: |
+          echo "::group::🔍 Discovering Railway Resource IDs"
+
+          RAILWAY_API="https://backboard.railway.app/graphql/v2"
+
+          # Query all projects
+          echo "📦 Querying projects..."
+          PROJECT_RESPONSE=$(curl -s -X POST "$RAILWAY_API" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "query": "query { projects { edges { node { id name } } } }"
+            }')
+
+          # Check for GraphQL errors
+          ERRORS=$(echo "$PROJECT_RESPONSE" | jq -r '.errors // empty')
+          if [[ -n "$ERRORS" ]]; then
+            echo "❌ GraphQL Error: $ERRORS"
+            exit 1
+          fi
+
+          # Extract project ID
+          PROJECT_ID=$(echo "$PROJECT_RESPONSE" | jq -r \
+            ".data.projects.edges[] | select(.node.name == \"$PROJECT_NAME\") | .node.id")
+
+          if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "null" ]]; then
+            echo "❌ Project '$PROJECT_NAME' not found"
+            exit 1
+          fi
+
+          echo "✅ Project ID: $PROJECT_ID"
+          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
+
+          # Query environments for this project
+          echo "🌍 Querying environments..."
+          ENV_RESPONSE=$(curl -s -X POST "$RAILWAY_API" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg projectId "$PROJECT_ID" \
+              '{
+                query: "query($projectId: String!) { project(id: $projectId) { environments { edges { node { id name } } } } }",
+                variables: { projectId: $projectId }
+              }')")
+
+          # Check for errors
+          ERRORS=$(echo "$ENV_RESPONSE" | jq -r '.errors // empty')
+          if [[ -n "$ERRORS" ]]; then
+            echo "❌ GraphQL Error: $ERRORS"
+            exit 1
+          fi
+
+          # Extract environment ID
+          ENVIRONMENT_ID=$(echo "$ENV_RESPONSE" | jq -r \
+            ".data.project.environments.edges[] | select(.node.name == \"$ENVIRONMENT_NAME\") | .node.id")
+
+          if [[ -z "$ENVIRONMENT_ID" || "$ENVIRONMENT_ID" == "null" ]]; then
+            echo "❌ Environment '$ENVIRONMENT_NAME' not found in project '$PROJECT_NAME'"
+            exit 1
+          fi
+
+          echo "✅ Environment ID: $ENVIRONMENT_ID"
+          echo "environment-id=$ENVIRONMENT_ID" >> $GITHUB_OUTPUT
+
+          # Query service if name provided
+          if [[ -n "$SERVICE_NAME" ]]; then
+            echo "🔧 Querying service '$SERVICE_NAME'..."
+            SERVICE_RESPONSE=$(curl -s -X POST "$RAILWAY_API" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg projectId "$PROJECT_ID" \
+                --arg environmentId "$ENVIRONMENT_ID" \
+                '{
+                  query: "query($projectId: String!, $environmentId: String!) { services(projectId: $projectId, environmentId: $environmentId) { edges { node { id name } } } }",
+                  variables: { projectId: $projectId, environmentId: $environmentId }
+                }')")
+
+            # Check for errors
+            ERRORS=$(echo "$SERVICE_RESPONSE" | jq -r '.errors // empty')
+            if [[ -n "$ERRORS" ]]; then
+              echo "❌ GraphQL Error: $ERRORS"
+              exit 1
+            fi
+
+            # Extract service ID
+            SERVICE_ID=$(echo "$SERVICE_RESPONSE" | jq -r \
+              ".data.services.edges[] | select(.node.name == \"$SERVICE_NAME\") | .node.id")
+
+            if [[ -z "$SERVICE_ID" || "$SERVICE_ID" == "null" ]]; then
+              echo "ℹ️  Service '$SERVICE_NAME' not found (will be created)"
+              echo "service-id=" >> $GITHUB_OUTPUT
+              echo "service-exists=false" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Service ID: $SERVICE_ID"
+              echo "service-id=$SERVICE_ID" >> $GITHUB_OUTPUT
+              echo "service-exists=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ℹ️  No service name provided, skipping service discovery"
+            echo "service-id=" >> $GITHUB_OUTPUT
+            echo "service-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::endgroup::"
+
+          echo "::notice::✅ Discovery complete: Project=$PROJECT_ID, Environment=$ENVIRONMENT_ID"

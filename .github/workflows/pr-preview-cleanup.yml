@@ -2,7 +2,7 @@ name: Railway PR Preview Cleanup
 
 # EXTERNAL WORKFLOW - Cleanup PR preview deployments when PR is closed
 # Removes the Railway service, custom domain, and DNS records
-# Uses Railway GraphQL API for service deletion
+# Uses Railway GraphQL API via atomic workflows
 
 on:
   workflow_call:
@@ -12,10 +12,10 @@ on:
         required: true
         type: string
       base-environment:
-        description: 'Base Railway environment for PR previews'
+        description: 'Railway environment (e.g., development, production)'
         required: false
-        default: 'development'
         type: string
+        default: 'development'
     secrets:
       RAILWAY_API_TOKEN:
         required: true
@@ -37,98 +37,44 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           fail-on-invalid: false  # Warn only, don't block PR closure
 
+  discover-railway-ids:
+    name: Discover Railway IDs
+    needs: [validate-tokens]
+    continue-on-error: true
+    uses: ./.github/workflows/railway-graphql-discover.yml
+    with:
+      project-name: ${{ inputs.app-name }}
+      environment-name: ${{ inputs.base-environment }}
+      service-name: pr-${{ github.event.pull_request.number }}_${{ inputs.app-name }}
+    secrets:
+      railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
   cleanup-preview:
     name: Cleanup PR Preview
-    needs: [validate-tokens]
-    runs-on: ubuntu-latest
-    # Continue even if cleanup fails - don't block PR closure
+    needs: [discover-railway-ids]
     continue-on-error: true
-    outputs:
-      cleaned: ${{ steps.cleanup.outputs.cleaned }}
-      service-name: ${{ steps.domain.outputs.service-name }}
-      custom-domain: ${{ steps.domain.outputs.custom-domain }}
+    uses: ./.github/workflows/railway-graphql-cleanup.yml
+    with:
+      project-id: ${{ needs.discover-railway-ids.outputs.project-id }}
+      environment-id: ${{ needs.discover-railway-ids.outputs.environment-id }}
+      service-id: ${{ needs.discover-railway-ids.outputs.service-id }}
+      service-name: pr-${{ github.event.pull_request.number }}_${{ inputs.app-name }}
+    secrets:
+      railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+  comment-pr:
+    name: Comment on PR
+    runs-on: ubuntu-latest
+    needs: [cleanup-preview]
+    if: always()
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Calculate PR Service Name and Domain
-        id: domain
-        shell: bash
-        run: |
-          echo "::group::🔧 Calculating PR Service Configuration"
-
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          APP_NAME="${{ inputs.app-name }}"
-
-          SERVICE_NAME="pr-${PR_NUMBER}_${APP_NAME}"
-
-          echo "• PR Number: $PR_NUMBER"
-          echo "• App Name: $APP_NAME"
-          echo "• Service Name: $SERVICE_NAME"
-
-          echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
-
-          echo "::endgroup::"
-
-      - name: Discover Railway IDs
-        id: discover
-        shell: bash
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-        continue-on-error: true
-        run: |
-          echo "::group::🔍 Discovering Railway Resource IDs"
-
-          eval $(.github/scripts/railway-get-ids.sh \
-            --project-name "${{ inputs.app-name }}" \
-            --environment-name "${{ inputs.base-environment }}")
-
-          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
-          echo "environment-id=$ENVIRONMENT_ID" >> $GITHUB_OUTPUT
-
-          echo "::endgroup::"
-
-      - name: Cleanup Railway Service
-        id: cleanup
-        shell: bash
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-        continue-on-error: true
-        run: |
-          echo "::group::🧹 Cleaning up Railway Service"
-
-          if [[ -z "${{ steps.discover.outputs.project-id }}" ]]; then
-            echo "⚠️  Could not discover Railway project"
-            echo "cleaned=false" >> $GITHUB_OUTPUT
-            echo "::endgroup::"
-            exit 0
-          fi
-
-          if .github/scripts/railway-cleanup.sh \
-            --project-id "${{ steps.discover.outputs.project-id }}" \
-            --environment-id "${{ steps.discover.outputs.environment-id }}" \
-            --service-name "${{ steps.domain.outputs.service-name }}" \
-            --force; then
-            echo "cleaned=true" >> $GITHUB_OUTPUT
-            echo "✅ Service cleaned successfully"
-          else
-            echo "cleaned=false" >> $GITHUB_OUTPUT
-            echo "⚠️  Service cleanup failed or already cleaned"
-          fi
-
-          echo "::endgroup::"
-
       - name: Comment PR with Cleanup Status
         uses: actions/github-script@v7
-        if: always()
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const cleaned = '${{ steps.cleanup.outputs.cleaned }}';
-            const serviceName = '${{ steps.domain.outputs.service-name }}';
+            const cleaned = '${{ needs.cleanup-preview.outputs.deleted }}';
+            const serviceName = 'pr-${{ github.event.pull_request.number }}_${{ inputs.app-name }}';
             const prNumber = ${{ github.event.pull_request.number }};
 
             let comment;
@@ -138,7 +84,7 @@ jobs:
               ✅ **Service Removed:** \`${serviceName}\`
               🌍 **Environment:** ${{ inputs.base-environment }}
               ⏱️ **Cleaned at:** ${new Date().toISOString()}
-              🔧 **Method:** GraphQL API
+              🔧 **Method:** GraphQL API ✨
 
               ---
               The preview deployment has been successfully removed from Railway.
