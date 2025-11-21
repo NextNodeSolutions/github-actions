@@ -103,9 +103,6 @@ jobs:
             exit 1
           fi
 
-          # Convert variables JSON to Railway format: [{ name: "KEY", value: "VALUE" }]
-          VARIABLES_ARRAY=$(echo "$VARIABLES_JSON" | jq -c 'to_entries | map({name: .key, value: .value})')
-
           echo "📦 Configuration:"
           echo "  • Service: $SERVICE_NAME"
           echo "  • Repository: $REPOSITORY"
@@ -154,62 +151,57 @@ jobs:
             echo "♻️  Updating existing service: $SERVICE_ID"
           fi
 
-          # Set environment variables
+          # Set environment variables (one by one)
           echo "📝 Setting environment variables..."
-          VAR_RESPONSE=$(curl -s -X POST "$RAILWAY_API" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n \
-              --arg projectId "$PROJECT_ID" \
-              --arg envId "$ENVIRONMENT_ID" \
-              --arg serviceId "$SERVICE_ID" \
-              --argjson vars "$VARIABLES_ARRAY" \
-              '{
-                query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }",
-                variables: {
-                  input: {
-                    projectId: $projectId,
-                    environmentId: $envId,
-                    serviceId: $serviceId,
-                    variables: $vars
-                  }
-                }
-              }')")
+          VAR_COUNT=0
+          VAR_ERRORS=0
 
-          ERRORS=$(echo "$VAR_RESPONSE" | jq -r '.errors // empty')
-          if [[ -n "$ERRORS" ]]; then
-            echo "⚠️  Variable setting warning: $ERRORS"
-          else
-            echo "✅ Variables configured"
-          fi
+          # Loop through each variable and upsert individually
+          for row in $(echo "$VARIABLES_JSON" | jq -r 'to_entries | .[] | @base64'); do
+            _jq() {
+              echo "${row}" | base64 --decode | jq -r "${1}"
+            }
 
-          # Configure custom domain if provided
-          if [[ -n "$CUSTOM_DOMAIN" ]]; then
-            echo "🌐 Configuring custom domain: $CUSTOM_DOMAIN..."
-            DOMAIN_RESPONSE=$(curl -s -X POST "$RAILWAY_API" \
+            VAR_NAME=$(_jq '.key')
+            VAR_VALUE=$(_jq '.value')
+
+            VAR_RESPONSE=$(curl -s -X POST "$RAILWAY_API" \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$(jq -n \
+                --arg projectId "$PROJECT_ID" \
+                --arg environmentId "$ENVIRONMENT_ID" \
                 --arg serviceId "$SERVICE_ID" \
-                --arg envId "$ENVIRONMENT_ID" \
-                --arg domain "$CUSTOM_DOMAIN" \
+                --arg name "$VAR_NAME" \
+                --arg value "$VAR_VALUE" \
                 '{
-                  query: "mutation($input: ServiceDomainCreateInput!) { serviceDomainCreate(input: $input) { id domain } }",
+                  query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }",
                   variables: {
                     input: {
+                      projectId: $projectId,
+                      environmentId: $environmentId,
                       serviceId: $serviceId,
-                      environmentId: $envId,
-                      domain: $domain
+                      name: $name,
+                      value: $value
                     }
                   }
                 }')")
 
-            ERRORS=$(echo "$DOMAIN_RESPONSE" | jq -r '.errors // empty')
+            ERRORS=$(echo "$VAR_RESPONSE" | jq -r '.errors // empty')
             if [[ -n "$ERRORS" ]]; then
-              echo "⚠️  Domain configuration warning (may already exist): $ERRORS"
+              echo "  ⚠️  Failed to set $VAR_NAME"
+              VAR_ERRORS=$((VAR_ERRORS + 1))
             else
-              echo "✅ Custom domain configured"
+              echo "  ✅ Set $VAR_NAME"
+              VAR_COUNT=$((VAR_COUNT + 1))
             fi
+          done
+
+          echo "📊 Variables: $VAR_COUNT set, $VAR_ERRORS failed"
+
+          # Set deployment URL (custom domain configuration via Railway CLI separately)
+          if [[ -n "$CUSTOM_DOMAIN" ]]; then
+            echo "ℹ️  Custom domain: $CUSTOM_DOMAIN (configure via Railway dashboard)"
             DEPLOYMENT_URL="https://$CUSTOM_DOMAIN"
           else
             DEPLOYMENT_URL="https://$(echo "$SERVICE_NAME" | tr '_' '-').up.railway.app"
@@ -222,7 +214,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$(jq -n \
               --arg serviceId "$SERVICE_ID" \
-              --arg envId "$ENVIRONMENT_ID" \
+              --arg environmentId "$ENVIRONMENT_ID" \
               '{
                 query: "mutation($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }",
                 variables: {
