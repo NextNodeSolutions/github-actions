@@ -39,11 +39,12 @@ runs:
       run: |
         echo "::group::🔍 Validating Railway API Token"
 
-        # Validate token via Railway GraphQL API
+        # Validate token via Railway GraphQL API (Team Token)
+        # Team tokens cannot access 'me' query, so we query projects instead
         VERIFY_RESPONSE=$(curl -s -X POST "https://backboard.railway.com/graphql/v2" \
           -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
           -H "Content-Type: application/json" \
-          --data '{"query":"query { me { id name email } }"}')
+          --data '{"query":"query { projects { edges { node { id name } } } }"}')
 
         echo "API Response:"
         echo "$VERIFY_RESPONSE" | jq '.'
@@ -71,11 +72,7 @@ runs:
             echo "  2. Token was deleted from Railway"
             echo "  3. Token format is incorrect"
             echo ""
-            echo "→ Generate new token: https://railway.app/account/tokens"
-            echo "  Token types:"
-            echo "    • Account Token - Access to all resources"
-            echo "    • Team Token - Access to team resources"
-            echo "    • Project Token - Scoped to specific environment"
+            echo "→ Generate new team token: https://railway.app/team/settings/tokens"
           else
             ERROR_MESSAGE="Railway API error: $ERROR_MSG"
           fi
@@ -84,26 +81,29 @@ runs:
           USER_NAME=""
           USER_EMAIL=""
         else
-          # Parse user data
-          USER_ID=$(echo "$VERIFY_RESPONSE" | jq -r '.data.me.id // ""')
-          USER_NAME=$(echo "$VERIFY_RESPONSE" | jq -r '.data.me.name // ""')
-          USER_EMAIL=$(echo "$VERIFY_RESPONSE" | jq -r '.data.me.email // ""')
+          # Check if we got valid data back
+          PROJECTS_DATA=$(echo "$VERIFY_RESPONSE" | jq -r '.data.projects // null')
 
-          if [[ -n "$USER_ID" ]]; then
+          if [[ "$PROJECTS_DATA" != "null" ]]; then
             IS_VALID="true"
             ERROR_MESSAGE=""
+            PROJECT_COUNT=$(echo "$VERIFY_RESPONSE" | jq -r '.data.projects.edges | length')
 
-            echo "✅ Token is VALID"
-            echo "  • User ID: $USER_ID"
-            echo "  • User Name: $USER_NAME"
-            echo "  • User Email: $USER_EMAIL"
+            echo "✅ Token is VALID (Team Token)"
+            echo "  • Type: Team Token"
+            echo "  • Projects accessible: $PROJECT_COUNT"
+
+            # Team tokens don't have user info
+            USER_ID=""
+            USER_NAME=""
+            USER_EMAIL=""
           else
-            # No errors but no user data either
+            # No errors but no valid data either
             IS_VALID="false"
-            ERROR_MESSAGE="Token validation returned empty user data"
+            ERROR_MESSAGE="Token validation returned no data"
 
             echo "❌ Token validation FAILED"
-            echo "  • No user data returned"
+            echo "  • No projects data returned"
             echo "  • This may indicate an expired or invalid token"
 
             USER_ID=""
