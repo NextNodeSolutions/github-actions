@@ -128,10 +128,9 @@ jobs:
               -H "Content-Type: application/json" \
               -d "$(jq -n \
                 --arg projectId "$PROJECT_ID" \
-                --arg environmentId "$ENVIRONMENT_ID" \
                 '{
-                  query: "query($projectId: String!, $environmentId: String!) { services(projectId: $projectId, environmentId: $environmentId) { edges { node { id name } } } }",
-                  variables: { projectId: $projectId, environmentId: $environmentId }
+                  query: "query($projectId: String!) { project(id: $projectId) { services { edges { node { id name } } } } }",
+                  variables: { projectId: $projectId }
                 }')")
 
             # Check for errors
@@ -143,7 +142,7 @@ jobs:
 
             # Extract service ID
             SERVICE_ID=$(echo "$SERVICE_RESPONSE" | jq -r \
-              ".data.services.edges[] | select(.node.name == \"$SERVICE_NAME\") | .node.id")
+              ".data.project.services.edges[] | select(.node.name == \"$SERVICE_NAME\") | .node.id")
 
             if [[ -z "$SERVICE_ID" || "$SERVICE_ID" == "null" ]]; then
               echo "ℹ️  Service '$SERVICE_NAME' not found (will be created)"
