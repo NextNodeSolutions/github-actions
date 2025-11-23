@@ -182,7 +182,8 @@ jobs:
                       environmentId: $environmentId,
                       serviceId: $serviceId,
                       name: $name,
-                      value: $value
+                      value: $value,
+                      skipDeploys: true
                     }
                   }
                 }')")
