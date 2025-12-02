@@ -40,6 +40,15 @@ on:
         required: false
         default: '300'
         type: string
+      linked-services:
+        description: |
+          Services to link (one per line, priority order).
+          Example:
+            pr-${{ github.event.pull_request.number }}_nextnode-cms
+            dev_nextnode-cms
+        required: false
+        default: ''
+        type: string
     secrets:
       RAILWAY_API_TOKEN:
         required: true
@@ -170,6 +179,24 @@ jobs:
       timeout-seconds: ${{ fromJSON(inputs.timeout-seconds) }}
     secrets:
       railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+
+  link-services:
+    name: Link Services
+    runs-on: ubuntu-latest
+    needs: [discover-railway-ids, deploy-service]
+    if: inputs.linked-services != ''
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Link Services
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-link-services@main
+        with:
+          linked-services: ${{ inputs.linked-services }}
+          project-id: ${{ needs.discover-railway-ids.outputs.project-id }}
+          environment: ${{ inputs.base-environment }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          variable-name: 'SERVICE_URL'
 
   comment-pr:
     name: Comment on PR

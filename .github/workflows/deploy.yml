@@ -34,6 +34,15 @@ on:
         required: false
         default: '{}'
         type: string
+      linked-services:
+        description: |
+          Services to link (one per line, priority order).
+          Example:
+            pr-58_nextnode-cms
+            dev_nextnode-cms
+        required: false
+        default: ''
+        type: string
       wait-for-deployment:
         description: 'Wait for deployment to complete'
         required: false
@@ -210,3 +219,14 @@ jobs:
           custom-domain: ${{ steps.domain.outputs.custom-domain }}
           railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
           remove-existing: true
+
+      - name: Link Services
+        id: link-services
+        if: inputs.linked-services != ''
+        uses: NextNodeSolutions/github-actions/actions/deploy/railway-link-services@main
+        with:
+          linked-services: ${{ inputs.linked-services }}
+          project-id: ${{ steps.project.outputs.project-id }}
+          environment: ${{ inputs.environment }}
+          railway-token: ${{ secrets.RAILWAY_API_TOKEN }}
+          variable-name: 'SERVICE_URL'

@@ -326,6 +326,123 @@ jobs:
 - PR #123: `pr-123.dev.nextnode.fr`
 - PR #456: `pr-456.dev.nextnode.fr`
 
+### Multi-Service Linking
+
+**Feature:** Automatically link services within the same Railway project for service-to-service communication.
+
+**How it works:**
+- Services in separate repositories deploy to the same Railway project
+- Workflows automatically configure service references using Railway's template syntax
+- Railway enforces environment isolation (development ↔ production)
+- Services communicate via private networking (no egress fees)
+- Service names are matched exactly (with automatic PR number normalization)
+
+**Example: Frontend + CMS Architecture**
+
+**CMS Repository** (`nextnode-cms`):
+```yaml
+# .github/workflows/deploy-production.yml
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
+    with:
+      environment: production
+      app-name: nextnode-cms
+      # No linked-services needed - CMS doesn't depend on frontend
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+**Frontend Repository** (`nextnode-front`):
+```yaml
+# .github/workflows/deploy-production.yml
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
+    with:
+      environment: production
+      app-name: nextnode-front
+
+      # Automatically link to CMS service
+      linked-services: |
+        prod_nextnode-cms
+
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+**PR Preview with Service Linking:**
+```yaml
+# Frontend PR-58 workflow
+name: PR Preview
+
+on:
+  pull_request:
+
+jobs:
+  preview:
+    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
+    with:
+      app-name: nextnode-front
+      base-domain: nextnode.fr
+
+      # Try PR-specific CMS first, fallback to development CMS
+      linked-services: |
+        pr-58_nextnode-cms
+        dev_nextnode-cms
+
+    secrets:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```
+
+**What happens automatically:**
+1. Workflow checks Railway development environment for `pr-58_nextnode-cms` → Not found
+2. Workflow checks for `dev_nextnode-cms` → Found! ✅
+3. Sets environment variable: `SERVICE_URL=http://${{dev_nextnode-cms.RAILWAY_PRIVATE_DOMAIN}}:${{dev_nextnode-cms.PORT}}`
+4. Railway resolves template at runtime: `SERVICE_URL=http://dev_nextnode-cms.railway.internal:1337`
+5. Frontend can now access CMS via `process.env.SERVICE_URL`
+
+**Integration with `@nextnode/config`:**
+```typescript
+// packages/config/src/services.ts
+export const services = {
+  cms: {
+    url: process.env.SERVICE_URL
+  }
+}
+
+// Frontend usage
+import { services } from '@nextnode/config'
+
+const posts = await fetch(`${services.cms.url}/api/posts`)
+```
+
+**Service Naming Convention:**
+- Production: `prod_nextnode-cms`, `prod_nextnode-front`
+- Development: `dev_nextnode-cms`, `dev_nextnode-front`
+- PR Previews: `pr-58_nextnode-cms`, `pr-23_nextnode-front`
+
+**Key Features:**
+- ✅ **Automatic environment isolation** - Railway enforces development ↔ production boundaries
+- ✅ **Exact name matching** - No ambiguity with similar service names
+- ✅ **PR number normalization** - `pr58_cms` → `pr-58_nextnode-cms`
+- ✅ **Priority fallback** - Try PR-specific service first, then development
+- ✅ **Fail-fast** - Deployment fails if no service found (no silent failures)
+- ✅ **Private networking** - Free, fast, secure service-to-service communication
+- ✅ **Automatic port detection** - Railway reads PORT from service configuration
+
 ### NPM Release Workflow
 **File:** `.github/workflows/release.yml`
 
