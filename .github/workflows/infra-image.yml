@@ -1,0 +1,61 @@
+name: Build Infrastructure Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infrastructure/packer/**'
+  workflow_dispatch:
+    inputs:
+      location:
+        description: 'Hetzner datacenter location'
+        required: false
+        default: 'fsn1'
+        type: choice
+        options:
+          - fsn1
+          - nbg1
+          - hel1
+
+concurrency:
+  group: infra-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build NixOS + Dokploy Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: Initialize Packer
+        working-directory: infrastructure/packer
+        run: packer init .
+
+      - name: Validate Packer Configuration
+        working-directory: infrastructure/packer
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          packer validate \
+            -var "hcloud_token=${HCLOUD_TOKEN}" \
+            -var "location=${{ inputs.location || 'fsn1' }}" \
+            nixos-dokploy.pkr.hcl
+
+      - name: Build Image
+        working-directory: infrastructure/packer
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          packer build \
+            -var "hcloud_token=${HCLOUD_TOKEN}" \
+            -var "location=${{ inputs.location || 'fsn1' }}" \
+            nixos-dokploy.pkr.hcl
