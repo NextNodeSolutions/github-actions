@@ -10,5 +10,13 @@
   },
   "terraform": {
     "version": "1.5"
+  },
+  "cloudflare": {
+    "api_base_url": "https://api.cloudflare.com/client/v4"
+  },
+  "dns": {
+    "domain": "nextnode.fr",
+    "admin_subdomain": "admin",
+    "dev_admin_subdomain": "dev.admin"
   }
 }

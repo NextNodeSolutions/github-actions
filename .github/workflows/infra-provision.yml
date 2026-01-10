@@ -92,3 +92,76 @@ jobs:
       - name: Show Outputs
         if: inputs.action == 'apply'
         run: terraform output -json
+
+      - name: Load DNS Config
+        if: inputs.action == 'apply'
+        id: dns-config
+        run: |
+          CF_API=$(jq -r '.cloudflare.api_base_url' ../config.json)
+          DOMAIN=$(jq -r '.dns.domain' ../config.json)
+          ADMIN_SUB=$(jq -r '.dns.admin_subdomain' ../config.json)
+          DEV_ADMIN_SUB=$(jq -r '.dns.dev_admin_subdomain' ../config.json)
+          echo "cf_api=${CF_API}" >> $GITHUB_OUTPUT
+          echo "domain=${DOMAIN}" >> $GITHUB_OUTPUT
+          echo "admin_sub=${ADMIN_SUB}" >> $GITHUB_OUTPUT
+          echo "dev_admin_sub=${DEV_ADMIN_SUB}" >> $GITHUB_OUTPUT
+
+      - name: Configure DNS Records
+        if: inputs.action == 'apply'
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_API: ${{ steps.dns-config.outputs.cf_api }}
+          DOMAIN: ${{ steps.dns-config.outputs.domain }}
+          ADMIN_SUB: ${{ steps.dns-config.outputs.admin_sub }}
+          DEV_ADMIN_SUB: ${{ steps.dns-config.outputs.dev_admin_sub }}
+        run: |
+          echo "::group::Configure Dokploy DNS Records"
+
+          # Get IPs from Terraform
+          DEV_IP=$(terraform output -raw dev_ip)
+          PROD_IP=$(terraform output -raw prod_ip)
+          echo "Dev IP: ${DEV_IP}"
+          echo "Prod IP: ${PROD_IP}"
+
+          # Get zone ID
+          ZONE_ID=$(curl -s -X GET "${CF_API}/zones?name=${DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id')
+          echo "Zone ID: ${ZONE_ID}"
+
+          # Function to create or update DNS record
+          create_or_update_record() {
+            local name=$1
+            local content=$2
+            local proxied=$3
+
+            # Check if record exists
+            EXISTING=$(curl -s -X GET "${CF_API}/zones/${ZONE_ID}/dns_records?type=A&name=${name}.${DOMAIN}" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id // empty')
+
+            if [ -n "${EXISTING}" ]; then
+              echo "Updating existing record: ${name}.${DOMAIN}"
+              curl -s -X PUT "${CF_API}/zones/${ZONE_ID}/dns_records/${EXISTING}" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data "{\"type\":\"A\",\"name\":\"${name}\",\"content\":\"${content}\",\"ttl\":1,\"proxied\":${proxied}}"
+            else
+              echo "Creating new record: ${name}.${DOMAIN}"
+              curl -s -X POST "${CF_API}/zones/${ZONE_ID}/dns_records" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data "{\"type\":\"A\",\"name\":\"${name}\",\"content\":\"${content}\",\"ttl\":1,\"proxied\":${proxied}}"
+            fi
+          }
+
+          # Create/update admin.nextnode.fr → prod (proxied=true for 2-level subdomain)
+          create_or_update_record "${ADMIN_SUB}" "${PROD_IP}" "true"
+
+          # Create/update dev.admin.nextnode.fr → dev (proxied=false for sub-subdomain SSL)
+          create_or_update_record "${DEV_ADMIN_SUB}" "${DEV_IP}" "false"
+
+          echo "::endgroup::"
+
+          echo ""
+          echo "DNS configured successfully:"
+          echo "  - https://${ADMIN_SUB}.${DOMAIN}:3000 (Production Dokploy)"
+          echo "  - https://${DEV_ADMIN_SUB}.${DOMAIN}:3000 (Development Dokploy)"
