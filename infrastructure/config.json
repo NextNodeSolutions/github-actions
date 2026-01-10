@@ -16,7 +16,6 @@
   },
   "dns": {
     "domain": "nextnode.fr",
-    "admin_subdomain": "admin",
-    "dev_admin_subdomain": "dev.admin"
+    "admin_subdomain": "admin"
   }
 }

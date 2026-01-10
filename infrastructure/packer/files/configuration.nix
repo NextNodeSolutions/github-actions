@@ -6,7 +6,7 @@
   networking.hostName = "dokploy-server";
   networking.firewall = {
     enable = true;
-    allowedTCPPorts = [ 80 443 3000 ];
+    allowedTCPPorts = [ 22 80 443 3000 ];
   };
 
   virtualisation.docker = {
@@ -35,7 +35,14 @@
     };
   };
 
-  services.openssh.enable = false;
+  # Enable SSH for remote access and Dokploy multi-server management
+  services.openssh = {
+    enable = true;
+    settings = {
+      PermitRootLogin = "prohibit-password";
+      PasswordAuthentication = false;
+    };
+  };
 
   time.timeZone = "Europe/Paris";
 

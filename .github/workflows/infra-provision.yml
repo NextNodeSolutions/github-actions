@@ -100,11 +100,9 @@ jobs:
           CF_API=$(jq -r '.cloudflare.api_base_url' ../config.json)
           DOMAIN=$(jq -r '.dns.domain' ../config.json)
           ADMIN_SUB=$(jq -r '.dns.admin_subdomain' ../config.json)
-          DEV_ADMIN_SUB=$(jq -r '.dns.dev_admin_subdomain' ../config.json)
           echo "cf_api=${CF_API}" >> $GITHUB_OUTPUT
           echo "domain=${DOMAIN}" >> $GITHUB_OUTPUT
           echo "admin_sub=${ADMIN_SUB}" >> $GITHUB_OUTPUT
-          echo "dev_admin_sub=${DEV_ADMIN_SUB}" >> $GITHUB_OUTPUT
 
       - name: Configure DNS Records
         if: inputs.action == 'apply'
@@ -113,14 +111,11 @@ jobs:
           CF_API: ${{ steps.dns-config.outputs.cf_api }}
           DOMAIN: ${{ steps.dns-config.outputs.domain }}
           ADMIN_SUB: ${{ steps.dns-config.outputs.admin_sub }}
-          DEV_ADMIN_SUB: ${{ steps.dns-config.outputs.dev_admin_sub }}
         run: |
-          echo "::group::Configure Dokploy DNS Records"
+          echo "::group::Configure Dokploy DNS Record"
 
-          # Get IPs from Terraform
-          DEV_IP=$(terraform output -raw dev_ip)
+          # Get prod IP from Terraform (single Dokploy instance manages both servers)
           PROD_IP=$(terraform output -raw prod_ip)
-          echo "Dev IP: ${DEV_IP}"
           echo "Prod IP: ${PROD_IP}"
 
           # Get zone ID
@@ -128,40 +123,31 @@ jobs:
             -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id')
           echo "Zone ID: ${ZONE_ID}"
 
-          # Function to create or update DNS record
-          create_or_update_record() {
-            local name=$1
-            local content=$2
-            local proxied=$3
+          # Check if record exists
+          EXISTING=$(curl -s -X GET "${CF_API}/zones/${ZONE_ID}/dns_records?type=A&name=${ADMIN_SUB}.${DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id // empty')
 
-            # Check if record exists
-            EXISTING=$(curl -s -X GET "${CF_API}/zones/${ZONE_ID}/dns_records?type=A&name=${name}.${DOMAIN}" \
-              -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id // empty')
-
-            if [ -n "${EXISTING}" ]; then
-              echo "Updating existing record: ${name}.${DOMAIN}"
-              curl -s -X PUT "${CF_API}/zones/${ZONE_ID}/dns_records/${EXISTING}" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" \
-                -H "Content-Type: application/json" \
-                --data "{\"type\":\"A\",\"name\":\"${name}\",\"content\":\"${content}\",\"ttl\":1,\"proxied\":${proxied}}"
-            else
-              echo "Creating new record: ${name}.${DOMAIN}"
-              curl -s -X POST "${CF_API}/zones/${ZONE_ID}/dns_records" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" \
-                -H "Content-Type: application/json" \
-                --data "{\"type\":\"A\",\"name\":\"${name}\",\"content\":\"${content}\",\"ttl\":1,\"proxied\":${proxied}}"
-            fi
-          }
-
-          # Create/update admin.nextnode.fr → prod (proxied=true for 2-level subdomain)
-          create_or_update_record "${ADMIN_SUB}" "${PROD_IP}" "true"
-
-          # Create/update dev.admin.nextnode.fr → dev (proxied=false for sub-subdomain SSL)
-          create_or_update_record "${DEV_ADMIN_SUB}" "${DEV_IP}" "false"
+          # Create or update admin.nextnode.fr → prod
+          # proxied=false to allow direct :3000 access (Cloudflare doesn't proxy non-standard ports)
+          if [ -n "${EXISTING}" ]; then
+            echo "Updating existing record: ${ADMIN_SUB}.${DOMAIN}"
+            curl -s -X PUT "${CF_API}/zones/${ZONE_ID}/dns_records/${EXISTING}" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${PROD_IP}\",\"ttl\":1,\"proxied\":false}"
+          else
+            echo "Creating new record: ${ADMIN_SUB}.${DOMAIN}"
+            curl -s -X POST "${CF_API}/zones/${ZONE_ID}/dns_records" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${PROD_IP}\",\"ttl\":1,\"proxied\":false}"
+          fi
 
           echo "::endgroup::"
 
           echo ""
           echo "DNS configured successfully:"
-          echo "  - https://${ADMIN_SUB}.${DOMAIN}:3000 (Production Dokploy)"
-          echo "  - https://${DEV_ADMIN_SUB}.${DOMAIN}:3000 (Development Dokploy)"
+          echo "  - https://${ADMIN_SUB}.${DOMAIN}:3000 (Dokploy Dashboard)"
+          echo ""
+          echo "Single Dokploy instance manages both prod and dev servers."
+          echo "Add dev server as remote in Dokploy UI: Settings → Servers"

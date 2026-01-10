@@ -45,9 +45,9 @@ Self-hosted PaaS infrastructure on Hetzner Cloud with NixOS and Dokploy.
 │          │  dev-dokploy    │         │  prod-dokploy   │                   │
 │          │  (cx23)         │         │  (cx33)         │                   │
 │          │                 │         │                 │                   │
-│          │  Dokploy        │         │  Dokploy        │                   │
-│          │  Docker         │         │  Docker         │                   │
-│          │  Traefik        │         │  Traefik        │                   │
+│          │  Docker         │  SSH    │  DOKPLOY UI     │                   │
+│          │  Traefik        │ ◄────── │  Docker         │                   │
+│          │  (Worker)       │         │  Traefik        │                   │
 │          └─────────────────┘         └─────────────────┘                   │
 │                                                                             │
 │  Workflow: .github/workflows/infra-provision.yml                           │
@@ -58,25 +58,49 @@ Self-hosted PaaS infrastructure on Hetzner Cloud with NixOS and Dokploy.
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         PHASE 3: DNS (Cloudflare)                           │
 │                                                                             │
-│          dev.admin.nextnode.fr ───────► dev-dokploy IP                     │
 │          admin.nextnode.fr ───────────► prod-dokploy IP                    │
 │                                                                             │
+│  Single Dokploy instance manages both servers                               │
 │  Configured automatically after terraform apply                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Accessing Dokploy
 
-| Environment | URL | Purpose |
-|-------------|-----|---------|
-| Production | `https://admin.nextnode.fr:3000` | Production deployments |
-| Development | `https://dev.admin.nextnode.fr:3000` | Testing, PR previews |
+| URL | Purpose |
+|-----|---------|
+| `https://admin.nextnode.fr:3000` | Dokploy Dashboard (manages both servers) |
 
 ### First-Time Setup
 
-1. Access the Dokploy URL
+1. Access `https://admin.nextnode.fr:3000`
 2. Create an admin account
 3. Connect your GitHub account for repository access
+4. Add dev server as remote (see Multi-Server Setup)
+
+### Multi-Server Setup
+
+Dokploy on prod server manages both servers. To add the dev server:
+
+1. Go to **Settings → Servers** in Dokploy
+2. Click **Add Server**
+3. Enter dev server IP and configure SSH key
+4. Now you can deploy apps to either server from one dashboard
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              DOKPLOY DASHBOARD (admin.nextnode.fr)          │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Servers                                            │   │
+│  │  ├── prod-dokploy (local)     ← Production apps    │   │
+│  │  └── dev-dokploy (remote)     ← Dev/staging apps   │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  Deploy to prod: *.nextnode.fr                             │
+│  Deploy to dev:  *.dev.nextnode.fr                         │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Deploying Applications
 
@@ -94,6 +118,7 @@ Self-hosted PaaS infrastructure on Hetzner Cloud with NixOS and Dokploy.
 │  Repository: NextNodeSolutions/my-app                          │
 │  Branch: main                                                   │
 │  Build: Dockerfile / Nixpacks                                  │
+│  Server: prod-dokploy (or dev-dokploy)                         │
 │       │                                                         │
 │       ▼                                                         │
 │  Domain: my-app.nextnode.fr                                    │
@@ -141,8 +166,7 @@ Dokploy can automatically deploy when you push to GitHub:
   },
   "dns": {
     "domain": "nextnode.fr",
-    "admin_subdomain": "admin",
-    "dev_admin_subdomain": "dev.admin"
+    "admin_subdomain": "admin"
   }
 }
 ```
@@ -183,6 +207,16 @@ gh workflow run "Provision Infrastructure" -f action=apply
 gh workflow run "Provision Infrastructure" -f action=destroy
 ```
 
+### SSH Access
+
+```bash
+# Connect to prod server
+ssh root@<prod-ip>
+
+# Connect to dev server
+ssh root@<dev-ip>
+```
+
 ### Check Server IPs
 
 After `apply`, check the workflow logs for:
@@ -205,7 +239,14 @@ prod_ip = "x.x.x.x"
 - **Consistency**: Every server uses the same pre-built image
 - **Cost-effective**: Temporary build server deleted after snapshot
 
-### Why Separate Dev/Prod?
+### Why Single Dokploy with Multi-Server?
+
+- **Single UI**: Manage all deployments from one place
+- **Reduced overhead**: Only one Dokploy instance to maintain
+- **Flexibility**: Deploy to prod or dev from same dashboard
+- **SSH management**: Dokploy handles remote server communication
+
+### Why Separate Dev/Prod Servers?
 
 - **Isolation**: Dev experiments don't affect production
 - **Testing**: Test infrastructure changes on dev first
@@ -216,8 +257,9 @@ prod_ip = "x.x.x.x"
 ### Server Not Accessible
 
 1. Check Hetzner console for server status
-2. Verify firewall rules (ports 80, 443, 3000 should be open)
+2. Verify firewall rules (ports 22, 80, 443, 3000 should be open)
 3. Check DNS propagation: `dig admin.nextnode.fr`
+4. Try direct IP access: `https://<prod-ip>:3000`
 
 ### Dokploy Not Starting
 
@@ -225,7 +267,14 @@ SSH into server and check:
 ```bash
 systemctl status dokploy-stack
 docker ps
+journalctl -u dokploy-stack -n 50
 ```
+
+### Cannot SSH into Server
+
+1. Ensure your SSH key is added to Hetzner project
+2. Check firewall allows port 22
+3. Use Hetzner web console as fallback
 
 ### Rebuild from Scratch
 
