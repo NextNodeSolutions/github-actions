@@ -45,9 +45,16 @@ build {
     ]
   }
 
+  provisioner "shell" {
+    inline_shebang = "/bin/bash -e"
+    inline = [
+      "mkdir -p /etc/nixos"
+    ]
+  }
+
   provisioner "file" {
     source      = "files/"
-    destination = "/etc/nixos/"
+    destination = "/etc/nixos"
   }
 
   provisioner "shell" {
