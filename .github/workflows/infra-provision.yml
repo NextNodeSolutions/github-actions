@@ -54,6 +54,23 @@ jobs:
           echo "::endgroup::"
         id: config
 
+      - name: Fetch SSH Key IDs from Hetzner
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          echo "::group::Fetch SSH keys from Hetzner Cloud"
+          SSH_KEYS=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/ssh_keys" | jq '[.ssh_keys[].id]')
+          echo "SSH keys found: ${SSH_KEYS}"
+
+          # Append SSH keys to tfvars
+          jq --argjson keys "${SSH_KEYS}" '. + {ssh_keys: $keys}' config.auto.tfvars.json > tmp.json
+          mv tmp.json config.auto.tfvars.json
+
+          echo "Updated config.auto.tfvars.json:"
+          cat config.auto.tfvars.json
+          echo "::endgroup::"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -157,9 +174,11 @@ jobs:
           echo "  - Dev Worker: ${DEV_IP}"
           echo "  - Prod Worker: ${PROD_IP}"
           echo ""
-          echo "Access Dokploy: https://${ADMIN_SUB}.${DOMAIN}:3000"
+          echo "Access Dokploy: https://${ADMIN_SUB}.${DOMAIN}"
           echo ""
           echo "Next steps:"
           echo "  1. Create admin account in Dokploy"
           echo "  2. Add dev worker: Settings → Servers → Add (IP: ${DEV_IP})"
           echo "  3. Add prod worker: Settings → Servers → Add (IP: ${PROD_IP})"
+          echo ""
+          echo "SSH Access: ssh root@${ADMIN_SUB}.${DOMAIN}"

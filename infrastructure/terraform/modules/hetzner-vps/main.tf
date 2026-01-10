@@ -14,7 +14,6 @@ resource "hcloud_server" "this" {
 
   lifecycle {
     ignore_changes = [
-      ssh_keys,
       user_data,
     ]
   }

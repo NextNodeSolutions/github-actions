@@ -82,11 +82,11 @@ Self-hosted PaaS infrastructure on Hetzner Cloud with NixOS and Dokploy.
 
 | URL | Purpose |
 |-----|---------|
-| `https://admin.nextnode.fr:3000` | Dokploy Dashboard (manages all servers) |
+| `https://admin.nextnode.fr` | Dokploy Dashboard (manages all servers) |
 
 ### First-Time Setup
 
-1. Access `https://admin.nextnode.fr:3000`
+1. Access `https://admin.nextnode.fr`
 2. Create an admin account
 3. Connect your GitHub account for repository access
 4. Add worker servers (see below)
@@ -303,17 +303,26 @@ prod_ip = "x.x.x.x"
 ### Server Not Accessible
 
 1. Check Hetzner console for server status
-2. Verify firewall rules (ports 22, 80, 443, 3000 should be open)
+2. Verify firewall rules (ports 22, 80, 443 should be open)
 3. Check DNS propagation: `dig admin.nextnode.fr`
-4. Try direct IP access: `https://<admin-ip>:3000`
+4. Try direct IP access: `https://<admin-ip>`
 
 ### Dokploy Not Starting
 
 SSH into server and check:
 ```bash
+# Check all relevant services
+systemctl status docker
 systemctl status dokploy-stack
-docker ps
+systemctl status dokploy-traefik
+systemctl status traefik
+
+# View running containers
+docker ps -a
+
+# Check logs
 journalctl -u dokploy-stack -n 50
+journalctl -u traefik -n 50
 ```
 
 ### Cannot SSH into Server

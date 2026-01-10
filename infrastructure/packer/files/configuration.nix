@@ -1,33 +1,32 @@
-{ config, pkgs, ... }:
+{ config, pkgs, lib, ... }:
 
+let
+  vars = import ./modules/variables.nix;
+in
 {
-  system.stateVersion = "24.11";
+  imports = [
+    ./modules/docker.nix
+    ./modules/dokploy.nix
+    ./modules/traefik.nix
+    ./modules/ssh.nix
+  ];
 
-  networking.hostName = "dokploy-server";
-  networking.firewall = {
-    enable = true;
-    allowedTCPPorts = [ 22 80 443 3000 ];
-  };
+  system.stateVersion = vars.stateVersion;
 
-  virtualisation.docker = {
-    enable = true;
-    autoPrune = {
+  networking = {
+    hostName = vars.hostname;
+    firewall = {
       enable = true;
-      dates = "weekly";
-      flags = [ "--all" "--volumes" ];
-    };
-    daemon.settings = {
-      live-restore = false;
+      allowedTCPPorts = vars.firewall.allowedPorts
+        ++ (if vars.firewall.sshEnabled then [ 22 ] else []);
     };
   };
-
-  services.dokploy.enable = true;
 
   nix = {
     gc = {
       automatic = true;
-      dates = "weekly";
-      options = "--delete-older-than 30d";
+      dates = vars.nix.gcSchedule;
+      options = "--delete-older-than ${vars.nix.gcRetention}";
     };
     settings = {
       auto-optimise-store = true;
@@ -35,16 +34,7 @@
     };
   };
 
-  # Enable SSH for remote access and Dokploy multi-server management
-  services.openssh = {
-    enable = true;
-    settings = {
-      PermitRootLogin = "prohibit-password";
-      PasswordAuthentication = false;
-    };
-  };
-
-  time.timeZone = "Europe/Paris";
+  time.timeZone = vars.timezone;
 
   environment.systemPackages = with pkgs; [
     vim
