@@ -21,7 +21,7 @@ source "hcloud" "nixos" {
   token        = var.hcloud_token
   image        = "ubuntu-24.04"
   location     = var.location
-  server_type  = "cx22"
+  server_type  = "cx23"
   ssh_username = "root"
   snapshot_name = "nixos-dokploy-${formatdate("YYYYMMDD-hhmmss", timestamp())}"
   snapshot_labels = {

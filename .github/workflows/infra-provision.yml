@@ -1,11 +1,10 @@
 name: Provision Infrastructure
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'infrastructure/terraform/**'
+  workflow_run:
+    workflows: ["Build Infrastructure Image"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       action:
@@ -26,6 +25,7 @@ jobs:
   terraform:
     name: Terraform ${{ inputs.action || 'plan' }}
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     environment: ${{ (inputs.action == 'apply' || inputs.action == 'destroy') && 'infrastructure' || '' }}
 
     defaults:
