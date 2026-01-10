@@ -34,6 +34,7 @@ build {
   sources = ["source.hcloud.nixos"]
 
   provisioner "shell" {
+    inline_shebang = "/bin/bash -e"
     inline = [
       "apt-get update",
       "apt-get install -y curl xz-utils",
@@ -50,6 +51,7 @@ build {
   }
 
   provisioner "shell" {
+    inline_shebang = "/bin/bash -e"
     inline = [
       "source /etc/profile.d/nix.sh",
       "cd /etc/nixos",
@@ -60,7 +62,9 @@ build {
   }
 
   provisioner "shell" {
+    inline_shebang = "/bin/bash -e"
     inline = [
+      "source /etc/profile.d/nix.sh",
       "nix-collect-garbage -d",
       "rm -rf /root/.cache",
       "sync"
