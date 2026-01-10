@@ -13,8 +13,8 @@ variable "hcloud_token" {
 }
 
 variable "location" {
-  type    = string
-  default = "nbg1"
+  type        = string
+  description = "Hetzner datacenter location (from infrastructure/config.json via workflow)"
 }
 
 source "hcloud" "nixos" {

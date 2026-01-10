@@ -5,21 +5,18 @@ variable "hetzner_token" {
 }
 
 variable "location" {
-  description = "Hetzner datacenter location"
+  description = "Hetzner datacenter location (from infrastructure/config.json)"
   type        = string
-  default     = "nbg1"
 }
 
 variable "dev_server_type" {
-  description = "Server type for development VPS"
+  description = "Server type for development VPS (from infrastructure/config.json)"
   type        = string
-  default     = "cx23"
 }
 
 variable "prod_server_type" {
-  description = "Server type for production VPS"
+  description = "Server type for production VPS (from infrastructure/config.json)"
   type        = string
-  default     = "cx33"
 }
 
 variable "ssh_keys" {

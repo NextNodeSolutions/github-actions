@@ -6,17 +6,13 @@ on:
       - main
     paths:
       - 'infrastructure/packer/**'
+      - 'infrastructure/config.json'
   workflow_dispatch:
     inputs:
       location:
-        description: 'Hetzner datacenter location'
+        description: 'Hetzner datacenter location (leave empty to use config.json)'
         required: false
-        default: 'nbg1'
-        type: choice
-        options:
-          - nbg1
-          - nbg1
-          - hel1
+        type: string
 
 concurrency:
   group: infra-image
@@ -30,6 +26,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Load Infrastructure Config
+        id: config
+        run: |
+          LOCATION=$(jq -r '.hetzner.location' infrastructure/config.json)
+          SERVER_TYPE=$(jq -r '.hetzner.server_types.packer_build' infrastructure/config.json)
+          echo "location=${LOCATION}" >> $GITHUB_OUTPUT
+          echo "server_type=${SERVER_TYPE}" >> $GITHUB_OUTPUT
+          echo "Loaded config: location=${LOCATION}, server_type=${SERVER_TYPE}"
 
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
@@ -47,7 +52,7 @@ jobs:
         run: |
           packer validate \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
-            -var "location=${{ inputs.location || 'nbg1' }}" \
+            -var "location=${{ inputs.location || steps.config.outputs.location }}" \
             nixos-dokploy.pkr.hcl
 
       - name: Build Image
@@ -57,5 +62,5 @@ jobs:
         run: |
           packer build \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
-            -var "location=${{ inputs.location || 'nbg1' }}" \
+            -var "location=${{ inputs.location || steps.config.outputs.location }}" \
             nixos-dokploy.pkr.hcl

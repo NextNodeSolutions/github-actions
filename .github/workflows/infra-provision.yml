@@ -36,10 +36,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load Infrastructure Config
+        run: |
+          echo "::group::Generate Terraform vars from config"
+          jq '{
+            location: .hetzner.location,
+            dev_server_type: .hetzner.server_types.dev,
+            prod_server_type: .hetzner.server_types.prod
+          }' ../config.json > config.auto.tfvars.json
+          echo "Generated config.auto.tfvars.json:"
+          cat config.auto.tfvars.json
+
+          # Also extract Terraform version for setup
+          TF_VERSION=$(jq -r '.terraform.version' ../config.json)
+          echo "terraform_version=${TF_VERSION}" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+        id: config
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.5"
+          terraform_version: ${{ steps.config.outputs.terraform_version }}
 
       - name: Terraform Init
         env:
