@@ -140,6 +140,26 @@ Dokploy can automatically deploy when you push to GitHub:
 1. In your service settings, enable "Auto Deploy"
 2. Configure the branch to watch (e.g., `main`)
 
+## Terraform Cloud Setup
+
+State is stored in Terraform Cloud for persistence across workflow runs.
+
+### Initial Setup
+
+1. **Create Terraform Cloud account**: https://app.terraform.io
+2. **Create organization**: `nextnode`
+3. **Create workspace**: `dokploy-infrastructure`
+4. **Set execution mode to Local**:
+   - Workspace → Settings → General → Execution Mode → Local
+5. **Create API token**:
+   - User Settings → Tokens → Create an API token
+6. **Add secret to GitHub**:
+   - Repository → Settings → Secrets → `TF_API_TOKEN`
+
+### Why Terraform Cloud?
+
+Without remote state, each GitHub Actions run starts fresh and doesn't know about existing resources. This caused the `destroy` action to fail because it had no state to destroy.
+
 ## Configuration Files
 
 | File | Purpose |
