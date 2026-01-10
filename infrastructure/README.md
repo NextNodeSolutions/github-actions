@@ -37,18 +37,21 @@ Self-hosted PaaS infrastructure on Hetzner Cloud with NixOS and Dokploy.
 │                         │  "nixos-dokploy"│                                 │
 │                         └────────┬────────┘                                 │
 │                                  │                                          │
-│                    ┌─────────────┴─────────────┐                           │
-│                    │                           │                            │
-│                    ▼                           ▼                            │
-│          ┌─────────────────┐         ┌─────────────────┐                   │
-│          │  DEV SERVER     │         │  PROD SERVER    │                   │
-│          │  dev-dokploy    │         │  prod-dokploy   │                   │
-│          │  (cx23)         │         │  (cx33)         │                   │
-│          │                 │         │                 │                   │
-│          │  Docker         │  SSH    │  DOKPLOY UI     │                   │
-│          │  Traefik        │ ◄────── │  Docker         │                   │
-│          │  (Worker)       │         │  Traefik        │                   │
-│          └─────────────────┘         └─────────────────┘                   │
+│              ┌───────────────────┼───────────────────┐                     │
+│              │                   │                   │                      │
+│              ▼                   ▼                   ▼                      │
+│    ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐          │
+│    │  ADMIN SERVER   │  │  DEV WORKER     │  │  PROD WORKER    │          │
+│    │  admin-dokploy  │  │  dev-worker     │  │  prod-worker    │          │
+│    │  (cx23)         │  │  (cx23)         │  │  (cx33)         │          │
+│    │                 │  │                 │  │                 │          │
+│    │  DOKPLOY UI     │  │  Docker         │  │  Docker         │          │
+│    │  Docker         │  │  Traefik        │  │  Traefik        │          │
+│    │  Traefik        │  │  (Worker)       │  │  (Worker)       │          │
+│    └────────┬────────┘  └─────────────────┘  └─────────────────┘          │
+│             │                   ▲                   ▲                      │
+│             │      SSH          │      SSH          │                      │
+│             └───────────────────┴───────────────────┘                      │
 │                                                                             │
 │  Workflow: .github/workflows/infra-provision.yml                           │
 │  Config: infrastructure/terraform/                                          │
@@ -58,34 +61,50 @@ Self-hosted PaaS infrastructure on Hetzner Cloud with NixOS and Dokploy.
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         PHASE 3: DNS (Cloudflare)                           │
 │                                                                             │
-│          admin.nextnode.fr ───────────► prod-dokploy IP                    │
+│          admin.nextnode.fr ───────────► admin-dokploy IP                   │
 │                                                                             │
-│  Single Dokploy instance manages both servers                               │
+│  Single Dokploy instance manages all workers via SSH                        │
 │  Configured automatically after terraform apply                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Server Architecture
+
+| Server | Type | Cost | Purpose |
+|--------|------|------|---------|
+| `admin-dokploy` | cx23 | ~€3.49/mo | Dokploy UI, manages all workers |
+| `dev-worker` | cx23 | ~€3.49/mo | Dev apps, PR previews, staging |
+| `prod-worker` | cx33 | ~€5.49/mo | Production apps |
+
+**Total: ~€12.50/month**
 
 ## Accessing Dokploy
 
 | URL | Purpose |
 |-----|---------|
-| `https://admin.nextnode.fr:3000` | Dokploy Dashboard (manages both servers) |
+| `https://admin.nextnode.fr:3000` | Dokploy Dashboard (manages all servers) |
 
 ### First-Time Setup
 
 1. Access `https://admin.nextnode.fr:3000`
 2. Create an admin account
 3. Connect your GitHub account for repository access
-4. Add dev server as remote (see Multi-Server Setup)
+4. Add worker servers (see below)
 
-### Multi-Server Setup
+### Adding Worker Servers
 
-Dokploy on prod server manages both servers. To add the dev server:
+After first login to Dokploy:
 
-1. Go to **Settings → Servers** in Dokploy
+1. Go to **Settings → Servers**
 2. Click **Add Server**
-3. Enter dev server IP and configure SSH key
-4. Now you can deploy apps to either server from one dashboard
+3. Add dev worker:
+   - Name: `dev-worker`
+   - IP: (from workflow output)
+   - Configure SSH key
+4. Add prod worker:
+   - Name: `prod-worker`
+   - IP: (from workflow output)
+   - Configure SSH key
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -93,12 +112,13 @@ Dokploy on prod server manages both servers. To add the dev server:
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Servers                                            │   │
-│  │  ├── prod-dokploy (local)     ← Production apps    │   │
-│  │  └── dev-dokploy (remote)     ← Dev/staging apps   │   │
+│  │  ├── admin-dokploy (local)  ← Don't deploy here    │   │
+│  │  ├── dev-worker (remote)    ← Dev/staging apps     │   │
+│  │  └── prod-worker (remote)   ← Production apps      │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
-│  Deploy to prod: *.nextnode.fr                             │
 │  Deploy to dev:  *.dev.nextnode.fr                         │
+│  Deploy to prod: *.nextnode.fr                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -118,7 +138,7 @@ Dokploy on prod server manages both servers. To add the dev server:
 │  Repository: NextNodeSolutions/my-app                          │
 │  Branch: main                                                   │
 │  Build: Dockerfile / Nixpacks                                  │
-│  Server: prod-dokploy (or dev-dokploy)                         │
+│  Server: prod-worker (or dev-worker)                           │
 │       │                                                         │
 │       ▼                                                         │
 │  Domain: my-app.nextnode.fr                                    │
@@ -148,7 +168,7 @@ State is stored in Terraform Cloud for persistence across workflow runs.
 
 1. **Create Terraform Cloud account**: https://app.terraform.io
 2. **Create organization**: `nextnode`
-3. **Create workspace**: `dokploy-infrastructure`
+3. **Create workspace**: `dokploy-infrastructure` (CLI-Driven Workflow)
 4. **Set execution mode to Local**:
    - Workspace → Settings → General → Execution Mode → Local
 5. **Create API token**:
@@ -176,6 +196,7 @@ Without remote state, each GitHub Actions run starts fresh and doesn't know abou
   "hetzner": {
     "location": "nbg1",
     "server_types": {
+      "admin": "cx23",
       "dev": "cx23",
       "prod": "cx33",
       "packer_build": "cx23"
@@ -230,17 +251,21 @@ gh workflow run "Provision Infrastructure" -f action=destroy
 ### SSH Access
 
 ```bash
-# Connect to prod server
-ssh root@<prod-ip>
+# Connect to admin server
+ssh root@<admin-ip>
 
-# Connect to dev server
+# Connect to dev worker
 ssh root@<dev-ip>
+
+# Connect to prod worker
+ssh root@<prod-ip>
 ```
 
 ### Check Server IPs
 
 After `apply`, check the workflow logs for:
 ```
+admin_ip = "x.x.x.x"
 dev_ip = "x.x.x.x"
 prod_ip = "x.x.x.x"
 ```
@@ -259,18 +284,19 @@ prod_ip = "x.x.x.x"
 - **Consistency**: Every server uses the same pre-built image
 - **Cost-effective**: Temporary build server deleted after snapshot
 
-### Why Single Dokploy with Multi-Server?
+### Why 3 Servers (Admin + Dev + Prod)?
 
-- **Single UI**: Manage all deployments from one place
-- **Reduced overhead**: Only one Dokploy instance to maintain
-- **Flexibility**: Deploy to prod or dev from same dashboard
-- **SSH management**: Dokploy handles remote server communication
+- **Admin isolation**: Dokploy UI separated from workloads
+- **Dev/Prod separation**: Dev apps can't affect production
+- **Clean management**: Admin server only manages, doesn't run apps
+- **Easy scaling**: Add more workers as needed
 
-### Why Separate Dev/Prod Servers?
+### Why Terraform Cloud?
 
-- **Isolation**: Dev experiments don't affect production
-- **Testing**: Test infrastructure changes on dev first
-- **Resources**: Different server sizes for different needs
+- **Persistent state**: State survives across GitHub Actions runs
+- **Destroy works**: Terraform knows what resources exist
+- **Team collaboration**: Multiple people can see state
+- **Free tier**: Sufficient for small teams
 
 ## Troubleshooting
 
@@ -279,7 +305,7 @@ prod_ip = "x.x.x.x"
 1. Check Hetzner console for server status
 2. Verify firewall rules (ports 22, 80, 443, 3000 should be open)
 3. Check DNS propagation: `dig admin.nextnode.fr`
-4. Try direct IP access: `https://<prod-ip>:3000`
+4. Try direct IP access: `https://<admin-ip>:3000`
 
 ### Dokploy Not Starting
 
@@ -295,6 +321,12 @@ journalctl -u dokploy-stack -n 50
 1. Ensure your SSH key is added to Hetzner project
 2. Check firewall allows port 22
 3. Use Hetzner web console as fallback
+
+### Terraform Destroy Not Working
+
+1. Ensure Terraform Cloud is configured
+2. Check TF_API_TOKEN secret is set
+3. Verify workspace execution mode is "Local"
 
 ### Rebuild from Scratch
 

@@ -9,13 +9,18 @@ variable "location" {
   type        = string
 }
 
+variable "admin_server_type" {
+  description = "Server type for admin/management VPS (from infrastructure/config.json)"
+  type        = string
+}
+
 variable "dev_server_type" {
-  description = "Server type for development VPS (from infrastructure/config.json)"
+  description = "Server type for development worker VPS (from infrastructure/config.json)"
   type        = string
 }
 
 variable "prod_server_type" {
-  description = "Server type for production VPS (from infrastructure/config.json)"
+  description = "Server type for production worker VPS (from infrastructure/config.json)"
   type        = string
 }
 

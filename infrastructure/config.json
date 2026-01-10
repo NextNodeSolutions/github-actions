@@ -3,6 +3,7 @@
     "location": "nbg1",
     "locations": ["nbg1", "fsn1", "hel1"],
     "server_types": {
+      "admin": "cx23",
       "dev": "cx23",
       "prod": "cx33",
       "packer_build": "cx23"

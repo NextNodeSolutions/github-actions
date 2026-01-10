@@ -41,6 +41,7 @@ jobs:
           echo "::group::Generate Terraform vars from config"
           jq '{
             location: .hetzner.location,
+            admin_server_type: .hetzner.server_types.admin,
             dev_server_type: .hetzner.server_types.dev,
             prod_server_type: .hetzner.server_types.prod
           }' ../config.json > config.auto.tfvars.json
@@ -113,8 +114,12 @@ jobs:
         run: |
           echo "::group::Configure Dokploy DNS Record"
 
-          # Get prod IP from Terraform (single Dokploy instance manages both servers)
+          # Get admin IP from Terraform (Dokploy UI runs on admin server)
+          ADMIN_IP=$(terraform output -raw admin_ip)
+          DEV_IP=$(terraform output -raw dev_ip)
           PROD_IP=$(terraform output -raw prod_ip)
+          echo "Admin IP: ${ADMIN_IP}"
+          echo "Dev IP: ${DEV_IP}"
           echo "Prod IP: ${PROD_IP}"
 
           # Get zone ID
@@ -126,27 +131,35 @@ jobs:
           EXISTING=$(curl -s -X GET "${CF_API}/zones/${ZONE_ID}/dns_records?type=A&name=${ADMIN_SUB}.${DOMAIN}" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id // empty')
 
-          # Create or update admin.nextnode.fr → prod
+          # Create or update admin.nextnode.fr → admin server
           # proxied=false to allow direct :3000 access (Cloudflare doesn't proxy non-standard ports)
           if [ -n "${EXISTING}" ]; then
             echo "Updating existing record: ${ADMIN_SUB}.${DOMAIN}"
             curl -s -X PUT "${CF_API}/zones/${ZONE_ID}/dns_records/${EXISTING}" \
               -H "Authorization: Bearer ${CF_API_TOKEN}" \
               -H "Content-Type: application/json" \
-              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${PROD_IP}\",\"ttl\":1,\"proxied\":false}"
+              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${ADMIN_IP}\",\"ttl\":1,\"proxied\":false}"
           else
             echo "Creating new record: ${ADMIN_SUB}.${DOMAIN}"
             curl -s -X POST "${CF_API}/zones/${ZONE_ID}/dns_records" \
               -H "Authorization: Bearer ${CF_API_TOKEN}" \
               -H "Content-Type: application/json" \
-              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${PROD_IP}\",\"ttl\":1,\"proxied\":false}"
+              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${ADMIN_IP}\",\"ttl\":1,\"proxied\":false}"
           fi
 
           echo "::endgroup::"
 
           echo ""
-          echo "DNS configured successfully:"
-          echo "  - https://${ADMIN_SUB}.${DOMAIN}:3000 (Dokploy Dashboard)"
+          echo "Infrastructure deployed successfully!"
           echo ""
-          echo "Single Dokploy instance manages both prod and dev servers."
-          echo "Add dev server as remote in Dokploy UI: Settings → Servers"
+          echo "Servers:"
+          echo "  - Admin (Dokploy UI): ${ADMIN_IP}"
+          echo "  - Dev Worker: ${DEV_IP}"
+          echo "  - Prod Worker: ${PROD_IP}"
+          echo ""
+          echo "Access Dokploy: https://${ADMIN_SUB}.${DOMAIN}:3000"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Create admin account in Dokploy"
+          echo "  2. Add dev worker: Settings → Servers → Add (IP: ${DEV_IP})"
+          echo "  3. Add prod worker: Settings → Servers → Add (IP: ${PROD_IP})"
