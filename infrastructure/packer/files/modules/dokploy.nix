@@ -10,7 +10,9 @@ in
     port = "${vars.dokploy.bindAddress}:${toString vars.dokploy.internalPort}:${toString vars.dokploy.internalPort}";
 
     # Fix: NixOS doesn't have 'hostname -I', use ip command instead
-    # Get the first non-localhost IPv4 address
-    swarm.advertiseAddress = "$(${pkgs.iproute2}/bin/ip -4 addr show scope global | ${pkgs.gnugrep}/bin/grep -oP 'inet \\K[0-9.]+' | head -1)";
+    swarm.advertiseAddress = {
+      command = "ip -4 addr show scope global | grep -oP 'inet \\K[0-9.]+' | head -1";
+      extraPackages = [ pkgs.iproute2 pkgs.gnugrep ];
+    };
   };
 }
