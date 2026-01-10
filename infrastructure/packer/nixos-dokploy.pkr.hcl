@@ -33,18 +33,16 @@ source "hcloud" "nixos" {
 build {
   sources = ["source.hcloud.nixos"]
 
+  # Step 1: Prepare Ubuntu and create NixOS config directory
   provisioner "shell" {
     inline_shebang = "/bin/bash -e"
     inline = [
       "apt-get update",
-      "apt-get install -y curl xz-utils",
-      "curl -L https://nixos.org/nix/install | sh -s -- --daemon --yes",
-      "source /etc/profile.d/nix.sh",
-      "nix-channel --add https://nixos.org/channels/nixos-24.11 nixpkgs",
-      "nix-channel --update"
+      "apt-get install -y curl git"
     ]
   }
 
+  # Step 2: Create /etc/nixos directory for our configuration
   provisioner "shell" {
     inline_shebang = "/bin/bash -e"
     inline = [
@@ -52,30 +50,35 @@ build {
     ]
   }
 
+  # Step 3: Upload our NixOS flake configuration
   provisioner "file" {
     source      = "files/"
     destination = "/etc/nixos"
   }
 
+  # Step 4: Run nixos-infect to convert Ubuntu to NixOS with our flake
+  # nixos-infect handles: installing Nix, generating hardware-configuration.nix,
+  # and running nixos-rebuild switch with our flake
   provisioner "shell" {
     inline_shebang = "/bin/bash -e"
+    environment_vars = [
+      "NIX_CHANNEL=nixos-24.11",
+      "NIXOS_FLAKE=/etc/nixos#dokploy-server",
+      "NO_REBOOT=1"
+    ]
     inline = [
-      "source /etc/profile.d/nix.sh",
-      "mkdir -p ~/.config/nix",
-      "echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf",
-      "cd /etc/nixos",
-      "nix flake update",
-      "nixos-generate-config --root /",
-      "nixos-rebuild switch --flake .#dokploy-server"
+      "curl -L https://github.com/elitak/nixos-infect/raw/master/nixos-infect | bash -x"
     ]
   }
 
+  # Step 5: Clean up to minimize snapshot size
   provisioner "shell" {
     inline_shebang = "/bin/bash -e"
     inline = [
-      "source /etc/profile.d/nix.sh",
-      "nix-collect-garbage -d",
+      "source /etc/profile.d/nix.sh || true",
+      "nix-collect-garbage -d || true",
       "rm -rf /root/.cache",
+      "rm -rf /tmp/*",
       "sync"
     ]
   }
