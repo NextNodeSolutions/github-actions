@@ -61,6 +61,8 @@ build {
     inline_shebang = "/bin/bash -e"
     inline = [
       "source /etc/profile.d/nix.sh",
+      "mkdir -p ~/.config/nix",
+      "echo 'experimental-features = nix-command flakes' > ~/.config/nix/nix.conf",
       "cd /etc/nixos",
       "nix flake update",
       "nixos-generate-config --root /",
