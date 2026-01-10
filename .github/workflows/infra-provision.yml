@@ -59,14 +59,25 @@ jobs:
           HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
         run: |
           echo "::group::Fetch SSH keys from Hetzner Cloud"
-          SSH_KEYS=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            "https://api.hetzner.cloud/v1/ssh_keys" | jq '[.ssh_keys[].id]')
-          echo "SSH keys found: ${SSH_KEYS}"
+
+          # Fetch full SSH key info for debugging
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/ssh_keys")
+
+          # Show all keys with their fingerprints for verification
+          echo "SSH keys in Hetzner Cloud:"
+          echo "${API_RESPONSE}" | jq -r '.ssh_keys[] | "  ID: \(.id) | Name: \(.name) | Fingerprint: \(.fingerprint)"'
+
+          # Convert IDs to strings (Terraform expects list(string))
+          SSH_KEYS=$(echo "${API_RESPONSE}" | jq '[.ssh_keys[].id | tostring]')
+          echo ""
+          echo "SSH key IDs for Terraform: ${SSH_KEYS}"
 
           # Append SSH keys to tfvars
           jq --argjson keys "${SSH_KEYS}" '. + {ssh_keys: $keys}' config.auto.tfvars.json > tmp.json
           mv tmp.json config.auto.tfvars.json
 
+          echo ""
           echo "Updated config.auto.tfvars.json:"
           cat config.auto.tfvars.json
           echo "::endgroup::"
