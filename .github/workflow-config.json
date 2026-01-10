@@ -1,0 +1,28 @@
+{
+  "cloudflare": {
+    "api_base_url": "https://api.cloudflare.com/client/v4",
+    "default_ssl_mode": "full",
+    "blocked_subdomains": ["dev", "staging", "test", "preview"]
+  },
+  "npm": {
+    "registry_url": "https://registry.npmjs.org",
+    "propagation_wait_seconds": 10
+  },
+  "health_check": {
+    "max_attempts": 10,
+    "delay_seconds": 10,
+    "timeout_seconds": 30,
+    "expected_status": "200,201,204,301,302"
+  },
+  "quality": {
+    "coverage_threshold": 80,
+    "artifact_retention_days": 7
+  },
+  "dns": {
+    "propagation_wait_seconds": 60
+  },
+  "release": {
+    "pr_merge_timeout_minutes": 30,
+    "pr_merge_poll_interval_seconds": 30
+  }
+}

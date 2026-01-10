@@ -1,0 +1,77 @@
+name: 'Cloudflare Zone Lookup'
+description: 'Extract root domain and lookup Cloudflare Zone ID'
+
+inputs:
+  domain:
+    description: 'Full domain to lookup (e.g., pr-56.dev.nextnode.fr)'
+    required: true
+  cloudflare-api-token:
+    description: 'Cloudflare API token with zone read permissions'
+    required: true
+  cloudflare-api-url:
+    description: 'Cloudflare API base URL'
+    required: false
+    default: 'https://api.cloudflare.com/client/v4'
+
+outputs:
+  zone-id:
+    description: 'Cloudflare Zone ID'
+    value: ${{ steps.lookup.outputs.zone_id }}
+  root-domain:
+    description: 'Root domain extracted from input (e.g., nextnode.fr)'
+    value: ${{ steps.lookup.outputs.root_domain }}
+  is-sub-subdomain:
+    description: 'True if domain has 3+ levels (e.g., pr-56.dev.nextnode.fr)'
+    value: ${{ steps.lookup.outputs.is_sub_subdomain }}
+  dot-count:
+    description: 'Number of dots in domain'
+    value: ${{ steps.lookup.outputs.dot_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Cloudflare Zone
+      id: lookup
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_API_URL: ${{ inputs.cloudflare-api-url }}
+        DOMAIN: ${{ inputs.domain }}
+      run: |
+        echo "::group::Cloudflare Zone Lookup"
+
+        # Extract root domain (last two parts)
+        ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+        echo "Domain: $DOMAIN"
+        echo "Root domain: $ROOT_DOMAIN"
+        echo "root_domain=$ROOT_DOMAIN" >> $GITHUB_OUTPUT
+
+        # Count dots to detect sub-subdomain depth
+        DOT_COUNT=$(echo "$DOMAIN" | grep -o '\.' | wc -l | xargs)
+        echo "dot_count=$DOT_COUNT" >> $GITHUB_OUTPUT
+
+        if [[ $DOT_COUNT -ge 2 ]]; then
+          echo "is_sub_subdomain=true" >> $GITHUB_OUTPUT
+          echo "Sub-subdomain detected (${DOT_COUNT} dots)"
+        else
+          echo "is_sub_subdomain=false" >> $GITHUB_OUTPUT
+          echo "Standard domain (${DOT_COUNT} dots)"
+        fi
+
+        # Query Cloudflare API for zone ID
+        ZONE_RESPONSE=$(curl -s -X GET "${CF_API_URL}/zones?name=$ROOT_DOMAIN" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id')
+
+        if [[ -z "$ZONE_ID" || "$ZONE_ID" == "null" ]]; then
+          echo "::error::Failed to find zone for domain: $ROOT_DOMAIN"
+          echo "API Response: $ZONE_RESPONSE"
+          exit 1
+        fi
+
+        echo "zone_id=$ZONE_ID" >> $GITHUB_OUTPUT
+        echo "Zone ID: $ZONE_ID"
+
+        echo "::endgroup::"
