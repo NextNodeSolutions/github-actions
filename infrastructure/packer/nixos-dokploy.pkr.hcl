@@ -71,7 +71,7 @@ build {
   }
 
   # Step 4: Replace nixos-infect's minimal config with our flake configuration
-  # and rebuild the system with Dokploy
+  # and prepare the system with Dokploy for next boot
   provisioner "shell" {
     inline_shebang = "/bin/bash -e"
     inline = [
@@ -87,9 +87,10 @@ build {
       "# Update flake inputs and build",
       "cd /etc/nixos",
       "nix flake update",
-      "# Use nixos-rebuild from nixpkgs since we're still on minimal NixOS",
+      "# Use nixos-rebuild boot since we're not running NixOS yet (NO_REBOOT=1 from nixos-infect)",
+      "# 'boot' prepares the configuration for next boot without activating now",
       "nix-env -iA nixos.nixos-rebuild",
-      "nixos-rebuild switch --flake .#dokploy-server"
+      "nixos-rebuild boot --flake .#dokploy-server"
     ]
   }
 
