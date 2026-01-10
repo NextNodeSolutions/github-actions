@@ -43,6 +43,8 @@ jobs:
 
       - name: Initialize Packer
         working-directory: infrastructure/packer
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: packer init .
 
       - name: Validate Packer Configuration
