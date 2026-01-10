@@ -1,4 +1,10 @@
 {
+  # SSH Configuration
+  # Public keys that will be allowed to SSH into the servers
+  sshAuthorizedKeys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDbBxoyrziL9qHG11bP/RS1FetadUQiX6Fb7z+Z2iNOU walid@nextnode-hetzner"
+  ];
+
   # Domain Configuration
   domain = "nextnode.fr";
   adminSubdomain = "admin";
