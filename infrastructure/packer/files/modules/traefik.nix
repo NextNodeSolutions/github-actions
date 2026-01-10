@@ -21,10 +21,11 @@ in
         };
       };
 
+      # Use TLS-ALPN challenge (works over port 443, doesn't conflict with HTTP redirect)
       certificatesResolvers.letsencrypt.acme = {
         email = vars.acmeEmail;
         storage = vars.traefik.acmeStorage;
-        httpChallenge.entryPoint = "web";
+        tlsChallenge = {};  # TLS-ALPN-01 challenge
       };
 
       log.level = vars.traefik.logLevel;
@@ -45,8 +46,9 @@ in
     };
   };
 
-  # Create Traefik data directory for ACME certificates
+  # Create Traefik data directory with correct ownership (traefik user)
   systemd.tmpfiles.rules = [
-    "d /var/lib/traefik 0755 root root -"
+    "d /var/lib/traefik 0700 traefik traefik -"
+    "f /var/lib/traefik/acme.json 0600 traefik traefik -"
   ];
 }
