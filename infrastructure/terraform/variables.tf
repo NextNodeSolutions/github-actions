@@ -7,7 +7,7 @@ variable "hetzner_token" {
 variable "location" {
   description = "Hetzner datacenter location"
   type        = string
-  default     = "fsn1"
+  default     = "nbg1"
 }
 
 variable "dev_server_type" {

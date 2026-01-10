@@ -14,7 +14,7 @@ variable "hcloud_token" {
 
 variable "location" {
   type    = string
-  default = "fsn1"
+  default = "nbg1"
 }
 
 source "hcloud" "nixos" {

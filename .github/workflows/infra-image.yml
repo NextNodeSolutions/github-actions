@@ -11,10 +11,10 @@ on:
       location:
         description: 'Hetzner datacenter location'
         required: false
-        default: 'fsn1'
+        default: 'nbg1'
         type: choice
         options:
-          - fsn1
+          - nbg1
           - nbg1
           - hel1
 
@@ -47,7 +47,7 @@ jobs:
         run: |
           packer validate \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
-            -var "location=${{ inputs.location || 'fsn1' }}" \
+            -var "location=${{ inputs.location || 'nbg1' }}" \
             nixos-dokploy.pkr.hcl
 
       - name: Build Image
@@ -57,5 +57,5 @@ jobs:
         run: |
           packer build \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
-            -var "location=${{ inputs.location || 'fsn1' }}" \
+            -var "location=${{ inputs.location || 'nbg1' }}" \
             nixos-dokploy.pkr.hcl
