@@ -2,7 +2,7 @@
   "name": "@nextnode/github-actions",
   "version": "1.0.0",
   "description": "Reusable GitHub Actions and workflows for NextNode projects",
-  "packageManager": "pnpm@10.11.0",
+  "packageManager": "pnpm@10.24.0",
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=10.0.0"
