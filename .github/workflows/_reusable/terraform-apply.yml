@@ -1,0 +1,158 @@
+name: Terraform Apply (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Terraform working directory'
+        required: false
+        default: 'terraform'
+        type: string
+      config-file:
+        description: 'Path to infrastructure config'
+        required: false
+        default: 'config/infrastructure.json'
+        type: string
+      configure-dns:
+        description: 'Configure DNS after apply'
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      HETZNER_TOKEN:
+        required: true
+      TF_API_TOKEN:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: false
+    outputs:
+      admin-ip:
+        description: 'Admin server IP'
+        value: ${{ jobs.apply.outputs.admin-ip }}
+      dev-ip:
+        description: 'Dev worker IP'
+        value: ${{ jobs.apply.outputs.dev-ip }}
+      prod-ip:
+        description: 'Prod worker IP'
+        value: ${{ jobs.apply.outputs.prod-ip }}
+      dokploy-url:
+        description: 'Dokploy dashboard URL'
+        value: ${{ jobs.apply.outputs.dokploy-url }}
+
+jobs:
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    outputs:
+      admin-ip: ${{ steps.outputs.outputs.admin-ip }}
+      dev-ip: ${{ steps.outputs.outputs.dev-ip }}
+      prod-ip: ${{ steps.outputs.outputs.prod-ip }}
+      dokploy-url: ${{ steps.outputs.outputs.dokploy-url }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ inputs.working-directory }}
+
+      - name: Load Terraform Version
+        id: config
+        run: |
+          TF_VERSION=$(jq -r '.terraform.version' ../${{ inputs.config-file }})
+          echo "terraform_version=${TF_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.config.outputs.terraform_version }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Capture Outputs
+        id: outputs
+        run: |
+          ADMIN_IP=$(terraform output -raw admin_ip)
+          DEV_IP=$(terraform output -raw dev_ip)
+          PROD_IP=$(terraform output -raw prod_ip)
+
+          echo "admin-ip=${ADMIN_IP}" >> $GITHUB_OUTPUT
+          echo "dev-ip=${DEV_IP}" >> $GITHUB_OUTPUT
+          echo "prod-ip=${PROD_IP}" >> $GITHUB_OUTPUT
+
+          DOMAIN=$(jq -r '.dns.domain' ../${{ inputs.config-file }})
+          ADMIN_SUB=$(jq -r '.dns.admin_subdomain' ../${{ inputs.config-file }})
+          echo "dokploy-url=https://${ADMIN_SUB}.${DOMAIN}" >> $GITHUB_OUTPUT
+
+      - name: Configure DNS
+        if: inputs.configure-dns && secrets.CLOUDFLARE_API_TOKEN != ''
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ADMIN_IP: ${{ steps.outputs.outputs.admin-ip }}
+        run: |
+          echo "::group::Configure DNS Record"
+
+          CF_API=$(jq -r '.cloudflare.api_base_url' ../${{ inputs.config-file }})
+          DOMAIN=$(jq -r '.dns.domain' ../${{ inputs.config-file }})
+          ADMIN_SUB=$(jq -r '.dns.admin_subdomain' ../${{ inputs.config-file }})
+
+          ZONE_ID=$(curl -s -X GET "${CF_API}/zones?name=${DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id')
+          echo "Zone ID: ${ZONE_ID}"
+
+          EXISTING=$(curl -s -X GET "${CF_API}/zones/${ZONE_ID}/dns_records?type=A&name=${ADMIN_SUB}.${DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r '.result[0].id // empty')
+
+          if [ -n "${EXISTING}" ]; then
+            echo "Updating existing record: ${ADMIN_SUB}.${DOMAIN} -> ${ADMIN_IP}"
+            curl -s -X PUT "${CF_API}/zones/${ZONE_ID}/dns_records/${EXISTING}" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${ADMIN_IP}\",\"ttl\":1,\"proxied\":false}"
+          else
+            echo "Creating new record: ${ADMIN_SUB}.${DOMAIN} -> ${ADMIN_IP}"
+            curl -s -X POST "${CF_API}/zones/${ZONE_ID}/dns_records" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"type\":\"A\",\"name\":\"${ADMIN_SUB}\",\"content\":\"${ADMIN_IP}\",\"ttl\":1,\"proxied\":false}"
+          fi
+
+          echo "::endgroup::"
+
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Server IPs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Server | IP | Purpose |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-----|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Admin | \`${{ steps.outputs.outputs.admin-ip }}\` | Dokploy UI |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dev | \`${{ steps.outputs.outputs.dev-ip }}\` | Dev/PR deployments |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prod | \`${{ steps.outputs.outputs.prod-ip }}\` | Production apps |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Dokploy Dashboard: ${{ steps.outputs.outputs.dokploy-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SSH: \`ssh root@${{ steps.outputs.outputs.admin-ip }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Create admin account at ${{ steps.outputs.outputs.dokploy-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "2. Add dev worker: Settings > Servers > Add (IP: \`${{ steps.outputs.outputs.dev-ip }}\`)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Add prod worker: Settings > Servers > Add (IP: \`${{ steps.outputs.outputs.prod-ip }}\`)" >> $GITHUB_STEP_SUMMARY

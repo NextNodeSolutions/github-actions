@@ -1,0 +1,119 @@
+name: Packer Build (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Packer working directory'
+        required: false
+        default: 'packer'
+        type: string
+      config-file:
+        description: 'Path to infrastructure config'
+        required: false
+        default: 'config/infrastructure.json'
+        type: string
+      location-override:
+        description: 'Override datacenter location'
+        required: false
+        type: string
+    secrets:
+      HETZNER_TOKEN:
+        required: true
+    outputs:
+      snapshot-id:
+        description: 'Created snapshot ID'
+        value: ${{ jobs.build.outputs.snapshot-id }}
+      snapshot-name:
+        description: 'Created snapshot name'
+        value: ${{ jobs.build.outputs.snapshot-name }}
+
+jobs:
+  build:
+    name: Build NixOS Image
+    runs-on: ubuntu-latest
+    outputs:
+      snapshot-id: ${{ steps.build.outputs.snapshot-id }}
+      snapshot-name: ${{ steps.build.outputs.snapshot-name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load Config
+        id: config
+        run: |
+          LOCATION=$(jq -r '.hetzner.location' ${{ inputs.config-file }})
+          SERVER_TYPE=$(jq -r '.hetzner.server_types.packer_build' ${{ inputs.config-file }})
+          echo "location=${LOCATION}" >> $GITHUB_OUTPUT
+          echo "server_type=${SERVER_TYPE}" >> $GITHUB_OUTPUT
+          echo "Loaded config: location=${LOCATION}, server_type=${SERVER_TYPE}"
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: latest
+
+      - name: Packer Init
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+        run: packer init .
+
+      - name: Packer Validate
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          LOCATION="${{ inputs.location-override }}"
+          if [ -z "${LOCATION}" ]; then
+            LOCATION="${{ steps.config.outputs.location }}"
+          fi
+
+          packer validate \
+            -var "hcloud_token=${HCLOUD_TOKEN}" \
+            -var "location=${LOCATION}" \
+            nixos-dokploy.pkr.hcl
+
+      - name: Packer Build
+        id: build
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          LOCATION="${{ inputs.location-override }}"
+          if [ -z "${LOCATION}" ]; then
+            LOCATION="${{ steps.config.outputs.location }}"
+          fi
+
+          packer build \
+            -var "hcloud_token=${HCLOUD_TOKEN}" \
+            -var "location=${LOCATION}" \
+            nixos-dokploy.pkr.hcl 2>&1 | tee build.log
+
+          # Extract snapshot info from output
+          SNAPSHOT_NAME=$(grep -oP "nixos-dokploy-\d{8}-\d{6}" build.log | tail -1 || echo "unknown")
+          echo "snapshot-name=${SNAPSHOT_NAME}" >> $GITHUB_OUTPUT
+
+          # Try to get snapshot ID from Hetzner API (most recent matching snapshot)
+          SNAPSHOT_ID=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/images?type=snapshot&label_selector=type=dokploy" \
+            | jq -r '.images | sort_by(.created) | last | .id // empty')
+
+          if [ -n "${SNAPSHOT_ID}" ]; then
+            echo "snapshot-id=${SNAPSHOT_ID}" >> $GITHUB_OUTPUT
+          else
+            echo "snapshot-id=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Summary
+        run: |
+          echo "## Packer Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Snapshot Name | \`${{ steps.build.outputs.snapshot-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Snapshot ID | \`${{ steps.build.outputs.snapshot-id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Location | \`${{ inputs.location-override || steps.config.outputs.location }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The snapshot is now available for Terraform provisioning." >> $GITHUB_STEP_SUMMARY

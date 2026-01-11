@@ -1,0 +1,139 @@
+name: Terraform Plan (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Terraform working directory'
+        required: false
+        default: 'terraform'
+        type: string
+      config-file:
+        description: 'Path to infrastructure config'
+        required: false
+        default: 'config/infrastructure.json'
+        type: string
+    secrets:
+      HETZNER_TOKEN:
+        required: true
+      TF_API_TOKEN:
+        required: true
+    outputs:
+      has-changes:
+        description: 'Whether plan has changes'
+        value: ${{ jobs.plan.outputs.has-changes }}
+      plan-summary:
+        description: 'Brief plan summary'
+        value: ${{ jobs.plan.outputs.plan-summary }}
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.plan.outputs.has-changes }}
+      plan-summary: ${{ steps.plan.outputs.plan-summary }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load Infrastructure Config
+        id: config
+        run: |
+          echo "::group::Generate Terraform vars from config"
+          jq '{
+            location: .hetzner.location,
+            admin_server_type: .hetzner.server_types.admin,
+            dev_server_type: .hetzner.server_types.dev,
+            prod_server_type: .hetzner.server_types.prod
+          }' ../${{ inputs.config-file }} > config.auto.tfvars.json
+          echo "Generated config.auto.tfvars.json:"
+          cat config.auto.tfvars.json
+
+          TF_VERSION=$(jq -r '.terraform.version' ../${{ inputs.config-file }})
+          echo "terraform_version=${TF_VERSION}" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Fetch SSH Key IDs from Hetzner
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          echo "::group::Fetch SSH keys from Hetzner Cloud"
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/ssh_keys")
+
+          echo "SSH keys in Hetzner Cloud:"
+          echo "${API_RESPONSE}" | jq -r '.ssh_keys[] | "  ID: \(.id) | Name: \(.name) | Fingerprint: \(.fingerprint)"'
+
+          SSH_KEYS=$(echo "${API_RESPONSE}" | jq '[.ssh_keys[].id | tostring]')
+          echo "SSH key IDs for Terraform: ${SSH_KEYS}"
+
+          jq --argjson keys "${SSH_KEYS}" '. + {ssh_keys: $keys}' config.auto.tfvars.json > tmp.json
+          mv tmp.json config.auto.tfvars.json
+          echo "::endgroup::"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.config.outputs.terraform_version }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          set +e
+          terraform plan \
+            -var "hetzner_token=${HCLOUD_TOKEN}" \
+            -out=tfplan \
+            -detailed-exitcode 2>&1 | tee plan.log
+          EXIT_CODE=$?
+
+          if [[ $EXIT_CODE -eq 0 ]]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "plan-summary=No changes detected" >> $GITHUB_OUTPUT
+          elif [[ $EXIT_CODE -eq 2 ]]; then
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            ADDS=$(grep -oP 'Plan: \K\d+(?= to add)' plan.log || echo "0")
+            CHANGES=$(grep -oP '\d+(?= to change)' plan.log || echo "0")
+            DESTROYS=$(grep -oP '\d+(?= to destroy)' plan.log || echo "0")
+            echo "plan-summary=+${ADDS} ~${CHANGES} -${DESTROYS}" >> $GITHUB_OUTPUT
+          else
+            echo "Terraform plan failed with exit code ${EXIT_CODE}"
+            exit 1
+          fi
+
+      - name: Generate Plan Summary
+        run: |
+          echo "## Terraform Plan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.plan.outputs.has-changes }}" == "true" ]]; then
+            echo "Changes detected: ${{ steps.plan.outputs.plan-summary }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No changes detected." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan | head -100 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: |
+            ${{ inputs.working-directory }}/tfplan
+            ${{ inputs.working-directory }}/config.auto.tfvars.json
+          retention-days: 1
