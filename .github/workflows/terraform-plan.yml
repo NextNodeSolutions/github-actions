@@ -18,6 +18,8 @@ on:
         required: true
       TF_API_TOKEN:
         required: true
+      TAILSCALE_AUTH_KEY:
+        required: false
     outputs:
       has-changes:
         description: 'Whether plan has changes'
@@ -94,6 +96,7 @@ jobs:
         id: plan
         env:
           HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          TF_VAR_tailscale_auth_key: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           set +e
           terraform plan \
