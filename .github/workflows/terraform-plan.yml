@@ -99,11 +99,12 @@ jobs:
           TF_VAR_tailscale_auth_key: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           set +e
+          set -o pipefail
           terraform plan \
             -var "hetzner_token=${HCLOUD_TOKEN}" \
             -out=tfplan \
             -detailed-exitcode 2>&1 | tee plan.log
-          EXIT_CODE=$?
+          EXIT_CODE=${PIPESTATUS[0]}
 
           if [[ $EXIT_CODE -eq 0 ]]; then
             echo "has-changes=false" >> $GITHUB_OUTPUT
