@@ -81,10 +81,14 @@ jobs:
         env:
           HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
         run: |
+          set -o pipefail  # Fail if packer fails, not just tee
+
           LOCATION="${{ inputs.location-override }}"
           if [ -z "${LOCATION}" ]; then
             LOCATION="${{ steps.config.outputs.location }}"
           fi
+
+          echo "Building with location: ${LOCATION}"
 
           packer build \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
