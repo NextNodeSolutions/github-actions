@@ -28,17 +28,24 @@ runs:
     - name: Check job results
       id: check
       shell: bash
+      env:
+        INPUT_JOB_RESULTS: ${{ inputs.job-results }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: |
-        # Parse job results
-        RESULTS='${{ inputs.job-results }}'
+        # Validate JSON input
+        if ! echo "$INPUT_JOB_RESULTS" | jq -e . >/dev/null 2>&1; then
+          echo "❌ Invalid JSON in job-results"
+          exit 1
+        fi
+
         ALL_PASSED=true
         FAILED_JOBS=""
         PASSED_COUNT=0
         FAILED_COUNT=0
         SKIPPED_COUNT=0
-        
-        # Process each result
-        echo "$RESULTS" | jq -r '.[]' | while read -r result; do
+
+        # Process each result using process substitution to preserve variable scope
+        while read -r result; do
           case "$result" in
             success)
               PASSED_COUNT=$((PASSED_COUNT + 1))
@@ -49,25 +56,30 @@ runs:
             failure|cancelled)
               FAILED_COUNT=$((FAILED_COUNT + 1))
               ALL_PASSED=false
+              if [[ -n "$FAILED_JOBS" ]]; then
+                FAILED_JOBS="$FAILED_JOBS,$result"
+              else
+                FAILED_JOBS="$result"
+              fi
               ;;
           esac
-        done
-        
+        done < <(echo "$INPUT_JOB_RESULTS" | jq -r '.[]')
+
         # Generate summary
         SUMMARY="✅ Passed: $PASSED_COUNT | ❌ Failed: $FAILED_COUNT | ⏭️ Skipped: $SKIPPED_COUNT"
-        
+
         # Set outputs
         echo "all-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
         echo "failed-jobs=$FAILED_JOBS" >> $GITHUB_OUTPUT
         echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
-        
+
         # Exit based on results
         if [[ "$ALL_PASSED" == "true" ]]; then
           echo "✅ All required jobs passed!"
           exit 0
         else
           echo "❌ Some jobs failed!"
-          if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then
+          if [[ "$INPUT_FAIL_ON_ERROR" == "true" ]]; then
             exit 1
           fi
         fi

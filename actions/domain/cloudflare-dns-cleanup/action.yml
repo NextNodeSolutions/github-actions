@@ -24,43 +24,41 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # Use the shared zone lookup utility if zone-id not provided
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: ./actions/utilities/cloudflare-zone-lookup
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+      continue-on-error: true
+
     - name: Cleanup Cloudflare DNS Records
       id: cleanup
       shell: bash
       env:
         CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
-        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
+        INPUT_DOMAIN: ${{ inputs.domain }}
       run: |
         echo "::group::🧹 Cleaning up Cloudflare DNS records"
 
-        DOMAIN="${{ inputs.domain }}"
+        DOMAIN="$INPUT_DOMAIN"
         RECORDS_DELETED=0
 
         echo "• Target domain: $DOMAIN"
 
-        # Get zone ID if not provided
-        if [[ -z "$CF_ZONE_ID" ]]; then
-          # Extract root domain from full domain
-          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
-
-          echo "• Detecting zone for: $ROOT_DOMAIN"
-
-          ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json")
-
-          CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // empty')
-
-          if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
-            echo "❌ Could not find Cloudflare zone for $ROOT_DOMAIN"
-            echo "records-deleted=0" >> $GITHUB_OUTPUT
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "::endgroup::"
-            exit 0
-          fi
-
-          echo "• Zone ID: ${CF_ZONE_ID:0:8}..."
+        # Verify zone ID is available
+        if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
+          echo "❌ Could not determine Zone ID (provide cloudflare-zone-id or ensure domain lookup succeeded)"
+          echo "records-deleted=0" >> $GITHUB_OUTPUT
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
         fi
+
+        echo "• Zone ID: ${CF_ZONE_ID:0:8}..."
 
         # List of records to delete
         RECORDS_TO_DELETE=(

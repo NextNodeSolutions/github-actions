@@ -27,46 +27,58 @@ runs:
     - name: Check Command
       id: check
       shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_INSTALL_COMMAND: ${{ inputs.install-command }}
+        INPUT_FAIL_IF_MISSING: ${{ inputs.fail-if-missing }}
       run: |
-        echo "🔍 Checking for command: ${{ inputs.command }}"
-        
-        if command -v "${{ inputs.command }}" &> /dev/null; then
-          echo "✅ Command '${{ inputs.command }}' is available"
+        echo "🔍 Checking for command: $INPUT_COMMAND"
+
+        # Validate command name (alphanumeric, dash, underscore only)
+        if [[ ! "$INPUT_COMMAND" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          echo "❌ Invalid command name: contains unsafe characters"
+          exit 1
+        fi
+
+        if command -v "$INPUT_COMMAND" &> /dev/null; then
+          echo "✅ Command '$INPUT_COMMAND' is available"
           echo "exists=true" >> $GITHUB_OUTPUT
-          
+
           # Try to get version
           VERSION=""
-          if ${{ inputs.command }} --version &> /dev/null; then
-            VERSION=$(${{ inputs.command }} --version 2>&1 | head -n1)
-          elif ${{ inputs.command }} -v &> /dev/null; then
-            VERSION=$(${{ inputs.command }} -v 2>&1 | head -n1)
-          elif ${{ inputs.command }} version &> /dev/null; then
-            VERSION=$(${{ inputs.command }} version 2>&1 | head -n1)
+          if "$INPUT_COMMAND" --version &> /dev/null; then
+            VERSION=$("$INPUT_COMMAND" --version 2>&1 | head -n1)
+          elif "$INPUT_COMMAND" -v &> /dev/null; then
+            VERSION=$("$INPUT_COMMAND" -v 2>&1 | head -n1)
+          elif "$INPUT_COMMAND" version &> /dev/null; then
+            VERSION=$("$INPUT_COMMAND" version 2>&1 | head -n1)
           fi
-          
+
           if [[ -n "$VERSION" ]]; then
             echo "  Version: $VERSION"
             echo "version=$VERSION" >> $GITHUB_OUTPUT
           fi
         else
-          echo "❌ Command '${{ inputs.command }}' not found"
+          echo "❌ Command '$INPUT_COMMAND' not found"
           echo "exists=false" >> $GITHUB_OUTPUT
-          
+
           # Try to install if command provided
-          if [[ -n "${{ inputs.install-command }}" ]]; then
-            echo "📦 Attempting to install using: ${{ inputs.install-command }}"
-            eval "${{ inputs.install-command }}"
-            
+          # WARNING: install-command executes shell code - use only with trusted input
+          if [[ -n "$INPUT_INSTALL_COMMAND" ]]; then
+            echo "📦 Attempting to install using provided command"
+            # Execute via bash -c to avoid eval; still requires trusted input
+            bash -c "$INPUT_INSTALL_COMMAND"
+
             # Re-check after installation
-            if command -v "${{ inputs.command }}" &> /dev/null; then
-              echo "✅ Command '${{ inputs.command }}' successfully installed"
+            if command -v "$INPUT_COMMAND" &> /dev/null; then
+              echo "✅ Command '$INPUT_COMMAND' successfully installed"
               echo "exists=true" >> $GITHUB_OUTPUT
-            elif [[ "${{ inputs.fail-if-missing }}" == "true" ]]; then
-              echo "❌ Failed to install '${{ inputs.command }}'"
+            elif [[ "$INPUT_FAIL_IF_MISSING" == "true" ]]; then
+              echo "❌ Failed to install '$INPUT_COMMAND'"
               exit 1
             fi
-          elif [[ "${{ inputs.fail-if-missing }}" == "true" ]]; then
-            echo "❌ Command '${{ inputs.command }}' is required but not available"
+          elif [[ "$INPUT_FAIL_IF_MISSING" == "true" ]]; then
+            echo "❌ Command '$INPUT_COMMAND' is required but not available"
             exit 1
           fi
         fi

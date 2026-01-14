@@ -46,12 +46,21 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # Use the shared zone lookup utility if zone-id not provided
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: ./actions/utilities/cloudflare-zone-lookup
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+
     - name: Setup Cloudflare SEO Configuration
       id: seo-setup
       shell: bash
       env:
         CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
-        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
         DOMAIN: ${{ inputs.domain }}
         BLOCKED_SUBDOMAINS: ${{ inputs.blocked-subdomains }}
         ALLOWED_SUBDOMAINS: ${{ inputs.allowed-subdomains }}
@@ -72,33 +81,19 @@ runs:
           exit 1
         fi
 
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "❌ Could not determine Zone ID (provide cloudflare-zone-id or ensure domain lookup succeeded)"
+          exit 1
+        fi
+
         echo "🔧 Configuration:"
         echo "  • Domain: $DOMAIN"
+        echo "  • Zone ID: $CF_ZONE_ID"
         echo "  • Blocked subdomains: $BLOCKED_SUBDOMAINS"
         echo "  • WWW redirect: $ENABLE_WWW_REDIRECT"
         echo "  • Optimizations: $ENABLE_OPTIMIZATIONS"
         echo "  • Dry run: $DRY_RUN"
         echo ""
-
-        # Get Zone ID if not provided
-        if [[ -z "$CF_ZONE_ID" ]]; then
-          echo "🔍 Auto-detecting Cloudflare Zone ID..."
-          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
-
-          ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json")
-
-          CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id // empty')
-
-          if [[ -z "$CF_ZONE_ID" ]]; then
-            echo "❌ Could not find Cloudflare zone for $ROOT_DOMAIN"
-            echo "Please provide zone-id manually or check domain configuration"
-            exit 1
-          fi
-
-          echo "✅ Found Zone ID: $CF_ZONE_ID"
-        fi
 
         # Initialize counters
         TRANSFORM_RULES_COUNT=0

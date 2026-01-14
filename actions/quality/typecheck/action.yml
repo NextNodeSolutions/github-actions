@@ -34,67 +34,89 @@ runs:
   steps:
     - name: Setup
       shell: bash
+      env:
+        INPUT_WORKING_DIR: ${{ inputs.working-directory }}
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_TSCONFIG: ${{ inputs.tsconfig-path }}
+        INPUT_STRICT: ${{ inputs.strict }}
       run: |
         echo "::group::📝 TypeScript Type Check Setup"
-        echo "• Working directory: ${{ inputs.working-directory }}"
-        echo "• Command: pnpm ${{ inputs.command }}"
-        echo "• Config: ${{ inputs.tsconfig-path }}"
-        echo "• Strict mode: ${{ inputs.strict }}"
+        echo "• Working directory: $INPUT_WORKING_DIR"
+        echo "• Command: pnpm $INPUT_COMMAND"
+        echo "• Config: $INPUT_TSCONFIG"
+        echo "• Strict mode: $INPUT_STRICT"
         echo "::endgroup::"
 
     - name: Verify TypeScript config
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_TSCONFIG: ${{ inputs.tsconfig-path }}
+        INPUT_STRICT: ${{ inputs.strict }}
       run: |
         echo "::group::🔍 Verifying TypeScript Configuration"
-        
+
+        # Validate tsconfig path (no shell metacharacters)
+        if [[ ! "$INPUT_TSCONFIG" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+          echo "❌ Invalid tsconfig path: contains unsafe characters"
+          exit 1
+        fi
+
         # Check if tsconfig exists
-        if [[ -f "${{ inputs.tsconfig-path }}" ]]; then
-          echo "✅ Found ${{ inputs.tsconfig-path }}"
-          
+        if [[ -f "$INPUT_TSCONFIG" ]]; then
+          echo "✅ Found $INPUT_TSCONFIG"
+
           # Check strict mode setting
-          if [[ "${{ inputs.strict }}" == "true" ]]; then
-            if grep -q '"strict":\s*true' "${{ inputs.tsconfig-path }}"; then
+          if [[ "$INPUT_STRICT" == "true" ]]; then
+            if grep -q '"strict":\s*true' "$INPUT_TSCONFIG"; then
               echo "✅ Strict mode is enabled"
             else
               echo "⚠️ Strict mode is not enabled in tsconfig"
             fi
           fi
-          
+
           # Show compiler options
           echo "• Compiler options:"
-          grep -A 10 '"compilerOptions"' "${{ inputs.tsconfig-path }}" | head -15 || true
+          grep -A 10 '"compilerOptions"' "$INPUT_TSCONFIG" | head -15 || true
         else
-          echo "❌ TypeScript config not found at ${{ inputs.tsconfig-path }}"
+          echo "❌ TypeScript config not found at $INPUT_TSCONFIG"
           exit 1
         fi
-        
+
         echo "::endgroup::"
 
     - name: Run type check
       id: typecheck
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
       run: |
         echo "::group::🔧 Running Type Check"
-        
+
+        # Validate command (alphanumeric, dash, colon only - supports pnpm scripts like type-check)
+        if [[ ! "$INPUT_COMMAND" =~ ^[a-zA-Z0-9_:-]+$ ]]; then
+          echo "❌ Invalid command: contains unsafe characters"
+          exit 1
+        fi
+
         START_TIME=$(date +%s)
-        
+
         # Run type check and capture output
-        echo "• Executing: pnpm ${{ inputs.command }}"
-        
+        echo "• Executing: pnpm $INPUT_COMMAND"
+
         # Create temp file for output
         OUTPUT_FILE=$(mktemp)
-        
+
         # Run command and capture output
-        if pnpm ${{ inputs.command }} 2>&1 | tee "$OUTPUT_FILE"; then
+        if pnpm "$INPUT_COMMAND" 2>&1 | tee "$OUTPUT_FILE"; then
           CHECK_STATUS="success"
           echo "✅ Type check passed"
         else
           CHECK_STATUS="failed"
           echo "❌ Type check failed"
         fi
-        
+
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         

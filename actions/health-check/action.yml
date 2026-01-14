@@ -49,15 +49,37 @@ runs:
     - name: Perform Health Check
       id: check
       shell: bash
+      env:
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        INPUT_DELAY: ${{ inputs.delay-seconds }}
+        INPUT_TIMEOUT: ${{ inputs.timeout-seconds }}
+        INPUT_EXPECTED_STATUS: ${{ inputs.expected-status }}
+        INPUT_HEADERS: ${{ inputs.headers }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: |
-        echo "::group::🏥 Health Check for ${{ inputs.url }}"
-        
-        URL="${{ inputs.url }}"
-        MAX_ATTEMPTS=${{ inputs.max-attempts }}
-        DELAY=${{ inputs.delay-seconds }}
-        TIMEOUT=${{ inputs.timeout-seconds }}
-        EXPECTED_STATUS="${{ inputs.expected-status }}"
-        HEADERS='${{ inputs.headers }}'
+        echo "::group::🏥 Health Check for $INPUT_URL"
+
+        URL="$INPUT_URL"
+        MAX_ATTEMPTS="$INPUT_MAX_ATTEMPTS"
+        DELAY="$INPUT_DELAY"
+        TIMEOUT="$INPUT_TIMEOUT"
+        EXPECTED_STATUS="$INPUT_EXPECTED_STATUS"
+        HEADERS="$INPUT_HEADERS"
+
+        # Validate numeric inputs
+        if [[ ! "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]]; then
+          echo "❌ Invalid max-attempts: must be a number"
+          exit 1
+        fi
+        if [[ ! "$DELAY" =~ ^[0-9]+$ ]]; then
+          echo "❌ Invalid delay-seconds: must be a number"
+          exit 1
+        fi
+        if [[ ! "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+          echo "❌ Invalid timeout-seconds: must be a number"
+          exit 1
+        fi
         
         # Build curl headers
         CURL_HEADERS=""
@@ -137,7 +159,7 @@ runs:
           echo "  • Response time: ${RESPONSE_TIME}s"
         else
           echo "❌ Health check failed after $ATTEMPT attempt(s)"
-          if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then
+          if [[ "$INPUT_FAIL_ON_ERROR" == "true" ]]; then
             echo "::endgroup::"
             exit 1
           fi

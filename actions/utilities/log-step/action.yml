@@ -26,9 +26,15 @@ runs:
   steps:
     - name: Log Output
       shell: bash
+      env:
+        INPUT_LEVEL: ${{ inputs.level }}
+        INPUT_GROUP: ${{ inputs.group }}
+        INPUT_TITLE: ${{ inputs.title }}
+        INPUT_MESSAGE: ${{ inputs.message }}
+        INPUT_DETAILS: ${{ inputs.details }}
       run: |
         # Define colors and emojis for different levels
-        case "${{ inputs.level }}" in
+        case "$INPUT_LEVEL" in
           "error")
             EMOJI="❌"
             COLOR="\033[31m"  # Red
@@ -50,45 +56,45 @@ runs:
             COLOR="\033[34m"  # Blue
             ;;
         esac
-        
+
         RESET="\033[0m"
-        
+
         # Start group if requested
-        if [[ "${{ inputs.group }}" == "true" ]]; then
-          echo "::group::$EMOJI ${{ inputs.title }}"
+        if [[ "$INPUT_GROUP" == "true" ]]; then
+          echo "::group::$EMOJI $INPUT_TITLE"
         else
-          echo -e "${COLOR}$EMOJI ${{ inputs.title }}${RESET}"
+          echo -e "${COLOR}$EMOJI $INPUT_TITLE${RESET}"
         fi
-        
+
         # Output message if provided
-        if [[ -n "${{ inputs.message }}" ]]; then
-          echo "${{ inputs.message }}"
+        if [[ -n "$INPUT_MESSAGE" ]]; then
+          echo "$INPUT_MESSAGE"
         fi
-        
+
         # Output details if provided
-        if [[ -n "${{ inputs.details }}" ]]; then
+        if [[ -n "$INPUT_DETAILS" ]]; then
           echo ""
           # Check if details is JSON array or multiline string
-          if [[ "${{ inputs.details }}" =~ ^\[.*\]$ ]]; then
+          if [[ "$INPUT_DETAILS" =~ ^\[.*\]$ ]]; then
             # Parse JSON array
             while IFS= read -r line; do
               echo "  • $line"
-            done < <(echo "${{ inputs.details }}" | jq -r '.[]')
+            done < <(echo "$INPUT_DETAILS" | jq -r '.[]')
           else
             # Output multiline string
             while IFS= read -r line; do
               [[ -n "$line" ]] && echo "  • $line"
-            done <<< "${{ inputs.details }}"
+            done <<< "$INPUT_DETAILS"
           fi
         fi
-        
+
         # End group if started
-        if [[ "${{ inputs.group }}" == "true" ]]; then
+        if [[ "$INPUT_GROUP" == "true" ]]; then
           echo "::endgroup::"
         fi
-        
+
         # Set appropriate exit code for error level
-        if [[ "${{ inputs.level }}" == "error" ]]; then
+        if [[ "$INPUT_LEVEL" == "error" ]]; then
           exit 1
         else
           exit 0

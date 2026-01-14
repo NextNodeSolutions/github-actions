@@ -1,0 +1,228 @@
+name: 'Cloudflare DNS Upsert'
+description: 'Create or update a Cloudflare DNS record'
+author: 'NextNodeSolutions'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected from domain if not provided)'
+    required: false
+  domain:
+    description: 'Full domain name for the DNS record (e.g., admin.nextnode.fr)'
+    required: true
+  record-type:
+    description: 'DNS record type (A, AAAA, CNAME, TXT, etc.)'
+    required: false
+    default: 'A'
+  content:
+    description: 'Record content (IP address, hostname, or text). If tailscale-hostname is provided, this is ignored.'
+    required: false
+  tailscale-hostname:
+    description: 'If provided, resolve Tailscale IP for this hostname as record content'
+    required: false
+  tailscale-api-key:
+    description: 'Tailscale API key (required if tailscale-hostname is provided)'
+    required: false
+  ttl:
+    description: 'TTL in seconds (1 = auto)'
+    required: false
+    default: '1'
+  proxied:
+    description: 'Whether to proxy through Cloudflare (true/false)'
+    required: false
+    default: 'false'
+  max-retries:
+    description: 'Maximum retries when waiting for Tailscale IP'
+    required: false
+    default: '6'
+  retry-delay:
+    description: 'Delay between retries in seconds'
+    required: false
+    default: '5'
+
+outputs:
+  success:
+    description: 'Whether the operation was successful'
+    value: ${{ steps.upsert.outputs.success }}
+  record-id:
+    description: 'The DNS record ID'
+    value: ${{ steps.upsert.outputs.record-id }}
+  action:
+    description: 'Action taken: created, updated, or unchanged'
+    value: ${{ steps.upsert.outputs.action }}
+  resolved-content:
+    description: 'The actual content used (useful when resolving from Tailscale)'
+    value: ${{ steps.upsert.outputs.resolved-content }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: ./actions/utilities/cloudflare-zone-lookup
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+
+    - name: Upsert DNS Record
+      id: upsert
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
+        INPUT_DOMAIN: ${{ inputs.domain }}
+        INPUT_RECORD_TYPE: ${{ inputs.record-type }}
+        INPUT_CONTENT: ${{ inputs.content }}
+        INPUT_TAILSCALE_HOSTNAME: ${{ inputs.tailscale-hostname }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        INPUT_TTL: ${{ inputs.ttl }}
+        INPUT_PROXIED: ${{ inputs.proxied }}
+        INPUT_MAX_RETRIES: ${{ inputs.max-retries }}
+        INPUT_RETRY_DELAY: ${{ inputs.retry-delay }}
+      run: |
+        echo "::group::Cloudflare DNS Upsert: $INPUT_DOMAIN"
+
+        # Validate required inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "::error::Cloudflare API token is required"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
+          echo "::error::Could not determine Zone ID"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        RECORD_CONTENT="$INPUT_CONTENT"
+
+        # Resolve content from Tailscale if hostname provided
+        if [[ -n "$INPUT_TAILSCALE_HOSTNAME" ]]; then
+          if [[ -z "$TAILSCALE_API_KEY" ]]; then
+            echo "::error::Tailscale API key required when using tailscale-hostname"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          echo "Resolving Tailscale IP for hostname: $INPUT_TAILSCALE_HOSTNAME"
+
+          for i in $(seq 1 "$INPUT_MAX_RETRIES"); do
+            RECORD_CONTENT=$(curl -s -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+              "https://api.tailscale.com/api/v2/tailnet/-/devices" | \
+              jq -r ".devices[] | select(.hostname | startswith(\"$INPUT_TAILSCALE_HOSTNAME\")) | .addresses[0]" | head -1)
+
+            if [[ -n "$RECORD_CONTENT" ]] && [[ "$RECORD_CONTENT" != "null" ]]; then
+              echo "Found $INPUT_TAILSCALE_HOSTNAME at IP: $RECORD_CONTENT"
+              break
+            fi
+
+            echo "Attempt $i/$INPUT_MAX_RETRIES: $INPUT_TAILSCALE_HOSTNAME not yet in Tailscale, waiting ${INPUT_RETRY_DELAY}s..."
+            sleep "$INPUT_RETRY_DELAY"
+          done
+
+          if [[ -z "$RECORD_CONTENT" ]] || [[ "$RECORD_CONTENT" == "null" ]]; then
+            echo "::warning::$INPUT_TAILSCALE_HOSTNAME not found in Tailscale after $INPUT_MAX_RETRIES attempts"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "action=skipped" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+        fi
+
+        if [[ -z "$RECORD_CONTENT" ]]; then
+          echo "::error::Record content is required (either via content input or tailscale-hostname)"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "Configuration:"
+        echo "  Domain: $INPUT_DOMAIN"
+        echo "  Type: $INPUT_RECORD_TYPE"
+        echo "  Content: $RECORD_CONTENT"
+        echo "  TTL: $INPUT_TTL"
+        echo "  Proxied: $INPUT_PROXIED"
+        echo ""
+
+        # Check if record exists
+        EXISTING_RECORD=$(curl -s "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?type=${INPUT_RECORD_TYPE}&name=${INPUT_DOMAIN}" \
+          -H "Authorization: Bearer ${CF_API_TOKEN}" \
+          -H "Content-Type: application/json")
+
+        RECORD_ID=$(echo "$EXISTING_RECORD" | jq -r '.result[0].id // empty')
+        CURRENT_CONTENT=$(echo "$EXISTING_RECORD" | jq -r '.result[0].content // empty')
+
+        # Convert proxied to boolean for JSON
+        PROXIED_BOOL="false"
+        if [[ "$INPUT_PROXIED" == "true" ]]; then
+          PROXIED_BOOL="true"
+        fi
+
+        if [[ -z "$RECORD_ID" ]]; then
+          # Create new record
+          echo "Creating $INPUT_RECORD_TYPE record: $INPUT_DOMAIN -> $RECORD_CONTENT"
+
+          CREATE_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"${INPUT_RECORD_TYPE}\",\"name\":\"${INPUT_DOMAIN}\",\"content\":\"${RECORD_CONTENT}\",\"ttl\":${INPUT_TTL},\"proxied\":${PROXIED_BOOL}}")
+
+          SUCCESS=$(echo "$CREATE_RESPONSE" | jq -r '.success')
+          NEW_RECORD_ID=$(echo "$CREATE_RESPONSE" | jq -r '.result.id // empty')
+
+          if [[ "$SUCCESS" == "true" ]]; then
+            echo "Record created successfully"
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "record-id=$NEW_RECORD_ID" >> $GITHUB_OUTPUT
+            echo "action=created" >> $GITHUB_OUTPUT
+            echo "resolved-content=$RECORD_CONTENT" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Failed to create DNS record"
+            echo "$CREATE_RESPONSE" | jq '.errors'
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+        elif [[ "$CURRENT_CONTENT" == "$RECORD_CONTENT" ]]; then
+          # No change needed
+          echo "Record already exists with correct content"
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+          echo "action=unchanged" >> $GITHUB_OUTPUT
+          echo "resolved-content=$RECORD_CONTENT" >> $GITHUB_OUTPUT
+        else
+          # Update existing record
+          echo "Updating $INPUT_RECORD_TYPE record: $INPUT_DOMAIN -> $RECORD_CONTENT (was: $CURRENT_CONTENT)"
+
+          UPDATE_RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records/${RECORD_ID}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"content\":\"${RECORD_CONTENT}\"}")
+
+          SUCCESS=$(echo "$UPDATE_RESPONSE" | jq -r '.success')
+
+          if [[ "$SUCCESS" == "true" ]]; then
+            echo "Record updated successfully"
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+            echo "action=updated" >> $GITHUB_OUTPUT
+            echo "resolved-content=$RECORD_CONTENT" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Failed to update DNS record"
+            echo "$UPDATE_RESPONSE" | jq '.errors'
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+        fi
+
+        echo ""
+        echo "DNS configuration complete!"
+        echo "::endgroup::"

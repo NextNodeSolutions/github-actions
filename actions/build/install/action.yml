@@ -45,33 +45,42 @@ runs:
       id: install
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
+        INPUT_STORE_DIR: ${{ inputs.store-dir }}
+        START_TIME: ${{ steps.timer.outputs.start-time }}
       run: |
         echo "::group::⚡ Running pnpm install"
-        
-        # Build install command
-        INSTALL_CMD="pnpm install"
-        
+
+        # Build install command as array for safe execution
+        INSTALL_ARGS=()
+
         # Add frozen lockfile flag for CI
-        if [[ "${{ inputs.frozen-lockfile }}" == "true" ]]; then
-          INSTALL_CMD="$INSTALL_CMD --frozen-lockfile"
+        if [[ "$INPUT_FROZEN_LOCKFILE" == "true" ]]; then
+          INSTALL_ARGS+=("--frozen-lockfile")
         fi
-        
-        # Add custom store directory if provided
-        if [[ -n "${{ inputs.store-dir }}" ]]; then
-          INSTALL_CMD="$INSTALL_CMD --store-dir=${{ inputs.store-dir }}"
+
+        # Add custom store directory if provided (validate path)
+        if [[ -n "$INPUT_STORE_DIR" ]]; then
+          # Validate store-dir doesn't contain shell metacharacters
+          if [[ "$INPUT_STORE_DIR" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+            INSTALL_ARGS+=("--store-dir=$INPUT_STORE_DIR")
+          else
+            echo "❌ Invalid store-dir: contains unsafe characters"
+            exit 1
+          fi
         fi
-        
-        # Execute installation
-        echo "• Command: $INSTALL_CMD"
-        eval $INSTALL_CMD
-        
+
+        # Execute installation (no eval needed)
+        echo "• Command: pnpm install ${INSTALL_ARGS[*]}"
+        pnpm install "${INSTALL_ARGS[@]}"
+
         # Calculate timing
         END_TIME=$(date +%s)
-        START_TIME=${{ steps.timer.outputs.start-time }}
         DURATION=$((END_TIME - START_TIME))
         echo "• Installation completed in ${DURATION}s"
         echo "install-time=${DURATION}s" >> $GITHUB_OUTPUT
-        
+
         echo "::endgroup::"
 
     - name: Analyze installation

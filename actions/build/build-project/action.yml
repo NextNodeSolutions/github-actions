@@ -39,33 +39,64 @@ runs:
     - name: Setup environment
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_WORKING_DIR: ${{ inputs.working-directory }}
+        INPUT_BUILD_COMMAND: ${{ inputs.build-command }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-directory }}
+        INPUT_ENV_VARS: ${{ inputs.env-vars }}
       run: |
         echo "::group::🏗️ Build Setup"
-        echo "• Working directory: ${{ inputs.working-directory }}"
-        echo "• Build command: pnpm ${{ inputs.build-command }}"
-        echo "• Output directory: ${{ inputs.output-directory }}"
-        
-        # Set environment variables if provided
-        if [[ '${{ inputs.env-vars }}' != '{}' ]]; then
+        echo "• Working directory: $INPUT_WORKING_DIR"
+        echo "• Build command: pnpm $INPUT_BUILD_COMMAND"
+        echo "• Output directory: $INPUT_OUTPUT_DIR"
+
+        # Set environment variables if provided (with validation)
+        if [[ "$INPUT_ENV_VARS" != '{}' ]]; then
           echo "• Setting environment variables:"
-          echo '${{ inputs.env-vars }}' | jq -r 'to_entries[] | "  - \(.key)=\(.value)"'
-          echo '${{ inputs.env-vars }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> $GITHUB_ENV
+          # Validate JSON first
+          if ! echo "$INPUT_ENV_VARS" | jq -e . >/dev/null 2>&1; then
+            echo "❌ Invalid JSON in env-vars"
+            exit 1
+          fi
+          # Validate and set each variable safely
+          while IFS='=' read -r key value; do
+            # Validate key (alphanumeric and underscore only)
+            if [[ ! "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+              echo "❌ Invalid environment variable name: $key"
+              exit 1
+            fi
+            # Validate value doesn't contain newlines (GITHUB_ENV injection prevention)
+            if [[ "$value" == *$'\n'* ]]; then
+              echo "❌ Environment variable value cannot contain newlines: $key"
+              exit 1
+            fi
+            echo "  - $key=$value"
+            echo "$key=$value" >> $GITHUB_ENV
+          done < <(echo "$INPUT_ENV_VARS" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
         fi
-        
+
         echo "::endgroup::"
 
     - name: Execute build
       id: build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_BUILD_COMMAND: ${{ inputs.build-command }}
       run: |
         echo "::group::⚙️ Building Project"
-        
+
+        # Validate build command (alphanumeric, dash, colon only)
+        if [[ ! "$INPUT_BUILD_COMMAND" =~ ^[a-zA-Z0-9_:-]+$ ]]; then
+          echo "❌ Invalid build command: contains unsafe characters"
+          exit 1
+        fi
+
         START_TIME=$(date +%s)
-        
+
         # Run build command
-        echo "• Executing: pnpm ${{ inputs.build-command }}"
-        if pnpm ${{ inputs.build-command }}; then
+        echo "• Executing: pnpm $INPUT_BUILD_COMMAND"
+        if pnpm "$INPUT_BUILD_COMMAND"; then
           BUILD_SUCCESS="true"
           echo "✅ Build completed successfully"
         else
@@ -73,44 +104,52 @@ runs:
           echo "❌ Build failed"
           exit 1
         fi
-        
+
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
-        
+
         echo "• Build time: ${DURATION}s"
         echo "build-time=${DURATION}s" >> $GITHUB_OUTPUT
         echo "success=$BUILD_SUCCESS" >> $GITHUB_OUTPUT
-        
+
         echo "::endgroup::"
 
     - name: Analyze build output
       id: analyze
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_OUTPUT_DIR: ${{ inputs.output-directory }}
       run: |
         echo "::group::📊 Build Analysis"
-        
+
+        # Validate output directory path
+        if [[ ! "$INPUT_OUTPUT_DIR" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+          echo "❌ Invalid output directory: contains unsafe characters"
+          exit 1
+        fi
+
         # Check if output directory exists
-        if [[ -d "${{ inputs.output-directory }}" ]]; then
+        if [[ -d "$INPUT_OUTPUT_DIR" ]]; then
           # Calculate output size
-          OUTPUT_SIZE=$(du -sh "${{ inputs.output-directory }}" | cut -f1)
+          OUTPUT_SIZE=$(du -sh "$INPUT_OUTPUT_DIR" | cut -f1)
           echo "• Output size: $OUTPUT_SIZE"
           echo "output-size=$OUTPUT_SIZE" >> $GITHUB_OUTPUT
-          
+
           # Count files
-          FILE_COUNT=$(find "${{ inputs.output-directory }}" -type f | wc -l | tr -d ' ')
+          FILE_COUNT=$(find "$INPUT_OUTPUT_DIR" -type f | wc -l | tr -d ' ')
           echo "• Files generated: $FILE_COUNT"
-          
+
           # List largest files
           echo "• Largest files:"
-          find "${{ inputs.output-directory }}" -type f -exec du -h {} \; | sort -rh | head -5 | while read size file; do
-            echo "  - $size $(basename $file)"
+          find "$INPUT_OUTPUT_DIR" -type f -exec du -h {} \; | sort -rh | head -5 | while read size file; do
+            echo "  - $size $(basename "$file")"
           done
         else
-          echo "⚠️ Output directory '${{ inputs.output-directory }}' not found"
+          echo "⚠️ Output directory '$INPUT_OUTPUT_DIR' not found"
           echo "output-size=N/A" >> $GITHUB_OUTPUT
         fi
-        
+
         echo "::endgroup::"
 
     - name: Summary
