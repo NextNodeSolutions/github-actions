@@ -1,0 +1,68 @@
+# NextNode Default Configuration for Dokploy Deployments
+# Projects only need to override what differs from these defaults
+
+# =============================================================================
+# BUILD CONFIGURATION
+# =============================================================================
+[build]
+type = "dockerfile"           # dockerfile | nixpacks | buildpacks | static
+dockerfile = "Dockerfile"
+context = "."
+
+# =============================================================================
+# RESOURCE DEFAULTS
+# =============================================================================
+[resources]
+memory = "512Mi"
+cpu = 0.5
+
+# =============================================================================
+# SCALING DEFAULTS
+# =============================================================================
+[scaling]
+replicas = 1
+
+# =============================================================================
+# HEALTH CHECK DEFAULTS
+# =============================================================================
+[healthcheck]
+enabled = true
+path = "/health"
+interval = "30s"
+timeout = "10s"
+retries = 3
+start_period = "10s"
+
+# =============================================================================
+# DEPLOYMENT DEFAULTS
+# =============================================================================
+[deploy]
+auto_deploy = true
+zero_downtime = true
+
+# =============================================================================
+# ENVIRONMENT: DEVELOPMENT
+# Domain auto-generated: dev.{project.domain}
+# =============================================================================
+[environments.development]
+enabled = true
+server = "dev-worker"
+
+# =============================================================================
+# ENVIRONMENT: PREVIEW (PR deployments)
+# Domain auto-generated: pr-{number}.dev.{project.domain}
+# =============================================================================
+[environments.preview]
+enabled = true
+server = "dev-worker"
+auto_cleanup = true
+
+# =============================================================================
+# ENVIRONMENT: PRODUCTION
+# Domain: {project.domain}
+# =============================================================================
+[environments.production]
+server = "prod-worker"
+replicas = 2
+memory = "1Gi"
+cpu = 1

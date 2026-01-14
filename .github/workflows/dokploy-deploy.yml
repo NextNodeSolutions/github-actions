@@ -1,0 +1,206 @@
+name: Dokploy Deploy
+
+# EXTERNAL WORKFLOW - Deploy to Dokploy
+# Syncs project configuration and triggers deployment
+# Supports custom VPS provisioning when server = "custom" in config
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment: development, preview, production'
+        required: true
+        type: string
+      config-file:
+        description: 'Path to project dokploy.toml'
+        required: false
+        default: 'dokploy.toml'
+        type: string
+      pr-number:
+        description: 'PR number (for preview deployments)'
+        required: false
+        default: ''
+        type: string
+      action:
+        description: 'Action: deploy or cleanup'
+        required: false
+        default: 'deploy'
+        type: string
+    secrets:
+      DOKPLOY_URL:
+        description: 'Dokploy instance URL'
+        required: true
+      DOKPLOY_ADMIN_EMAIL:
+        description: 'Dokploy admin email'
+        required: true
+      DOKPLOY_ADMIN_PASSWORD:
+        description: 'Dokploy admin password'
+        required: true
+      TAILSCALE_API_KEY:
+        description: 'Tailscale API key'
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        description: 'Cloudflare API token'
+        required: true
+      # Optional: Required only for custom VPS provisioning
+      HETZNER_TOKEN:
+        description: 'Hetzner Cloud API token (for custom VPS)'
+        required: false
+      TAILSCALE_AUTH_KEY:
+        description: 'Tailscale auth key (for custom VPS)'
+        required: false
+      TF_API_TOKEN:
+        description: 'Terraform Cloud API token (for custom VPS)'
+        required: false
+      DOKPLOY_SSH_KEY_ID:
+        description: 'Dokploy SSH key ID (for custom VPS)'
+        required: false
+    outputs:
+      project-id:
+        description: 'Dokploy project ID'
+        value: ${{ jobs.deploy.outputs.project-id }}
+      application-id:
+        description: 'Dokploy application ID'
+        value: ${{ jobs.deploy.outputs.application-id }}
+      domain:
+        description: 'Deployed domain'
+        value: ${{ jobs.deploy.outputs.domain }}
+      success:
+        description: 'Whether deployment succeeded'
+        value: ${{ jobs.deploy.outputs.success }}
+      custom-vps-provisioned:
+        description: 'Whether a custom VPS was provisioned'
+        value: ${{ jobs.deploy.outputs.custom-vps-provisioned }}
+
+jobs:
+  deploy:
+    name: Deploy to Dokploy
+    runs-on: ubuntu-latest
+    outputs:
+      project-id: ${{ steps.sync.outputs.project-id }}
+      application-id: ${{ steps.sync.outputs.application-id }}
+      domain: ${{ steps.sync.outputs.domain }}
+      success: ${{ steps.sync.outputs.success }}
+      custom-vps-provisioned: ${{ steps.check-vps.outputs.needs-custom-vps }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout Shared Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nextnodesolutions/github-actions
+          path: .github-actions
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tomli
+        shell: bash
+        run: pip install tomli
+
+      - name: Check for Custom VPS
+        id: check-vps
+        if: inputs.action == 'deploy' && inputs.environment == 'production'
+        shell: python
+        env:
+          CONFIG_FILE: ${{ inputs.config-file }}
+          DEFAULTS_FILE: .github-actions/config/dokploy-defaults.toml
+        run: |
+          import os
+          import tomli
+          from pathlib import Path
+
+          config_file = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+          defaults_file = os.environ.get('DEFAULTS_FILE', '')
+          output_file = os.environ.get('GITHUB_OUTPUT', '')
+
+          # Load and merge configs
+          defaults = {}
+          if defaults_file and Path(defaults_file).exists():
+              with open(defaults_file, 'rb') as f:
+                  defaults = tomli.load(f)
+
+          config = {}
+          if Path(config_file).exists():
+              with open(config_file, 'rb') as f:
+                  config = tomli.load(f)
+
+          # Check production config for custom server
+          prod_config = config.get('production', {})
+          server = prod_config.get('server', 'prod-worker')
+          vps_name = prod_config.get('vps', '')
+          vps_type = prod_config.get('vps_type', 'cx33')
+          project_name = config.get('project', {}).get('name', '')
+
+          needs_custom = server == 'custom' and vps_name
+
+          with open(output_file, 'a') as f:
+              f.write(f"needs-custom-vps={'true' if needs_custom else 'false'}\n")
+              f.write(f"vps-name={vps_name}\n")
+              f.write(f"vps-type={vps_type}\n")
+              f.write(f"project-name={project_name}\n")
+
+          if needs_custom:
+              print(f"Custom VPS required: {vps_name} ({vps_type})")
+          else:
+              print(f"Using shared worker: {server}")
+
+      - name: Provision Custom VPS
+        id: provision-vps
+        if: steps.check-vps.outputs.needs-custom-vps == 'true'
+        uses: ./.github-actions/actions/deploy/vps-provision
+        with:
+          vps-name: ${{ steps.check-vps.outputs.vps-name }}
+          project-name: ${{ steps.check-vps.outputs.project-name }}
+          server-type: ${{ steps.check-vps.outputs.vps-type }}
+          environment: production
+          hetzner-token: ${{ secrets.HETZNER_TOKEN }}
+          tailscale-auth-key: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          tf-api-token: ${{ secrets.TF_API_TOKEN }}
+          dokploy-url: ${{ secrets.DOKPLOY_URL }}
+          dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
+          dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
+          dokploy-ssh-key-id: ${{ secrets.DOKPLOY_SSH_KEY_ID }}
+
+      - name: Sync to Dokploy
+        id: sync
+        uses: ./.github-actions/actions/deploy/dokploy-sync
+        with:
+          config-file: ${{ inputs.config-file }}
+          defaults-file: .github-actions/config/dokploy-defaults.toml
+          environment: ${{ inputs.environment }}
+          pr-number: ${{ inputs.pr-number }}
+          dokploy-url: ${{ secrets.DOKPLOY_URL }}
+          dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
+          dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
+          tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          action: ${{ inputs.action }}
+
+      - name: Deployment Summary
+        if: inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
+        run: |
+          echo "## Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Domain | https://${{ steps.sync.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Project ID | \`${{ steps.sync.outputs.project-id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Application ID | \`${{ steps.sync.outputs.application-id }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.check-vps.outputs.needs-custom-vps }}" == "true" ]]; then
+            echo "| Custom VPS | \`${{ steps.check-vps.outputs.vps-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Cleanup Summary
+        if: inputs.action == 'cleanup' && steps.sync.outputs.success == 'true'
+        run: |
+          echo "## Preview Cleanup Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "PR #${{ inputs.pr-number }} preview environment has been cleaned up." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,412 @@
+name: 'Dokploy Sync'
+description: 'Sync project configuration to Dokploy and trigger deployment'
+author: 'NextNodeSolutions'
+
+inputs:
+  config-file:
+    description: 'Path to project dokploy.toml'
+    required: false
+    default: 'dokploy.toml'
+  defaults-file:
+    description: 'Path to defaults TOML file'
+    required: false
+    default: ''
+  environment:
+    description: 'Target environment: development, preview, production'
+    required: true
+  pr-number:
+    description: 'PR number (for preview deployments)'
+    required: false
+    default: ''
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-admin-email:
+    description: 'Dokploy admin email'
+    required: true
+  dokploy-admin-password:
+    description: 'Dokploy admin password'
+    required: true
+  tailscale-api-key:
+    description: 'Tailscale API key for server IP resolution'
+    required: true
+  cloudflare-api-token:
+    description: 'Cloudflare API token for DNS'
+    required: true
+  action:
+    description: 'Action to perform: deploy, cleanup'
+    required: false
+    default: 'deploy'
+
+outputs:
+  project-id:
+    description: 'Dokploy project ID'
+    value: ${{ steps.sync.outputs.project-id }}
+  application-id:
+    description: 'Dokploy application ID'
+    value: ${{ steps.sync.outputs.application-id }}
+  domain:
+    description: 'Deployed domain'
+    value: ${{ steps.sync.outputs.domain }}
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.sync.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install tomli requests
+
+    - name: Sync to Dokploy
+      id: sync
+      shell: python
+      env:
+        CONFIG_FILE: ${{ inputs.config-file }}
+        DEFAULTS_FILE: ${{ inputs.defaults-file }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        ACTION: ${{ inputs.action }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import json
+        import tomli
+        import requests
+        from pathlib import Path
+
+        # =================================================================
+        # CONFIGURATION
+        # =================================================================
+        CONFIG_FILE = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+        DEFAULTS_FILE = os.environ.get('DEFAULTS_FILE', '')
+        ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+        PR_NUMBER = os.environ.get('PR_NUMBER', '')
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_EMAIL = os.environ['DOKPLOY_ADMIN_EMAIL']
+        DOKPLOY_PASSWORD = os.environ['DOKPLOY_ADMIN_PASSWORD']
+        TAILSCALE_API_KEY = os.environ['TAILSCALE_API_KEY']
+        CLOUDFLARE_TOKEN = os.environ['CLOUDFLARE_API_TOKEN']
+        ACTION = os.environ.get('ACTION', 'deploy')
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+            print(f"::set-output name={key}::{value}")
+
+        def deep_merge(base, override):
+            """Deep merge two dicts, override wins."""
+            result = base.copy()
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
+
+        # =================================================================
+        # LOAD AND MERGE CONFIGURATION
+        # =================================================================
+        print("::group::Loading configuration")
+
+        # Load defaults
+        defaults = {}
+        if DEFAULTS_FILE and Path(DEFAULTS_FILE).exists():
+            with open(DEFAULTS_FILE, 'rb') as f:
+                defaults = tomli.load(f)
+            print(f"Loaded defaults from: {DEFAULTS_FILE}")
+
+        # Load project config
+        if not Path(CONFIG_FILE).exists():
+            print(f"::error::Config file not found: {CONFIG_FILE}")
+            output('success', 'false')
+            sys.exit(1)
+
+        with open(CONFIG_FILE, 'rb') as f:
+            project_config = tomli.load(f)
+        print(f"Loaded project config from: {CONFIG_FILE}")
+
+        # Merge configs
+        config = deep_merge(defaults, project_config)
+        print(f"Merged configuration for project: {config.get('project', {}).get('name', 'unknown')}")
+        print("::endgroup::")
+
+        # =================================================================
+        # GENERATE DOMAIN
+        # =================================================================
+        print("::group::Generating domain")
+
+        base_domain = config.get('project', {}).get('domain', '')
+        if not base_domain:
+            print("::error::project.domain is required in dokploy.toml")
+            output('success', 'false')
+            sys.exit(1)
+
+        if ENVIRONMENT == 'production':
+            domain = base_domain
+        elif ENVIRONMENT == 'development':
+            domain = f"dev.{base_domain}"
+        elif ENVIRONMENT == 'preview' and PR_NUMBER:
+            domain = f"pr-{PR_NUMBER}.dev.{base_domain}"
+        else:
+            domain = f"{ENVIRONMENT}.{base_domain}"
+
+        print(f"Target domain: {domain}")
+        print("::endgroup::")
+
+        # =================================================================
+        # AUTHENTICATE WITH DOKPLOY
+        # =================================================================
+        print("::group::Authenticating with Dokploy")
+
+        try:
+            login_resp = requests.post(
+                f"{DOKPLOY_URL}/api/auth.signIn",
+                json={"email": DOKPLOY_EMAIL, "password": DOKPLOY_PASSWORD},
+                timeout=30
+            )
+            login_resp.raise_for_status()
+            token = login_resp.json().get('token')
+            if not token:
+                raise ValueError("No token in response")
+            print("Authentication successful")
+        except Exception as e:
+            print(f"::error::Failed to authenticate: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        print("::endgroup::")
+
+        # =================================================================
+        # CLEANUP (for PR close)
+        # =================================================================
+        if ACTION == 'cleanup':
+            print("::group::Cleanup preview deployment")
+            # Find and delete the preview application
+            try:
+                projects_resp = requests.get(f"{DOKPLOY_URL}/api/project.all", headers=headers, timeout=30)
+                projects = projects_resp.json() if projects_resp.ok else []
+
+                project_name = config.get('project', {}).get('name', '')
+                preview_name = f"{project_name}-pr-{PR_NUMBER}"
+
+                for project in projects:
+                    if project.get('name') == project_name:
+                        apps_resp = requests.get(
+                            f"{DOKPLOY_URL}/api/application.all",
+                            headers=headers,
+                            params={"projectId": project.get('projectId')},
+                            timeout=30
+                        )
+                        apps = apps_resp.json() if apps_resp.ok else []
+                        for app in apps:
+                            if app.get('name') == preview_name:
+                                requests.post(
+                                    f"{DOKPLOY_URL}/api/application.delete",
+                                    headers=headers,
+                                    json={"applicationId": app.get('applicationId')},
+                                    timeout=30
+                                )
+                                print(f"Deleted preview application: {preview_name}")
+                                break
+            except Exception as e:
+                print(f"::warning::Cleanup failed: {e}")
+
+            output('success', 'true')
+            print("::endgroup::")
+            sys.exit(0)
+
+        # =================================================================
+        # GET OR CREATE PROJECT
+        # =================================================================
+        print("::group::Setting up Dokploy project")
+
+        project_name = config.get('project', {}).get('name', '')
+        if not project_name:
+            print("::error::project.name is required in dokploy.toml")
+            output('success', 'false')
+            sys.exit(1)
+
+        try:
+            projects_resp = requests.get(f"{DOKPLOY_URL}/api/project.all", headers=headers, timeout=30)
+            projects = projects_resp.json() if projects_resp.ok else []
+
+            project_id = None
+            for p in projects:
+                if p.get('name') == project_name:
+                    project_id = p.get('projectId')
+                    print(f"Found existing project: {project_name} ({project_id})")
+                    break
+
+            if not project_id:
+                create_resp = requests.post(
+                    f"{DOKPLOY_URL}/api/project.create",
+                    headers=headers,
+                    json={"name": project_name, "description": config.get('project', {}).get('description', '')},
+                    timeout=30
+                )
+                create_resp.raise_for_status()
+                project_id = create_resp.json().get('projectId')
+                print(f"Created project: {project_name} ({project_id})")
+        except Exception as e:
+            print(f"::error::Failed to setup project: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")
+
+        # =================================================================
+        # GET SERVER INFO
+        # =================================================================
+        print("::group::Resolving server")
+
+        env_config = config.get('environments', {}).get(ENVIRONMENT, {})
+        if ENVIRONMENT == 'preview':
+            env_config = config.get('environments', {}).get('preview', config.get('environments', {}).get('development', {}))
+
+        server_name = env_config.get('server', 'dev-worker' if ENVIRONMENT != 'production' else 'prod-worker')
+
+        # Override from environment-specific config in project
+        if ENVIRONMENT == 'production' and 'production' in config:
+            server_name = config['production'].get('server', server_name)
+
+        print(f"Target server: {server_name}")
+
+        # Get server ID from Dokploy
+        try:
+            servers_resp = requests.get(f"{DOKPLOY_URL}/api/server.all", headers=headers, timeout=30)
+            servers = servers_resp.json() if servers_resp.ok else []
+
+            server_id = None
+            for s in servers:
+                if s.get('name') == server_name:
+                    server_id = s.get('serverId')
+                    break
+
+            if not server_id:
+                print(f"::warning::Server {server_name} not found in Dokploy, using default")
+        except Exception as e:
+            print(f"::warning::Failed to get servers: {e}")
+            server_id = None
+
+        print("::endgroup::")
+
+        # =================================================================
+        # CREATE/UPDATE APPLICATION
+        # =================================================================
+        print("::group::Setting up application")
+
+        app_name = project_name if ENVIRONMENT == 'production' else f"{project_name}-{ENVIRONMENT}"
+        if ENVIRONMENT == 'preview' and PR_NUMBER:
+            app_name = f"{project_name}-pr-{PR_NUMBER}"
+
+        # Get build config
+        build_config = config.get('build', {})
+        build_type = build_config.get('type', 'dockerfile')
+
+        # Get resource config (merge defaults with environment-specific)
+        resources = config.get('resources', {}).copy()
+        if ENVIRONMENT == 'production' and 'production' in config:
+            resources.update({k: v for k, v in config['production'].items() if k in ['memory', 'cpu', 'replicas']})
+
+        try:
+            # Check if app exists
+            apps_resp = requests.get(
+                f"{DOKPLOY_URL}/api/application.all",
+                headers=headers,
+                timeout=30
+            )
+            apps = apps_resp.json() if apps_resp.ok else []
+
+            app_id = None
+            for a in apps:
+                if a.get('name') == app_name and a.get('projectId') == project_id:
+                    app_id = a.get('applicationId')
+                    print(f"Found existing application: {app_name} ({app_id})")
+                    break
+
+            if not app_id:
+                # Create application
+                app_data = {
+                    "name": app_name,
+                    "projectId": project_id,
+                    "buildType": build_type,
+                }
+                if server_id:
+                    app_data["serverId"] = server_id
+
+                create_app_resp = requests.post(
+                    f"{DOKPLOY_URL}/api/application.create",
+                    headers=headers,
+                    json=app_data,
+                    timeout=30
+                )
+                create_app_resp.raise_for_status()
+                app_id = create_app_resp.json().get('applicationId')
+                print(f"Created application: {app_name} ({app_id})")
+
+        except Exception as e:
+            print(f"::error::Failed to setup application: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")
+
+        # =================================================================
+        # CONFIGURE DOMAIN
+        # =================================================================
+        print("::group::Configuring domain")
+
+        try:
+            domain_data = {
+                "applicationId": app_id,
+                "host": domain,
+                "https": True,
+                "certificateType": "letsencrypt"
+            }
+
+            requests.post(
+                f"{DOKPLOY_URL}/api/domain.create",
+                headers=headers,
+                json=domain_data,
+                timeout=30
+            )
+            print(f"Domain configured: {domain}")
+        except Exception as e:
+            print(f"::warning::Domain configuration: {e}")
+
+        print("::endgroup::")
+
+        # =================================================================
+        # OUTPUT RESULTS
+        # =================================================================
+        output('project-id', project_id)
+        output('application-id', app_id)
+        output('domain', domain)
+        output('success', 'true')
+
+        print("")
+        print("=" * 60)
+        print(f"Project: {project_name}")
+        print(f"Application: {app_name}")
+        print(f"Domain: https://{domain}")
+        print(f"Environment: {ENVIRONMENT}")
+        print("=" * 60)
