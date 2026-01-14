@@ -83,49 +83,46 @@ runs:
 
         # =================================================================
         # STEP 2: Auto-setup Dokploy admin (first time only)
-        # Dokploy uses tRPC - must use batch format
+        # Dokploy uses Better-Auth at /api/auth/*
         # =================================================================
         echo ""
         echo "=== Checking Dokploy setup status ==="
 
-        # Build tRPC payload
-        TRPC_PAYLOAD=$(jq -n --arg email "$DOKPLOY_ADMIN_EMAIL" --arg password "$DOKPLOY_ADMIN_PASSWORD" \
-          '{"0":{"json":{"email":$email,"password":$password}}}')
-
-        # Try to create admin - only works on first-time setup
-        CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${DOKPLOY_URL}/api/trpc/auth.createAdmin?batch=1" \
+        # Try to create admin via sign-up - only works on first-time setup
+        CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${DOKPLOY_URL}/api/auth/sign-up/email" \
           -H "Content-Type: application/json" \
-          -d "$TRPC_PAYLOAD")
+          -d "{\"email\": \"${DOKPLOY_ADMIN_EMAIL}\", \"password\": \"${DOKPLOY_ADMIN_PASSWORD}\", \"name\": \"Admin\"}")
 
         HTTP_CODE=$(echo "$CREATE_RESPONSE" | tail -1)
         RESPONSE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')
 
         if [[ "$HTTP_CODE" == "200" ]]; then
-          # Check if tRPC response indicates success
-          if echo "$RESPONSE_BODY" | jq -e '.[0].result.data.json' > /dev/null 2>&1; then
+          if echo "$RESPONSE_BODY" | jq -e '.token' > /dev/null 2>&1; then
             echo "First-time setup: Admin user created"
             FIRST_TIME_SETUP="true"
+            # Use the token from sign-up response
+            AUTH_TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token')
           else
-            echo "Admin user already exists (expected on subsequent runs)"
+            echo "Sign-up response unexpected: $RESPONSE_BODY"
           fi
         else
           echo "Admin user already exists (expected on subsequent runs)"
         fi
 
         # =================================================================
-        # STEP 3: Login to get JWT token (tRPC format)
+        # STEP 3: Login to get auth token (Better-Auth)
         # =================================================================
         echo ""
         echo "=== Authenticating with Dokploy ==="
 
-        LOGIN_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/trpc/auth.signIn?batch=1" \
+        LOGIN_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
           -H "Content-Type: application/json" \
-          -d "$TRPC_PAYLOAD")
+          -d "{\"email\": \"${DOKPLOY_ADMIN_EMAIL}\", \"password\": \"${DOKPLOY_ADMIN_PASSWORD}\"}")
 
-        # Extract token from tRPC response: [{"result":{"data":{"json":{"token":"..."}}}}]
-        JWT_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.[0].result.data.json.token // empty')
+        # Extract token from Better-Auth response
+        AUTH_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty')
 
-        if [[ -z "$JWT_TOKEN" ]]; then
+        if [[ -z "$AUTH_TOKEN" ]]; then
           echo "::error::Failed to authenticate with Dokploy"
           echo "Response: $LOGIN_RESPONSE"
           echo "success=false" >> $GITHUB_OUTPUT
@@ -135,7 +132,7 @@ runs:
 
         echo "Authentication successful"
 
-        # API helper function (tRPC format)
+        # API helper function (tRPC format with Better-Auth token)
         # Usage: dokploy_api GET "sshKey.all"
         # Usage: dokploy_api POST "sshKey.create" '{"name":"...","publicKey":"..."}'
         dokploy_api() {
@@ -146,7 +143,7 @@ runs:
           if [[ "$method" == "GET" ]]; then
             # GET requests use query params: ?batch=1&input={"0":{"json":null}}
             local response=$(curl -sf -X GET "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%7D%7D" \
-              -H "Authorization: Bearer ${JWT_TOKEN}" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
               -H "Content-Type: application/json" 2>/dev/null)
             # Extract data from tRPC response
             echo "$response" | jq -r '.[0].result.data.json // empty' 2>/dev/null || echo ""
@@ -154,7 +151,7 @@ runs:
             # POST requests use body: {"0":{"json":{...}}}
             local trpc_data=$(echo "$data" | jq -c '{"0":{"json":.}}' 2>/dev/null || echo '{"0":{"json":{}}}')
             local response=$(curl -sf -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
-              -H "Authorization: Bearer ${JWT_TOKEN}" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
               -H "Content-Type: application/json" \
               -d "$trpc_data" 2>/dev/null)
             # Extract data from tRPC response
