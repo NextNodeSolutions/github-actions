@@ -50,7 +50,7 @@ runs:
     - name: Lookup Cloudflare Zone
       id: zone-lookup
       if: ${{ inputs.cloudflare-zone-id == '' }}
-      uses: ./actions/utilities/cloudflare-zone-lookup
+      uses: nextnodesolutions/github-actions/actions/utilities/cloudflare-zone-lookup@main
       with:
         domain: ${{ inputs.domain }}
         cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
