@@ -73,9 +73,9 @@ github-actions/
 2. **Atomic Actions**: Each action in `/actions/` does ONE thing well
 3. **Global Actions Preservation**: `test/` and `health-check/` remain at root for external compatibility
 4. **No Package Manager Conditionals**: pnpm is hardcoded everywhere - no switches or alternatives
-5. **Workflow Isolation**: 
+5. **Workflow Isolation**:
    - External workflows use `workflow_call` trigger only
-   - Internal tests use `workflow_dispatch` to prevent recursion
+   - Internal validation uses actionlint (lightweight, single job)
 6. **Maximum Reusability**: Actions can be used individually or composed
 7. **DRY Principle**: No code duplication, shared logic in atomic actions
 8. **Clean Logging**: All actions use GitHub groups and timing metrics
@@ -161,21 +161,23 @@ Internal testing uses `internal-tests.yml` with manual trigger only to avoid rec
 4. Use atomic actions from `/actions/` - don't duplicate logic
 
 ### Testing Changes
-1. **Always use act for local testing** before finishing a branch
-2. Use `internal-tests.yml` for testing within this repo
-3. Test with `workflow_dispatch` event
-4. Never commit test workflows that trigger on push
 
-**Required local testing workflow:**
+Internal validation is handled by `internal-tests.yml` which:
+- Runs **actionlint** for YAML/workflow validation
+- Validates action.yml structure (required fields)
+- Triggers on PRs to main (when actions/workflows change)
+- Can be manually triggered via workflow_dispatch
+
+**Local testing:**
 ```bash
-# Install act if not already installed
-brew install act
+# Install actionlint for local validation
+brew install actionlint
 
-# Test workflow locally before push
+# Run actionlint locally (same as CI)
+actionlint
+
+# Test workflow with act (optional)
 act workflow_dispatch -W .github/workflows/internal-tests.yml
-
-# Test specific action changes
-act -j test-action --use-actions-cache false
 ```
 
 ## Common Tasks
@@ -201,7 +203,10 @@ touch actions/utilities/my-new-action/action.yml
 
 ### Testing Actions Locally
 ```bash
-# Use act or similar tools
+# Run actionlint for YAML validation
+actionlint
+
+# Optionally use act for full workflow simulation
 act workflow_dispatch -W .github/workflows/internal-tests.yml
 ```
 
@@ -214,7 +219,16 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: Railway + Cloudflare Sub-subdomain Fix (2025)
+### Latest Migration: Internal Tests Optimization (2025-01)
+Replaced inefficient 53-job matrix system with single actionlint job:
+- **Problem**: `internal-tests.yml` consumed 1953 minutes/month (71% of total) with 53 parallel jobs per push
+- **Root Cause**: Static validation tests running as matrix jobs, billed as 53+ minutes minimum per run
+- **Solution**: Replaced with single actionlint job (~1 minute per run)
+- **Removed**: Unused test utilities (`comprehensive-test`, `action-discovery`, `architecture-validator`, `reference-validator`, `test-summary`)
+- **Trigger Change**: Now runs on PRs to main (with path filters) + manual dispatch, NOT on every push
+- **Savings**: ~99% reduction in CI minutes
+
+### Previous Migration: Railway + Cloudflare Sub-subdomain Fix (2025)
 Fixed critical Railway CNAME detection issue with Cloudflare proxied sub-subdomains:
 - **Problem**: Railway couldn't detect CNAME for `pr-56.dev.nextnode.fr` (3+ level domains)
 - **Root Cause**: Cloudflare proxy converts CNAME → A records, blocking Railway SSL provisioning
@@ -306,10 +320,9 @@ Reorganized repository by domain for better maintainability:
 ### Common Issues
 
 1. **"Action not found"**: Check path - use domain-based paths like `actions/build/install`, not `actions/install`
-2. **"Workflow not accessible"**: Ensure using `workflow_call` trigger  
+2. **"Workflow not accessible"**: Ensure using `workflow_call` trigger
 3. **"pnpm not found"**: Always use `actions/node-setup-complete` action first
-4. **"Recursion detected"**: Check triggers - no push/PR triggers on this repo
-5. **"Global action moved"**: Only `node-setup-complete/`, `test/` and `health-check/` remain at root level
+4. **"Global action moved"**: Only `node-setup-complete/`, `test/` and `health-check/` remain at root level
 
 ### Debug Mode
 

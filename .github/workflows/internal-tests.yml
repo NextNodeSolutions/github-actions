@@ -1,256 +1,84 @@
----
-name: Internal Test Workflows
+name: Validate Actions
 
-# INTERNAL WORKFLOW - For testing GitHub Actions within this repository only
-# This workflow is NOT accessible from external repositories
-# Runs automatically on every push and can be triggered manually
-# Enhanced Architecture: YAML Validation + Discovery → [Enhanced Tests in
-# parallel] → Architecture Validation → Summary
+# INTERNAL WORKFLOW - Validates all GitHub Actions and workflows in this repository
+# Runs on PRs to main (when actions/workflows change) and manual trigger
 
 on:
-  push:
-    branches:
-      - '**'  # All branches including main
+  pull_request:
+    branches: [main]
+    paths:
+      - 'actions/**'
+      - '.github/workflows/**'
   workflow_dispatch:
-    inputs:
-      test-scope:
-        description: 'Scope of tests to run'
-        required: false
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - atomic
-          - packs
-          - architecture
-      debug:
-        description: 'Enable debug logging'
-        required: false
-        default: false
-        type: choice
-        options:
-          - true
-          - false
 
-# Prevent concurrent test runs
 concurrency:
-  group: internal-tests-${{ github.ref }}
+  group: validate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Step 1: Enhanced YAML validation + Action/Workflow discovery
-  validate-yaml-and-discovery:
-    name: 🔍 YAML Validation + Discovery
+  validate:
+    name: Validate Workflows & Actions
     runs-on: ubuntu-latest
-    outputs:
-      available-actions: ${{ steps.discovery.outputs.available-actions }}
-      available-workflows: ${{ steps.discovery.outputs.available-workflows }}
-      action-paths: ${{ steps.discovery.outputs.action-paths }}
-      workflow-paths: ${{ steps.discovery.outputs.workflow-paths }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate all YAML files
-        run: |
-          echo "::group::📋 Validating YAML Files"
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@v1
+        with:
+          reporter: github-pr-check
+          fail_on_error: true
 
-          # Simple YAML validation - check basic structure
-          YAML_FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \))
-          YAML_COUNT=$(echo "$YAML_FILES" | wc -l)
-          
-          echo "• Found $YAML_COUNT YAML files to validate"
-          
-          # Basic validation - check each file can be read
+      - name: Validate action.yml structure
+        shell: bash
+        run: |
+          echo "::group::Validating action.yml files"
           ERRORS=0
-          while IFS= read -r file; do
-            if [[ -n "$file" && -f "$file" ]]; then
-              echo "• Checking: $file"
-              
-              # Basic syntax check - look for obvious issues
-              if grep -q "^[[:space:]]*-[[:space:]]*$" "$file"; then
-                echo "  ❌ Invalid: empty list item"
-                ERRORS=$((ERRORS + 1))
-              elif [[ ! -s "$file" ]]; then
-                echo "  ❌ Invalid: empty file"
-                ERRORS=$((ERRORS + 1))
-              else
-                echo "  ✅ Basic structure valid"
-              fi
+          TOTAL=0
+
+          while IFS= read -r action; do
+            TOTAL=$((TOTAL + 1))
+            echo "Checking: $action"
+
+            # Check required fields
+            if ! grep -q "^name:" "$action"; then
+              echo "  Missing 'name' field"
+              ERRORS=$((ERRORS + 1))
+              continue
             fi
-          done <<< "$YAML_FILES"
-          
-          if [[ $ERRORS -eq 0 ]]; then
-            echo "✅ All $YAML_COUNT YAML files passed basic validation!"
-          else
-            echo "❌ Found $ERRORS YAML issues"
+
+            if ! grep -q "^description:" "$action"; then
+              echo "  Missing 'description' field"
+              ERRORS=$((ERRORS + 1))
+              continue
+            fi
+
+            if ! grep -q "^runs:" "$action"; then
+              echo "  Missing 'runs' field"
+              ERRORS=$((ERRORS + 1))
+              continue
+            fi
+
+            echo "  Valid"
+          done < <(find actions -name "action.yml" -type f)
+
+          echo ""
+          if [[ $ERRORS -gt 0 ]]; then
+            echo "Found $ERRORS validation errors in $TOTAL actions"
             exit 1
           fi
-          
+
+          echo "All $TOTAL actions are valid"
           echo "::endgroup::"
 
-      - name: Discover actions and workflows
-        id: discovery
-        uses: ./actions/utilities/action-discovery
-
-  # Step 2A: Enhanced atomic action tests with reference validation
-  test-atomic-actions:
-    name: 🔬 Enhanced Atomic Tests
-    needs: [validate-yaml-and-discovery]
-    if: >
-      (github.event_name == 'push' ||
-      inputs.test-scope == 'all' ||
-      inputs.test-scope == 'atomic') &&
-      needs.validate-yaml-and-discovery.result == 'success'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        action: ${{ fromJSON(needs.validate-yaml-and-discovery.outputs.available-actions) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Enhanced test for ${{ matrix.action.name }}
-        uses: ./actions/utilities/comprehensive-test
-        with:
-          test-mode: 'atomic-action'
-          target-path: ${{ matrix.action.path }}
-          test-name: ${{ matrix.action.name }}
-          validate-dependencies: 'true'
-          create-test-project: 'false'
-          available-actions: ${{ needs.validate-yaml-and-discovery.outputs.available-actions }}
-          enable-reference-validation: 'true'
-
-  # Step 2B: Enhanced workflow tests with reference validation
-  test-pack-workflows:
-    name: 📦 Enhanced Workflow Tests
-    needs: [validate-yaml-and-discovery]
-    if: >
-      (github.event_name == 'push' ||
-      inputs.test-scope == 'all' ||
-      inputs.test-scope == 'packs') &&
-      needs.validate-yaml-and-discovery.result == 'success'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        workflow: ${{ fromJSON(needs.validate-yaml-and-discovery.outputs.available-workflows) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Enhanced test for ${{ matrix.workflow.name }}
-        uses: ./actions/utilities/comprehensive-test
-        with:
-          test-mode: 'pack-workflow'
-          target-path: ${{ matrix.workflow.path }}
-          test-name: ${{ matrix.workflow.name }}
-          validate-dependencies: 'false'
-          create-test-project: 'false'
-          available-actions: ${{ needs.validate-yaml-and-discovery.outputs.available-actions }}
-          enable-reference-validation: 'true'
-
-  # Step 3: Architecture consistency validation
-  test-architecture:
-    name: 🏗️ Architecture Validation
-    needs: [validate-yaml-and-discovery, test-atomic-actions, test-pack-workflows]
-    if: >
-      always() &&
-      (github.event_name == 'push' ||
-      inputs.test-scope == 'all' ||
-      inputs.test-scope == 'architecture') &&
-      needs.validate-yaml-and-discovery.result == 'success' &&
-      (needs.test-atomic-actions.result == 'success' ||
-      needs.test-atomic-actions.result == 'skipped') &&
-      (needs.test-pack-workflows.result == 'success' ||
-      needs.test-pack-workflows.result == 'skipped')
-    runs-on: ubuntu-latest
-    outputs:
-      architecture-result: ${{ steps.arch-validation.outputs.validation-result }}
-      issues-found: ${{ steps.arch-validation.outputs.issues-found }}
-      domain-report: ${{ steps.arch-validation.outputs.domain-report }}
-      security-report: ${{ steps.arch-validation.outputs.security-report }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Validate repository architecture
-        id: arch-validation
-        uses: ./actions/utilities/architecture-validator
-        with:
-          available-actions: ${{ needs.validate-yaml-and-discovery.outputs.available-actions }}
-          available-workflows: ${{ needs.validate-yaml-and-discovery.outputs.available-workflows }}
-
-      - name: Display architecture reports
+      - name: Summary
         run: |
-          echo "::group::📊 Architecture Reports"
-          
-          echo "### Domain Organization Report"
-          echo "${{ steps.arch-validation.outputs.domain-report }}"
-          
-          echo ""
-          echo "### Security Report"
-          echo "${{ steps.arch-validation.outputs.security-report }}"
-          
-          echo "::endgroup::"
+          WORKFLOW_COUNT=$(find .github/workflows -name '*.yml' | wc -l | tr -d ' ')
+          ACTION_COUNT=$(find actions -name 'action.yml' | wc -l | tr -d ' ')
 
-  # Step 4: Enhanced test summary with detailed reporting
-  test-summary:
-    name: 📊 Enhanced Test Summary
-    needs:
-      - validate-yaml-and-discovery
-      - test-atomic-actions
-      - test-pack-workflows
-      - test-architecture
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate comprehensive test report
-        uses: ./actions/utilities/test-summary
-        with:
-          test-results: |
-            [
-              {
-                "name": "YAML Validation + Discovery",
-                "result": "${{ needs.validate-yaml-and-discovery.result }}"
-              },
-              {
-                "name": "Enhanced Atomic Actions Tests",
-                "result": "${{ needs.test-atomic-actions.result }}"
-              },
-              {
-                "name": "Enhanced Pack Workflows Tests", 
-                "result": "${{ needs.test-pack-workflows.result }}"
-              },
-              {
-                "name": "Architecture Validation",
-                "result": "${{ needs.test-architecture.result }}"
-              }
-            ]
-          title: '🧪 Enhanced Internal Test Results'
-          additional-info: |
-            **Enhanced Test Flow**: YAML + Discovery → [Enhanced Atomic + 
-            Workflow Tests] → Architecture Validation → Summary
-
-            **New Features**:
-            • ✅ Centralized action/workflow discovery
-            • ✅ Reference validation (uses: statements)  
-            • ✅ Architecture consistency checks
-            • ✅ Security pattern detection
-            • ✅ Domain organization validation
-
-            **Architecture Summary**:
-            • Issues found: ${{ needs.test-architecture.outputs.issues-found || '0' }}
-            • Architecture result: ${{ needs.test-architecture.outputs.architecture-result || 'skipped' }}
-
-            **Trigger**: ${{ github.event_name == 'workflow_dispatch'
-            && format('Manual trigger (debug: {0})', inputs.debug)
-            || format('Automatic trigger on {0}', github.ref_name) }}
-
-            **Scope**: ${{ github.event_name == 'workflow_dispatch'
-            && inputs.test-scope || 'all' }}
-          fail-on-error: true
+          echo "## Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflows validated**: $WORKFLOW_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Actions validated**: $ACTION_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All checks passed." >> $GITHUB_STEP_SUMMARY
