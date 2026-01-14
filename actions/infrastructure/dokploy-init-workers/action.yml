@@ -1,0 +1,295 @@
+name: 'Dokploy Initialize Workers'
+description: 'Auto-setup Dokploy and register remote servers as workers'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL (e.g., https://admin.nextnode.fr)'
+    required: true
+  dokploy-admin-email:
+    description: 'Dokploy admin email (for auto-setup)'
+    required: true
+  dokploy-admin-password:
+    description: 'Dokploy admin password (for auto-setup)'
+    required: true
+  dokploy-ssh-private-key:
+    description: 'SSH private key to import into Dokploy for worker access'
+    required: true
+  tailscale-api-key:
+    description: 'Tailscale API key for worker IP resolution'
+    required: true
+  target:
+    description: 'Target server(s) to initialize: all, dev-worker, prod-worker'
+    required: false
+    default: 'all'
+  max-retries:
+    description: 'Max retries for Tailscale IP resolution'
+    required: false
+    default: '12'
+  retry-delay:
+    description: 'Delay between retries in seconds'
+    required: false
+    default: '10'
+
+outputs:
+  success:
+    description: 'Whether initialization succeeded'
+    value: ${{ steps.init.outputs.success }}
+  initialized-workers:
+    description: 'Comma-separated list of initialized workers'
+    value: ${{ steps.init.outputs.initialized-workers }}
+  first-time-setup:
+    description: 'Whether this was first-time Dokploy setup'
+    value: ${{ steps.init.outputs.first-time-setup }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Initialize Dokploy and Workers
+      id: init
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        DOKPLOY_SSH_PRIVATE_KEY: ${{ inputs.dokploy-ssh-private-key }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        TARGET: ${{ inputs.target }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
+      run: |
+        echo "::group::Dokploy Worker Initialization"
+
+        FIRST_TIME_SETUP="false"
+
+        # =================================================================
+        # STEP 1: Wait for Dokploy to be ready
+        # =================================================================
+        echo "Waiting for Dokploy to be ready..."
+        for i in $(seq 1 30); do
+          if curl -sf "${DOKPLOY_URL}" > /dev/null 2>&1; then
+            echo "Dokploy is responding"
+            break
+          fi
+          if [[ $i -eq 30 ]]; then
+            echo "::error::Dokploy did not become ready after 5 minutes"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "Attempt $i/30: waiting 10s..."
+          sleep 10
+        done
+
+        # =================================================================
+        # STEP 2: Auto-setup Dokploy admin (first time only)
+        # =================================================================
+        echo ""
+        echo "=== Checking Dokploy setup status ==="
+
+        # Try to create admin - only works on first-time setup
+        CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${DOKPLOY_URL}/api/auth.createAdmin" \
+          -H "Content-Type: application/json" \
+          -d "{\"email\": \"${DOKPLOY_ADMIN_EMAIL}\", \"password\": \"${DOKPLOY_ADMIN_PASSWORD}\"}")
+
+        HTTP_CODE=$(echo "$CREATE_RESPONSE" | tail -1)
+
+        if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
+          echo "First-time setup: Admin user created"
+          FIRST_TIME_SETUP="true"
+        else
+          echo "Admin user already exists (expected on subsequent runs)"
+        fi
+
+        # =================================================================
+        # STEP 3: Login to get JWT token
+        # =================================================================
+        echo ""
+        echo "=== Authenticating with Dokploy ==="
+
+        LOGIN_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/auth.signIn" \
+          -H "Content-Type: application/json" \
+          -d "{\"email\": \"${DOKPLOY_ADMIN_EMAIL}\", \"password\": \"${DOKPLOY_ADMIN_PASSWORD}\"}")
+
+        # Extract token from response
+        JWT_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty')
+
+        if [[ -z "$JWT_TOKEN" ]]; then
+          echo "::error::Failed to authenticate with Dokploy"
+          echo "Response: $LOGIN_RESPONSE"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "Authentication successful"
+
+        # API helper function
+        dokploy_api() {
+          local method="$1"
+          local endpoint="$2"
+          local data="${3:-}"
+
+          if [[ "$method" == "GET" ]]; then
+            curl -sf -X GET "${DOKPLOY_URL}/api/${endpoint}" \
+              -H "Authorization: Bearer ${JWT_TOKEN}" \
+              -H "Content-Type: application/json" 2>/dev/null || echo ""
+          else
+            curl -sf -X POST "${DOKPLOY_URL}/api/${endpoint}" \
+              -H "Authorization: Bearer ${JWT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$data" 2>/dev/null || echo ""
+          fi
+        }
+
+        # =================================================================
+        # STEP 4: Import SSH key into Dokploy
+        # =================================================================
+        echo ""
+        echo "=== Importing SSH key into Dokploy ==="
+
+        SSH_KEY_NAME="nextnode-dokploy-ci"
+
+        # Check if key already exists
+        EXISTING_KEYS=$(dokploy_api GET "sshKey.all")
+        EXISTING_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r ".[] | select(.name == \"$SSH_KEY_NAME\") | .sshKeyId" 2>/dev/null || echo "")
+
+        if [[ -z "$EXISTING_KEY_ID" ]]; then
+          echo "Importing SSH key: $SSH_KEY_NAME"
+
+          # Extract public key from private key
+          echo "$DOKPLOY_SSH_PRIVATE_KEY" > /tmp/dokploy_key
+          chmod 600 /tmp/dokploy_key
+          PUBLIC_KEY=$(ssh-keygen -y -f /tmp/dokploy_key 2>/dev/null)
+          rm -f /tmp/dokploy_key
+
+          if [[ -z "$PUBLIC_KEY" ]]; then
+            echo "::error::Failed to extract public key from private key"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          CREATE_KEY_RESPONSE=$(dokploy_api POST "sshKey.create" "$(jq -n \
+            --arg name "$SSH_KEY_NAME" \
+            --arg publicKey "$PUBLIC_KEY" \
+            --arg privateKey "$DOKPLOY_SSH_PRIVATE_KEY" \
+            '{name: $name, publicKey: $publicKey, privateKey: $privateKey}')")
+
+          SSH_KEY_ID=$(echo "$CREATE_KEY_RESPONSE" | jq -r '.sshKeyId // empty')
+
+          if [[ -z "$SSH_KEY_ID" ]]; then
+            echo "::error::Failed to import SSH key"
+            echo "Response: $CREATE_KEY_RESPONSE"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          echo "SSH key imported: $SSH_KEY_ID"
+        else
+          SSH_KEY_ID="$EXISTING_KEY_ID"
+          echo "SSH key already exists: $SSH_KEY_ID"
+        fi
+
+        # =================================================================
+        # STEP 5: Register and setup workers
+        # =================================================================
+        echo ""
+        echo "=== Registering workers ==="
+
+        ALL_WORKERS="dev-worker prod-worker"
+        WORKERS=""
+        for w in $ALL_WORKERS; do
+          if [[ "$TARGET" == "all" || "$TARGET" == "$w" ]]; then
+            WORKERS="$WORKERS $w"
+          fi
+        done
+        WORKERS=$(echo "$WORKERS" | xargs)
+
+        if [[ -z "$WORKERS" ]]; then
+          echo "No workers to initialize for target: $TARGET"
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "initialized-workers=" >> $GITHUB_OUTPUT
+          echo "first-time-setup=$FIRST_TIME_SETUP" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        echo "Workers to initialize: $WORKERS"
+        INITIALIZED=""
+
+        for worker in $WORKERS; do
+          echo ""
+          echo "=== Processing: $worker ==="
+
+          # Get worker IP from Tailscale
+          WORKER_IP=""
+          for i in $(seq 1 "$MAX_RETRIES"); do
+            WORKER_IP=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+              "https://api.tailscale.com/api/v2/tailnet/-/devices" | \
+              jq -r ".devices[] | select(.hostname | startswith(\"$worker\")) | .addresses[0]" 2>/dev/null | head -1)
+
+            if [[ -n "$WORKER_IP" && "$WORKER_IP" != "null" ]]; then
+              echo "Found $worker at IP: $WORKER_IP"
+              break
+            fi
+            echo "Attempt $i/$MAX_RETRIES: waiting ${RETRY_DELAY}s..."
+            sleep "$RETRY_DELAY"
+          done
+
+          if [[ -z "$WORKER_IP" || "$WORKER_IP" == "null" ]]; then
+            echo "::warning::$worker not found in Tailscale after $MAX_RETRIES attempts, skipping"
+            continue
+          fi
+
+          # Check if server already exists
+          EXISTING_SERVERS=$(dokploy_api GET "server.all")
+          EXISTING_SERVER_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"$worker\") | .serverId" 2>/dev/null || echo "")
+
+          if [[ -n "$EXISTING_SERVER_ID" ]]; then
+            echo "Server $worker already registered (ID: $EXISTING_SERVER_ID)"
+            INITIALIZED="$INITIALIZED $worker"
+            continue
+          fi
+
+          # Register server
+          echo "Registering server: $worker ($WORKER_IP)"
+          CREATE_SERVER_RESPONSE=$(dokploy_api POST "server.create" "$(jq -n \
+            --arg name "$worker" \
+            --arg ipAddress "$WORKER_IP" \
+            --arg sshKeyId "$SSH_KEY_ID" \
+            '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId}')")
+
+          SERVER_ID=$(echo "$CREATE_SERVER_RESPONSE" | jq -r '.serverId // empty')
+
+          if [[ -z "$SERVER_ID" ]]; then
+            echo "::error::Failed to register $worker"
+            echo "Response: $CREATE_SERVER_RESPONSE"
+            continue
+          fi
+
+          echo "Server registered: $SERVER_ID"
+
+          # Setup server (installs Docker + Traefik)
+          echo "Setting up server (this may take a few minutes)..."
+          SETUP_RESPONSE=$(dokploy_api POST "server.setup" "$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')")
+
+          if [[ -n "$SETUP_RESPONSE" ]]; then
+            echo "$worker initialized successfully!"
+            INITIALIZED="$INITIALIZED $worker"
+          else
+            echo "::warning::Setup may have failed for $worker, check Dokploy UI"
+            INITIALIZED="$INITIALIZED $worker"
+          fi
+        done
+
+        INITIALIZED=$(echo "$INITIALIZED" | xargs | tr ' ' ',')
+        echo ""
+        echo "=== Initialization complete ==="
+        echo "Initialized workers: ${INITIALIZED:-none}"
+
+        echo "success=true" >> $GITHUB_OUTPUT
+        echo "initialized-workers=$INITIALIZED" >> $GITHUB_OUTPUT
+        echo "first-time-setup=$FIRST_TIME_SETUP" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
