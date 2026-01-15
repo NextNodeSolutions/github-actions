@@ -130,6 +130,24 @@ runs:
 
         echo "Authentication successful"
 
+        # Get organization ID from login response or user data
+        ORGANIZATION_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.user.activeOrganizationId // empty')
+        if [[ -z "$ORGANIZATION_ID" ]]; then
+          echo "Getting organization ID from API..."
+          # Query organizations endpoint
+          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/trpc/organization.all?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%7D%7D" \
+            -H "Content-Type: application/json")
+          ORGANIZATION_ID=$(echo "$ORG_RESPONSE" | jq -r '.[0].result.data.json[0].organizationId // empty')
+        fi
+
+        if [[ -z "$ORGANIZATION_ID" ]]; then
+          echo "::error::Could not get organization ID"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+        echo "Organization ID: $ORGANIZATION_ID"
+
         # API helper function (tRPC format with session cookies)
         # Usage: dokploy_api GET "sshKey.all"
         # Usage: dokploy_api POST "sshKey.create" '{"name":"...","publicKey":"..."}'
@@ -189,7 +207,8 @@ runs:
             --arg name "$SSH_KEY_NAME" \
             --arg publicKey "$PUBLIC_KEY" \
             --arg privateKey "$DOKPLOY_SSH_PRIVATE_KEY" \
-            '{name: $name, publicKey: $publicKey, privateKey: $privateKey, type: "ed25519"}')")
+            --arg organizationId "$ORGANIZATION_ID" \
+            '{name: $name, publicKey: $publicKey, privateKey: $privateKey, type: "ed25519", organizationId: $organizationId}')")
 
           SSH_KEY_ID=$(echo "$CREATE_KEY_RESPONSE" | jq -r '.sshKeyId // empty')
 
@@ -274,7 +293,8 @@ runs:
             --arg name "$worker" \
             --arg ipAddress "$WORKER_IP" \
             --arg sshKeyId "$SSH_KEY_ID" \
-            '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId}')")
+            --arg organizationId "$ORGANIZATION_ID" \
+            '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId, organizationId: $organizationId}')")
 
           SERVER_ID=$(echo "$CREATE_SERVER_RESPONSE" | jq -r '.serverId // empty')
 
