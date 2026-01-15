@@ -67,7 +67,7 @@ runs:
         # =================================================================
         echo "Waiting for Dokploy to be ready..."
         for i in $(seq 1 30); do
-          if curl -sf "${DOKPLOY_URL}" > /dev/null 2>&1; then
+          if curl -sf --connect-timeout 5 --max-time 10 "${DOKPLOY_URL}" > /dev/null 2>&1; then
             echo "Dokploy is responding"
             break
           fi
