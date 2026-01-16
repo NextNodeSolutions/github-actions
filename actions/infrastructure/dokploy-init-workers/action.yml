@@ -64,20 +64,22 @@ runs:
 
         # =================================================================
         # STEP 1: Wait for Dokploy to be ready
+        # GitHub Actions runners have unreliable Tailscale connectivity
+        # Wait up to 10 minutes for routes to establish and Dokploy to respond
         # =================================================================
-        echo "Waiting for Dokploy to be ready..."
-        for i in $(seq 1 30); do
-          if curl -sf --connect-timeout 5 --max-time 10 "${DOKPLOY_URL}" > /dev/null 2>&1; then
+        echo "Waiting for Dokploy to be ready at ${DOKPLOY_URL}..."
+        for i in $(seq 1 60); do
+          if curl -sf --connect-timeout 10 --max-time 15 "${DOKPLOY_URL}" > /dev/null 2>&1; then
             echo "Dokploy is responding"
             break
           fi
-          if [[ $i -eq 30 ]]; then
-            echo "::error::Dokploy did not become ready after 5 minutes"
+          if [[ $i -eq 60 ]]; then
+            echo "::error::Dokploy did not become ready after 10 minutes"
             echo "success=false" >> $GITHUB_OUTPUT
             echo "::endgroup::"
             exit 1
           fi
-          echo "Attempt $i/30: waiting 10s..."
+          echo "Attempt $i/60: waiting 10s..."
           sleep 10
         done
 
