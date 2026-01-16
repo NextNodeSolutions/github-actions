@@ -134,41 +134,24 @@ runs:
         echo "DEBUG: Login response: $LOGIN_RESPONSE"
 
         # =================================================================
-        # STEP 3.5: Generate API token for tRPC calls
-        # Dokploy tRPC API requires x-api-key header, not session cookies
+        # STEP 3.5: Extract API token from login response
+        # Better-Auth returns token directly in the login response
         # =================================================================
         echo ""
-        echo "=== Generating API token ==="
+        echo "=== Extracting API token ==="
 
-        # Generate API token using session cookie
-        TOKEN_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/user.generateToken?batch=1" \
-          -H "Content-Type: application/json" \
-          -d '{"0":{"json":null}}')
-        echo "DEBUG: Token response: $TOKEN_RESPONSE"
-
-        # Extract token from tRPC response
-        API_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.[0].result.data.json // .[0].result.data // empty')
+        # Extract token from login response (Better-Auth returns it directly)
+        API_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty')
 
         if [[ -z "$API_TOKEN" || "$API_TOKEN" == "null" ]]; then
-          echo "::warning::Could not generate API token, trying alternative method..."
-
-          # Try creating an API key with name
-          TOKEN_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/user.createApiKey?batch=1" \
-            -H "Content-Type: application/json" \
-            -d '{"0":{"json":{"name":"github-actions-ci"}}}')
-          echo "DEBUG: Create API key response: $TOKEN_RESPONSE"
-          API_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.[0].result.data.json // .[0].result.data // empty')
-        fi
-
-        if [[ -z "$API_TOKEN" || "$API_TOKEN" == "null" ]]; then
-          echo "::error::Failed to generate API token"
-          echo "Response: $TOKEN_RESPONSE"
+          echo "::error::No token in login response"
+          echo "Response: $LOGIN_RESPONSE"
           echo "success=false" >> $GITHUB_OUTPUT
           echo "::endgroup::"
           exit 1
         fi
 
-        echo "API token generated successfully"
+        echo "API token extracted successfully"
 
         # Get organization ID from login response or user data
         # Try multiple paths as Dokploy API structure may vary
