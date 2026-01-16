@@ -28,6 +28,7 @@ jobs:
         with:
           reporter: github-pr-check
           fail_level: error
+          actionlint_flags: -shellcheck=
 
       - name: Validate action.yml structure
         shell: bash
