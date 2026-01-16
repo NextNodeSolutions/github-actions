@@ -155,7 +155,6 @@ jobs:
 
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
-        with:
 
       - name: Merge PR and Create Tag
         id: merge
@@ -227,7 +226,6 @@ jobs:
 
       - name: Setup Environment
         uses: NextNodeSolutions/github-actions/actions/node-setup-complete@main
-        with:
 
       - name: Verify NPM Provenance
         uses: NextNodeSolutions/github-actions/actions/release/npm-provenance@main
