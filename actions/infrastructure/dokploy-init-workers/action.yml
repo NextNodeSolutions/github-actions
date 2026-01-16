@@ -133,6 +133,43 @@ runs:
         echo "Authentication successful"
         echo "DEBUG: Login response: $LOGIN_RESPONSE"
 
+        # =================================================================
+        # STEP 3.5: Generate API token for tRPC calls
+        # Dokploy tRPC API requires x-api-key header, not session cookies
+        # =================================================================
+        echo ""
+        echo "=== Generating API token ==="
+
+        # Generate API token using session cookie
+        TOKEN_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/user.generateToken?batch=1" \
+          -H "Content-Type: application/json" \
+          -d '{"0":{"json":null}}')
+        echo "DEBUG: Token response: $TOKEN_RESPONSE"
+
+        # Extract token from tRPC response
+        API_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.[0].result.data.json // .[0].result.data // empty')
+
+        if [[ -z "$API_TOKEN" || "$API_TOKEN" == "null" ]]; then
+          echo "::warning::Could not generate API token, trying alternative method..."
+
+          # Try creating an API key with name
+          TOKEN_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/user.createApiKey?batch=1" \
+            -H "Content-Type: application/json" \
+            -d '{"0":{"json":{"name":"github-actions-ci"}}}')
+          echo "DEBUG: Create API key response: $TOKEN_RESPONSE"
+          API_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.[0].result.data.json // .[0].result.data // empty')
+        fi
+
+        if [[ -z "$API_TOKEN" || "$API_TOKEN" == "null" ]]; then
+          echo "::error::Failed to generate API token"
+          echo "Response: $TOKEN_RESPONSE"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "API token generated successfully"
+
         # Get organization ID from login response or user data
         # Try multiple paths as Dokploy API structure may vary
         ORGANIZATION_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.user.activeOrganizationId // empty')
@@ -153,9 +190,10 @@ runs:
 
         if [[ -z "$ORGANIZATION_ID" ]]; then
           echo "Getting organization ID from organizations API..."
-          # Query organizations endpoint (REST format, not tRPC batch)
-          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/organization.all" \
-            -H "Content-Type: application/json")
+          # Query organizations endpoint using API token
+          ORG_RESPONSE=$(curl -s -X GET "${DOKPLOY_URL}/api/organization.all" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${API_TOKEN}")
           echo "DEBUG: Organization response: $ORG_RESPONSE"
           # REST format returns array directly, not tRPC batch wrapper
           ORGANIZATION_ID=$(echo "$ORG_RESPONSE" | jq -r '.[0].organizationId // .[0].id // empty')
@@ -170,6 +208,7 @@ runs:
         echo "Organization ID: $ORGANIZATION_ID"
 
         # API helper function for Dokploy tRPC API
+        # Uses x-api-key header for authentication (required by Dokploy tRPC)
         # GET: Uses REST format at /api/endpoint.method
         # POST: Uses tRPC mutation format at /api/trpc/endpoint.method
         # Usage: dokploy_api GET "sshKey.all"
@@ -181,16 +220,18 @@ runs:
 
           if [[ "$method" == "GET" ]]; then
             # GET queries use REST format
-            local response=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/${endpoint}" \
-              -H "Content-Type: application/json")
+            local response=$(curl -s "${DOKPLOY_URL}/api/${endpoint}" \
+              -H "Content-Type: application/json" \
+              -H "x-api-key: ${API_TOKEN}")
             echo "DEBUG: GET ${endpoint} response: $response" >&2
             echo "$response"
           else
             # POST mutations use tRPC format with batch wrapper
             local wrapped_data="{\"0\":{\"json\":${data}}}"
             echo "DEBUG: POST tRPC ${endpoint} with data: $wrapped_data" >&2
-            local response=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
+            local response=$(curl -s -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
               -H "Content-Type: application/json" \
+              -H "x-api-key: ${API_TOKEN}" \
               -d "$wrapped_data")
             echo "DEBUG: POST tRPC ${endpoint} response: $response" >&2
             # Extract result from tRPC batch response
