@@ -167,8 +167,9 @@ runs:
         fi
         echo "Organization ID: $ORGANIZATION_ID"
 
-        # API helper function (REST OpenAPI format with session cookies)
-        # Dokploy uses trpc-openapi which exposes REST endpoints at /api/endpoint.method
+        # API helper function for Dokploy tRPC API
+        # GET: Uses REST format at /api/endpoint.method
+        # POST: Uses tRPC mutation format at /api/trpc/endpoint.method
         # Usage: dokploy_api GET "sshKey.all"
         # Usage: dokploy_api POST "sshKey.create" '{"name":"...","publicKey":"..."}'
         dokploy_api() {
@@ -177,17 +178,21 @@ runs:
           local data="${3:-}"
 
           if [[ "$method" == "GET" ]]; then
+            # GET queries use REST format
             local response=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/${endpoint}" \
               -H "Content-Type: application/json")
             echo "DEBUG: GET ${endpoint} response: $response" >&2
             echo "$response"
           else
-            echo "DEBUG: POST ${endpoint} with data: $data" >&2
-            local response=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/${endpoint}" \
+            # POST mutations use tRPC format with batch wrapper
+            local wrapped_data="{\"0\":{\"json\":${data}}}"
+            echo "DEBUG: POST tRPC ${endpoint} with data: $wrapped_data" >&2
+            local response=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
               -H "Content-Type: application/json" \
-              -d "$data")
-            echo "DEBUG: POST ${endpoint} response: $response" >&2
-            echo "$response"
+              -d "$wrapped_data")
+            echo "DEBUG: POST tRPC ${endpoint} response: $response" >&2
+            # Extract result from tRPC batch response
+            echo "$response" | jq -r '.[0].result.data.json // .[0].result.data // .[0].error // .'
           fi
         }
 
