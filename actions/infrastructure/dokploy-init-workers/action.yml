@@ -223,7 +223,8 @@ runs:
             --arg name "$SSH_KEY_NAME" \
             --arg publicKey "$PUBLIC_KEY" \
             --arg privateKey "$DOKPLOY_SSH_PRIVATE_KEY" \
-            '{name: $name, publicKey: $publicKey, privateKey: $privateKey}')")
+            --arg organizationId "$ORGANIZATION_ID" \
+            '{name: $name, publicKey: $publicKey, privateKey: $privateKey, organizationId: $organizationId}')")
 
           SSH_KEY_ID=$(echo "$CREATE_KEY_RESPONSE" | jq -r '.sshKeyId // empty')
 
