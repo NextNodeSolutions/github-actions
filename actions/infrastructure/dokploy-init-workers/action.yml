@@ -239,11 +239,16 @@ runs:
             --arg organizationId "$ORGANIZATION_ID" \
             '{name: $name, publicKey: $publicKey, privateKey: $privateKey, organizationId: $organizationId}')")
 
-          SSH_KEY_ID=$(echo "$CREATE_KEY_RESPONSE" | jq -r '.sshKeyId // empty')
+          # tRPC mutations may return void/null on success - query to get the key ID
+          echo "Verifying SSH key was created..."
+          sleep 1
+          CREATED_KEYS=$(dokploy_api GET "sshKey.all")
+          SSH_KEY_ID=$(echo "$CREATED_KEYS" | jq -r ".[] | select(.name == \"$SSH_KEY_NAME\") | .sshKeyId" 2>/dev/null || echo "")
 
           if [[ -z "$SSH_KEY_ID" ]]; then
-            echo "::error::Failed to import SSH key"
-            echo "Response: $CREATE_KEY_RESPONSE"
+            echo "::error::Failed to import SSH key - key not found after creation"
+            echo "Create response: $CREATE_KEY_RESPONSE"
+            echo "Keys after creation: $CREATED_KEYS"
             echo "success=false" >> $GITHUB_OUTPUT
             echo "::endgroup::"
             exit 1
@@ -324,11 +329,16 @@ runs:
             --arg sshKeyId "$SSH_KEY_ID" \
             '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId, serverType: "deploy"}')")
 
-          SERVER_ID=$(echo "$CREATE_SERVER_RESPONSE" | jq -r '.serverId // empty')
+          # tRPC mutations may return void/null on success - query to get the server ID
+          echo "Verifying server was created..."
+          sleep 1
+          CREATED_SERVERS=$(dokploy_api GET "server.all")
+          SERVER_ID=$(echo "$CREATED_SERVERS" | jq -r ".[] | select(.name == \"$worker\") | .serverId" 2>/dev/null || echo "")
 
           if [[ -z "$SERVER_ID" ]]; then
-            echo "::error::Failed to register $worker"
-            echo "Response: $CREATE_SERVER_RESPONSE"
+            echo "::error::Failed to register $worker - server not found after creation"
+            echo "Create response: $CREATE_SERVER_RESPONSE"
+            echo "Servers after creation: $CREATED_SERVERS"
             continue
           fi
 
