@@ -134,24 +134,9 @@ runs:
         echo "DEBUG: Login response: $LOGIN_RESPONSE"
 
         # =================================================================
-        # STEP 3.5: Extract API token from login response
-        # Better-Auth returns token directly in the login response
+        # STEP 3.5: Get organization ID
+        # Session cookies stored in COOKIE_JAR are used for all API calls
         # =================================================================
-        echo ""
-        echo "=== Extracting API token ==="
-
-        # Extract token from login response (Better-Auth returns it directly)
-        API_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty')
-
-        if [[ -z "$API_TOKEN" || "$API_TOKEN" == "null" ]]; then
-          echo "::error::No token in login response"
-          echo "Response: $LOGIN_RESPONSE"
-          echo "success=false" >> $GITHUB_OUTPUT
-          echo "::endgroup::"
-          exit 1
-        fi
-
-        echo "API token extracted successfully"
 
         # Get organization ID from login response or user data
         # Try multiple paths as Dokploy API structure may vary
@@ -173,10 +158,9 @@ runs:
 
         if [[ -z "$ORGANIZATION_ID" ]]; then
           echo "Getting organization ID from organizations API..."
-          # Query organizations endpoint using API token
-          ORG_RESPONSE=$(curl -s -X GET "${DOKPLOY_URL}/api/organization.all" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: ${API_TOKEN}")
+          # Query organizations endpoint using session cookie
+          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/organization.all" \
+            -H "Content-Type: application/json")
           echo "DEBUG: Organization response: $ORG_RESPONSE"
           # REST format returns array directly, not tRPC batch wrapper
           ORGANIZATION_ID=$(echo "$ORG_RESPONSE" | jq -r '.[0].organizationId // .[0].id // empty')
@@ -191,7 +175,7 @@ runs:
         echo "Organization ID: $ORGANIZATION_ID"
 
         # API helper function for Dokploy tRPC API
-        # Uses x-api-key header for authentication (required by Dokploy tRPC)
+        # Uses session cookies for authentication (Better-Auth)
         # GET: Uses REST format at /api/endpoint.method
         # POST: Uses tRPC mutation format at /api/trpc/endpoint.method
         # Usage: dokploy_api GET "sshKey.all"
@@ -202,19 +186,17 @@ runs:
           local data="${3:-}"
 
           if [[ "$method" == "GET" ]]; then
-            # GET queries use REST format
-            local response=$(curl -s "${DOKPLOY_URL}/api/${endpoint}" \
-              -H "Content-Type: application/json" \
-              -H "x-api-key: ${API_TOKEN}")
+            # GET queries use REST format with session cookie
+            local response=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/${endpoint}" \
+              -H "Content-Type: application/json")
             echo "DEBUG: GET ${endpoint} response: $response" >&2
             echo "$response"
           else
-            # POST mutations use tRPC format with batch wrapper
+            # POST mutations use tRPC format with batch wrapper and session cookie
             local wrapped_data="{\"0\":{\"json\":${data}}}"
             echo "DEBUG: POST tRPC ${endpoint} with data: $wrapped_data" >&2
-            local response=$(curl -s -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
+            local response=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
               -H "Content-Type: application/json" \
-              -H "x-api-key: ${API_TOKEN}" \
               -d "$wrapped_data")
             echo "DEBUG: POST tRPC ${endpoint} response: $response" >&2
             # Extract result from tRPC batch response
