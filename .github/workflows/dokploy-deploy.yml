@@ -27,9 +27,6 @@ on:
         default: 'deploy'
         type: string
     secrets:
-      DOKPLOY_URL:
-        description: 'Dokploy instance URL'
-        required: true
       DOKPLOY_ADMIN_EMAIL:
         description: 'Dokploy admin email'
         required: true
@@ -74,6 +71,9 @@ on:
       skipped:
         description: 'Whether deployment was skipped (environment disabled)'
         value: ${{ jobs.deploy.outputs.skipped }}
+
+env:
+  DOKPLOY_URL: https://admin.nextnode.fr
 
 jobs:
   deploy:
@@ -235,7 +235,7 @@ jobs:
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           tf-api-token: ${{ secrets.TF_API_TOKEN }}
-          dokploy-url: ${{ secrets.DOKPLOY_URL }}
+          dokploy-url: ${{ env.DOKPLOY_URL }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           dokploy-ssh-key-id: ${{ secrets.DOKPLOY_SSH_KEY_ID }}
@@ -249,7 +249,7 @@ jobs:
           defaults-file: .github-actions/config/dokploy-defaults.toml
           environment: ${{ inputs.environment }}
           pr-number: ${{ inputs.pr-number }}
-          dokploy-url: ${{ secrets.DOKPLOY_URL }}
+          dokploy-url: ${{ env.DOKPLOY_URL }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
