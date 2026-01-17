@@ -268,7 +268,7 @@ jobs:
 
       - name: Get Server Public IP
         id: server-ip
-        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != ''
         shell: python
         env:
           CONFIG_FILE: ${{ inputs.config-file }}
@@ -336,7 +336,7 @@ jobs:
 
       - name: Configure DNS
         id: dns
-        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.server-ip.outputs.public-ip != ''
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != '' && steps.server-ip.outputs.public-ip != ''
         uses: ./.github-actions/actions/infrastructure/cloudflare-dns-upsert
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -352,7 +352,11 @@ jobs:
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Domain | https://${{ steps.sync.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "${{ steps.sync.outputs.domain }}" ]]; then
+            echo "| Domain | https://${{ steps.sync.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Domain | _(not configured)_ |" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "| Project ID | \`${{ steps.sync.outputs.project-id }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Application ID | \`${{ steps.sync.outputs.application-id }}\` |" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ steps.check-vps.outputs.needs-custom-vps }}" == "true" ]]; then

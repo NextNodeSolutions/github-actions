@@ -79,6 +79,7 @@ runs:
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         ACTION: ${{ inputs.action }}
         GITHUB_OUTPUT: ${{ github.output }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         import os
         import sys
@@ -101,6 +102,7 @@ runs:
         CLOUDFLARE_TOKEN = os.environ['CLOUDFLARE_API_TOKEN']
         ACTION = os.environ.get('ACTION', 'deploy')
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+        GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
 
         def output(key, value):
             if GITHUB_OUTPUT:
@@ -130,42 +132,58 @@ runs:
                 defaults = tomli.load(f)
             print(f"Loaded defaults from: {DEFAULTS_FILE}")
 
-        # Load project config
-        if not Path(CONFIG_FILE).exists():
-            print(f"::error::Config file not found: {CONFIG_FILE}")
-            output('success', 'false')
-            sys.exit(1)
-
-        with open(CONFIG_FILE, 'rb') as f:
-            project_config = tomli.load(f)
-        print(f"Loaded project config from: {CONFIG_FILE}")
+        # Load project config (OPTIONAL now)
+        project_config = {}
+        if Path(CONFIG_FILE).exists():
+            with open(CONFIG_FILE, 'rb') as f:
+                project_config = tomli.load(f)
+            print(f"Loaded project config from: {CONFIG_FILE}")
+        else:
+            print(f"No {CONFIG_FILE} found, using defaults only")
 
         # Merge configs
         config = deep_merge(defaults, project_config)
-        print(f"Merged configuration for project: {config.get('project', {}).get('name', 'unknown')}")
+
+        # Get project name - infer from GitHub repository if not in config
+        project_name = config.get('project', {}).get('name', '')
+        if not project_name and GITHUB_REPOSITORY:
+            # Extract repo name from "owner/repo" format
+            project_name = GITHUB_REPOSITORY.split('/')[-1]
+            print(f"Inferred project name from repository: {project_name}")
+            # Store inferred name in config for later use
+            if 'project' not in config:
+                config['project'] = {}
+            config['project']['name'] = project_name
+
+        if not project_name:
+            print("::error::Could not determine project name (set project.name in dokploy.toml or ensure GITHUB_REPOSITORY is set)")
+            output('success', 'false')
+            sys.exit(1)
+
+        print(f"Project name: {project_name}")
         print("::endgroup::")
 
         # =================================================================
-        # GENERATE DOMAIN
+        # GENERATE DOMAIN (OPTIONAL)
         # =================================================================
         print("::group::Generating domain")
 
         base_domain = config.get('project', {}).get('domain', '')
-        if not base_domain:
-            print("::error::project.domain is required in dokploy.toml")
-            output('success', 'false')
-            sys.exit(1)
 
-        if ENVIRONMENT == 'production':
-            domain = base_domain
-        elif ENVIRONMENT == 'development':
-            domain = f"dev.{base_domain}"
-        elif ENVIRONMENT == 'preview' and PR_NUMBER:
-            domain = f"pr-{PR_NUMBER}.dev.{base_domain}"
+        if base_domain:
+            if ENVIRONMENT == 'production':
+                domain = base_domain
+            elif ENVIRONMENT == 'development':
+                domain = f"dev.{base_domain}"
+            elif ENVIRONMENT == 'preview' and PR_NUMBER:
+                domain = f"pr-{PR_NUMBER}.dev.{base_domain}"
+            else:
+                domain = f"{ENVIRONMENT}.{base_domain}"
+            print(f"Target domain: {domain}")
         else:
-            domain = f"{ENVIRONMENT}.{base_domain}"
+            domain = ''
+            print("No domain configured, DNS setup will be skipped")
 
-        print(f"Target domain: {domain}")
         print("::endgroup::")
 
         # =================================================================
@@ -239,12 +257,7 @@ runs:
         # =================================================================
         print("::group::Setting up Dokploy project")
 
-        project_name = config.get('project', {}).get('name', '')
-        if not project_name:
-            print("::error::project.name is required in dokploy.toml")
-            output('success', 'false')
-            sys.exit(1)
-
+        # project_name already validated and set earlier
         try:
             projects_resp = requests.get(f"{DOKPLOY_URL}/api/project.all", headers=headers, timeout=30)
             projects = projects_resp.json() if projects_resp.ok else []
@@ -371,27 +384,30 @@ runs:
         print("::endgroup::")
 
         # =================================================================
-        # CONFIGURE DOMAIN
+        # CONFIGURE DOMAIN (only if domain is set)
         # =================================================================
         print("::group::Configuring domain")
 
-        try:
-            domain_data = {
-                "applicationId": app_id,
-                "host": domain,
-                "https": True,
-                "certificateType": "letsencrypt"
-            }
+        if domain:
+            try:
+                domain_data = {
+                    "applicationId": app_id,
+                    "host": domain,
+                    "https": True,
+                    "certificateType": "letsencrypt"
+                }
 
-            requests.post(
-                f"{DOKPLOY_URL}/api/domain.create",
-                headers=headers,
-                json=domain_data,
-                timeout=30
-            )
-            print(f"Domain configured: {domain}")
-        except Exception as e:
-            print(f"::warning::Domain configuration: {e}")
+                requests.post(
+                    f"{DOKPLOY_URL}/api/domain.create",
+                    headers=headers,
+                    json=domain_data,
+                    timeout=30
+                )
+                print(f"Domain configured: {domain}")
+            except Exception as e:
+                print(f"::warning::Domain configuration: {e}")
+        else:
+            print("No domain configured, skipping domain setup")
 
         print("::endgroup::")
 
@@ -407,6 +423,9 @@ runs:
         print("=" * 60)
         print(f"Project: {project_name}")
         print(f"Application: {app_name}")
-        print(f"Domain: https://{domain}")
+        if domain:
+            print(f"Domain: https://{domain}")
+        else:
+            print("Domain: (not configured)")
         print(f"Environment: {ENVIRONMENT}")
         print("=" * 60)
