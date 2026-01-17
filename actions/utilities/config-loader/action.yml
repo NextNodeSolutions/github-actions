@@ -1,0 +1,345 @@
+name: 'Config Loader'
+description: 'Load and merge Dokploy configuration from defaults and project config'
+author: 'NextNodeSolutions'
+
+inputs:
+  project-config:
+    description: 'Path to project dokploy.toml file'
+    required: false
+    default: 'dokploy.toml'
+  environment:
+    description: 'Target environment: development, preview, production'
+    required: true
+  pr-number:
+    description: 'PR number (for preview environment)'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token for fetching defaults from github-actions repo'
+    required: false
+    default: ''
+
+outputs:
+  config-json:
+    description: 'Full merged configuration as JSON'
+    value: ${{ steps.load.outputs.config-json }}
+  name:
+    description: 'Project name'
+    value: ${{ steps.load.outputs.name }}
+  domain:
+    description: 'Computed domain for this environment'
+    value: ${{ steps.load.outputs.domain }}
+  worker:
+    description: 'Target worker (server) name'
+    value: ${{ steps.load.outputs.worker }}
+  vps-enabled:
+    description: 'Whether custom VPS is needed (true/false)'
+    value: ${{ steps.load.outputs.vps-enabled }}
+  vps-type:
+    description: 'Hetzner server type if VPS enabled'
+    value: ${{ steps.load.outputs.vps-type }}
+  memory:
+    description: 'Memory allocation'
+    value: ${{ steps.load.outputs.memory }}
+  cpu:
+    description: 'CPU allocation'
+    value: ${{ steps.load.outputs.cpu }}
+  replicas:
+    description: 'Number of replicas'
+    value: ${{ steps.load.outputs.replicas }}
+  build-type:
+    description: 'Build type (dockerfile, nixpacks, etc.)'
+    value: ${{ steps.load.outputs.build-type }}
+  dockerfile:
+    description: 'Dockerfile path'
+    value: ${{ steps.load.outputs.dockerfile }}
+  context:
+    description: 'Build context'
+    value: ${{ steps.load.outputs.context }}
+  healthcheck-path:
+    description: 'Health check path'
+    value: ${{ steps.load.outputs.healthcheck-path }}
+  healthcheck-port:
+    description: 'Health check port'
+    value: ${{ steps.load.outputs.healthcheck-port }}
+  auto-deploy:
+    description: 'Whether auto-deploy is enabled for this environment'
+    value: ${{ steps.load.outputs.auto-deploy }}
+  success:
+    description: 'Whether the configuration loading succeeded'
+    value: ${{ steps.load.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install tomli requests
+
+    - name: Load and merge configuration
+      id: load
+      shell: python
+      env:
+        PROJECT_CONFIG: ${{ inputs.project-config }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_OUTPUT: ${{ github.output }}
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        import os
+        import sys
+        import json
+        import tomli
+        import requests
+        from pathlib import Path
+
+        # =================================================================
+        # CONFIGURATION
+        # =================================================================
+        PROJECT_CONFIG = os.environ.get('PROJECT_CONFIG', 'dokploy.toml')
+        ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+        PR_NUMBER = os.environ.get('PR_NUMBER', '')
+        GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+        ACTION_PATH = os.environ.get('GITHUB_ACTION_PATH', '')
+
+        DEFAULTS_URL = 'https://raw.githubusercontent.com/nextnode-solutions/github-actions/main/config/dokploy-defaults.toml'
+
+        def output(key, value):
+            """Write output to GitHub Actions output file."""
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    # Handle multiline values (like JSON) with heredoc syntax
+                    if '\n' in str(value):
+                        import uuid
+                        delimiter = f"EOF_{uuid.uuid4().hex[:8]}"
+                        f.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+                    else:
+                        f.write(f"{key}={value}\n")
+
+        def deep_merge(base, override):
+            """Deep merge two dicts, override wins."""
+            result = base.copy()
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
+
+        # =================================================================
+        # LOAD DEFAULTS
+        # =================================================================
+        print("::group::Loading default configuration")
+
+        defaults = {}
+
+        # Try to load defaults from the github-actions repo
+        # First, check if defaults file exists locally (for local testing or when checked out)
+        local_defaults = Path(ACTION_PATH).parent.parent.parent / 'config' / 'dokploy-defaults.toml'
+        if local_defaults.exists():
+            print(f"Loading defaults from local path: {local_defaults}")
+            with open(local_defaults, 'rb') as f:
+                defaults = tomli.load(f)
+        else:
+            # Fetch from GitHub
+            print(f"Fetching defaults from: {DEFAULTS_URL}")
+            try:
+                headers = {}
+                if GITHUB_TOKEN:
+                    headers['Authorization'] = f'token {GITHUB_TOKEN}'
+
+                resp = requests.get(DEFAULTS_URL, headers=headers, timeout=30)
+                if resp.status_code == 200:
+                    defaults = tomli.loads(resp.text)
+                    print("Loaded defaults from GitHub")
+                else:
+                    print(f"::warning::Could not fetch defaults (HTTP {resp.status_code}), using empty defaults")
+            except Exception as e:
+                print(f"::warning::Failed to fetch defaults: {e}")
+
+        print("::endgroup::")
+
+        # =================================================================
+        # LOAD PROJECT CONFIG
+        # =================================================================
+        print("::group::Loading project configuration")
+
+        project_config = {}
+        config_path = Path(PROJECT_CONFIG)
+
+        if config_path.exists():
+            with open(config_path, 'rb') as f:
+                project_config = tomli.load(f)
+            print(f"Loaded project config from: {PROJECT_CONFIG}")
+        else:
+            print(f"::warning::Project config not found at {PROJECT_CONFIG}, using defaults only")
+
+        print("::endgroup::")
+
+        # =================================================================
+        # MERGE CONFIGURATIONS
+        # =================================================================
+        print("::group::Merging configuration")
+
+        config = deep_merge(defaults, project_config)
+
+        # Validate required fields
+        name = config.get('name', '')
+        if not name:
+            print("::error::Required field 'name' is missing from configuration")
+            output('success', 'false')
+            sys.exit(1)
+
+        print(f"Project name: {name}")
+        print("::endgroup::")
+
+        # =================================================================
+        # DETERMINE WORKER
+        # =================================================================
+        print("::group::Determining worker")
+
+        vps_config = config.get('vps', {})
+        vps_enabled = vps_config.get('enabled', False)
+
+        if vps_enabled:
+            # Custom VPS: worker name is {project}-worker
+            worker = f"{name}-worker"
+            print(f"VPS enabled: using custom worker '{worker}'")
+        else:
+            # Use environment-specific server from config
+            env_config = config.get('environments', {}).get(ENVIRONMENT, {})
+            if ENVIRONMENT == 'preview':
+                # Preview uses same server as development by default
+                env_config = config.get('environments', {}).get('preview',
+                             config.get('environments', {}).get('development', {}))
+
+            worker = env_config.get('server', 'dev-worker' if ENVIRONMENT != 'production' else 'prod-worker')
+            print(f"Using environment worker: {worker}")
+
+        print("::endgroup::")
+
+        # =================================================================
+        # COMPUTE DOMAIN
+        # =================================================================
+        print("::group::Computing domain")
+
+        base_domain = config.get('domain', '')
+        domain = ''
+
+        if base_domain:
+            if ENVIRONMENT == 'production':
+                domain = base_domain
+            elif ENVIRONMENT == 'development':
+                domain = f"dev.{base_domain}"
+            elif ENVIRONMENT == 'preview':
+                if PR_NUMBER:
+                    # Preview domain is pr-{pr}.{domain} (subdomain of production domain)
+                    domain = f"pr-{PR_NUMBER}.{base_domain}"
+                else:
+                    print("::warning::Preview environment requires PR number for domain computation")
+                    domain = ''
+            else:
+                domain = f"{ENVIRONMENT}.{base_domain}"
+
+            print(f"Computed domain: {domain}")
+        else:
+            print("::warning::No domain configured - PR previews will be disabled")
+
+        print("::endgroup::")
+
+        # =================================================================
+        # EXTRACT CONFIGURATION VALUES
+        # =================================================================
+        print("::group::Extracting configuration values")
+
+        # Get environment-specific overrides
+        env_config = config.get('environments', {}).get(ENVIRONMENT, {})
+        if ENVIRONMENT == 'preview':
+            env_config = config.get('environments', {}).get('preview',
+                         config.get('environments', {}).get('development', {}))
+
+        # Build configuration
+        build_config = config.get('build', {})
+        build_type = build_config.get('type', 'dockerfile')
+        dockerfile = build_config.get('dockerfile', 'Dockerfile')
+        context = build_config.get('context', '.')
+
+        # Resources (environment can override)
+        resources = config.get('resources', {})
+        memory = env_config.get('memory', resources.get('memory', '512Mi'))
+        cpu = env_config.get('cpu', resources.get('cpu', 0.5))
+
+        # Replicas (environment-specific)
+        replicas = env_config.get('replicas', config.get('scaling', {}).get('replicas', 1))
+
+        # Health check
+        healthcheck = config.get('healthcheck', {})
+        healthcheck_path = healthcheck.get('path', '/health')
+        healthcheck_port = healthcheck.get('port', 3000)
+
+        # Auto-deploy (environment-specific)
+        auto_deploy = env_config.get('auto_deploy', config.get('deploy', {}).get('auto_deploy', True))
+
+        # VPS configuration
+        vps_type = vps_config.get('type', 'cpx21')
+
+        print(f"Build type: {build_type}")
+        print(f"Dockerfile: {dockerfile}")
+        print(f"Context: {context}")
+        print(f"Memory: {memory}")
+        print(f"CPU: {cpu}")
+        print(f"Replicas: {replicas}")
+        print(f"Health check: {healthcheck_path}:{healthcheck_port}")
+        print(f"Auto-deploy: {auto_deploy}")
+
+        print("::endgroup::")
+
+        # =================================================================
+        # PREPARE FULL CONFIG JSON
+        # =================================================================
+        # Add computed values to config for JSON output
+        config['_computed'] = {
+            'environment': ENVIRONMENT,
+            'pr_number': PR_NUMBER,
+            'domain': domain,
+            'worker': worker,
+            'vps_enabled': vps_enabled,
+        }
+
+        config_json = json.dumps(config, indent=2)
+
+        # =================================================================
+        # OUTPUT RESULTS
+        # =================================================================
+        output('config-json', config_json)
+        output('name', name)
+        output('domain', domain)
+        output('worker', worker)
+        output('vps-enabled', str(vps_enabled).lower())
+        output('vps-type', vps_type)
+        output('memory', str(memory))
+        output('cpu', str(cpu))
+        output('replicas', str(replicas))
+        output('build-type', build_type)
+        output('dockerfile', dockerfile)
+        output('context', context)
+        output('healthcheck-path', healthcheck_path)
+        output('healthcheck-port', str(healthcheck_port))
+        output('auto-deploy', str(auto_deploy).lower())
+        output('success', 'true')
+
+        print("")
+        print("=" * 60)
+        print(f"Configuration loaded for: {name}")
+        print(f"Environment: {ENVIRONMENT}")
+        print(f"Worker: {worker}")
+        if domain:
+            print(f"Domain: https://{domain}")
+        print("=" * 60)

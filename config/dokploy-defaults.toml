@@ -8,6 +8,7 @@
 type = "dockerfile"           # dockerfile | nixpacks | buildpacks | static
 dockerfile = "Dockerfile"
 context = "."
+target = ""                   # Multi-stage build target (optional)
 
 # =============================================================================
 # RESOURCE DEFAULTS
@@ -15,12 +16,8 @@ context = "."
 [resources]
 memory = "512Mi"
 cpu = 0.5
-
-# =============================================================================
-# SCALING DEFAULTS
-# =============================================================================
-[scaling]
-replicas = 1
+memory_limit = "1Gi"          # Hard limit
+cpu_limit = 1                 # Hard limit
 
 # =============================================================================
 # HEALTH CHECK DEFAULTS
@@ -28,34 +25,66 @@ replicas = 1
 [healthcheck]
 enabled = true
 path = "/health"
-interval = "30s"
-timeout = "10s"
+port = 3000
+interval = 30                 # seconds
+timeout = 10                  # seconds
 retries = 3
-start_period = "10s"
+start_period = 40             # seconds
 
 # =============================================================================
 # DEPLOYMENT DEFAULTS
 # =============================================================================
 [deploy]
-auto_deploy = true
-zero_downtime = true
+restart_policy = "unless-stopped"
+rollback_on_failure = true
+
+# =============================================================================
+# VPS DEFAULTS (for custom dedicated servers)
+# =============================================================================
+[vps]
+enabled = false
+type = "cpx21"                # Hetzner: cpx11, cpx21, cpx31, cpx41, cpx51
+location = "fsn1"             # fsn1 (Falkenstein), nbg1 (Nuremberg), hel1 (Helsinki)
+# When enabled, worker name is auto-generated as {project-name}-worker
+
+# =============================================================================
+# SERVICES DEFAULTS (future - not yet implemented)
+# =============================================================================
+[services.postgres]
+enabled = false
+version = "16"
+size = "small"                # small (1GB), medium (4GB), large (8GB)
+
+[services.redis]
+enabled = false
+version = "7"
+size = "small"
+
+[services.minio]
+enabled = false
+bucket = "uploads"
 
 # =============================================================================
 # ENVIRONMENT: DEVELOPMENT
-# Domain auto-generated: dev.{project.domain}
+# Domain: dev.{project.domain}
 # =============================================================================
 [environments.development]
 enabled = true
 server = "dev-worker"
+replicas = 1
+auto_deploy = true
 
 # =============================================================================
 # ENVIRONMENT: PREVIEW (PR deployments)
-# Domain auto-generated: pr-{number}.dev.{project.domain}
+# Domain: pr-{number}.{project.domain}
+# Requires project.domain to be set
 # =============================================================================
 [environments.preview]
 enabled = true
 server = "dev-worker"
-auto_cleanup = true
+replicas = 1
+auto_deploy = true
+cleanup_on_merge = true
 
 # =============================================================================
 # ENVIRONMENT: PRODUCTION
@@ -63,6 +92,5 @@ auto_cleanup = true
 # =============================================================================
 [environments.production]
 server = "prod-worker"
-replicas = 2
-memory = "1Gi"
-cpu = 1
+replicas = 1
+auto_deploy = false           # Manual deploy for prod

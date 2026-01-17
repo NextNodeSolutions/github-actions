@@ -1,0 +1,96 @@
+# =============================================================================
+# Dokploy Project Configuration
+# =============================================================================
+# Copy this file to your project root as 'dokploy.toml'
+# Only override what differs from defaults in dokploy-defaults.toml
+# See: https://github.com/nextnode-solutions/github-actions/blob/main/config/dokploy-defaults.toml
+# =============================================================================
+
+# REQUIRED: Unique project identifier
+name = "my-project"
+
+# REQUIRED for deployments: Production domain (enables PR previews)
+# - Production: my-project.com
+# - Development: dev.my-project.com
+# - Preview PR #42: pr-42.my-project.com
+domain = "my-project.com"
+
+# =============================================================================
+# BUILD OVERRIDES (optional)
+# =============================================================================
+# Uncomment and modify only what differs from defaults
+
+# [build]
+# type = "dockerfile"           # dockerfile | nixpacks | buildpacks | static
+# dockerfile = "Dockerfile"     # Path to Dockerfile
+# context = "."                 # Build context directory
+# target = "production"         # Multi-stage build target
+
+# =============================================================================
+# RESOURCE OVERRIDES (optional)
+# =============================================================================
+
+# [resources]
+# memory = "1Gi"                # Memory request
+# cpu = 1                       # CPU request (cores)
+# memory_limit = "2Gi"          # Memory hard limit
+# cpu_limit = 2                 # CPU hard limit
+
+# =============================================================================
+# HEALTH CHECK OVERRIDES (optional)
+# =============================================================================
+
+# [healthcheck]
+# enabled = true
+# path = "/api/health"          # Custom health endpoint
+# port = 8080                   # Application port
+# interval = 30                 # Check interval (seconds)
+# timeout = 10                  # Check timeout (seconds)
+# retries = 3                   # Retry count before unhealthy
+# start_period = 40             # Grace period on startup (seconds)
+
+# =============================================================================
+# CUSTOM VPS (optional)
+# =============================================================================
+# Enable to provision a dedicated Hetzner VPS for this project
+# Worker name will be auto-generated as: {name}-worker
+
+# [vps]
+# enabled = true                # Set to true to provision dedicated VPS
+# type = "cpx21"                # Hetzner: cpx11, cpx21, cpx31, cpx41, cpx51
+# location = "fsn1"             # fsn1 (Falkenstein), nbg1 (Nuremberg), hel1 (Helsinki)
+
+# =============================================================================
+# SERVICES (optional - future implementation)
+# =============================================================================
+# Provision managed services for this project
+
+# [services.postgres]
+# enabled = true
+# version = "16"
+# size = "small"                # small (1GB), medium (4GB), large (8GB)
+
+# [services.redis]
+# enabled = true
+# version = "7"
+# size = "small"
+
+# [services.minio]
+# enabled = true
+# bucket = "uploads"
+
+# =============================================================================
+# ENVIRONMENT OVERRIDES (optional)
+# =============================================================================
+# Override specific environment settings
+
+# [environments.production]
+# replicas = 2                  # Scale production horizontally
+# auto_deploy = false           # Require manual deployment
+
+# [environments.development]
+# replicas = 1
+
+# [environments.preview]
+# replicas = 1
+# cleanup_on_merge = true       # Auto-cleanup when PR is merged
