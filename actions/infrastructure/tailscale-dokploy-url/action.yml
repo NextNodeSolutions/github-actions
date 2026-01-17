@@ -1,0 +1,82 @@
+name: 'Tailscale Dokploy URL'
+description: 'Connect to Tailscale and resolve Dokploy URL via admin-dokploy hostname'
+author: 'NextNodeSolutions'
+
+inputs:
+  tailscale-oauth-client-id:
+    description: 'Tailscale OAuth client ID'
+    required: true
+  tailscale-oauth-secret:
+    description: 'Tailscale OAuth secret'
+    required: true
+  hostname:
+    description: 'Tailscale hostname to find'
+    required: false
+    default: 'admin-dokploy'
+  port:
+    description: 'Port for URL'
+    required: false
+    default: '3000'
+  max-retries:
+    description: 'Max retries for hostname resolution'
+    required: false
+    default: '30'
+  retry-delay:
+    description: 'Delay between retries in seconds'
+    required: false
+    default: '5'
+
+outputs:
+  url:
+    description: 'Full Dokploy URL'
+    value: ${{ steps.resolve.outputs.url }}
+  ip:
+    description: 'Tailscale IP'
+    value: ${{ steps.resolve.outputs.ip }}
+  success:
+    description: 'Whether resolution succeeded'
+    value: ${{ steps.resolve.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Connect to Tailscale
+      uses: tailscale/github-action@v3
+      with:
+        oauth-client-id: ${{ inputs.tailscale-oauth-client-id }}
+        oauth-secret: ${{ inputs.tailscale-oauth-secret }}
+        tags: tag:ci
+
+    - name: Resolve Dokploy URL
+      id: resolve
+      shell: bash
+      env:
+        HOSTNAME: ${{ inputs.hostname }}
+        PORT: ${{ inputs.port }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
+      run: |
+        echo "::group::Resolving ${HOSTNAME} in Tailscale network"
+
+        for i in $(seq 1 $MAX_RETRIES); do
+          IP=$(tailscale status --json | jq -r ".Peer | to_entries[] | select(.value.HostName == \"${HOSTNAME}\") | .value.TailscaleIPs[0]" 2>/dev/null || echo "")
+
+          if [[ -n "$IP" && "$IP" != "null" ]]; then
+            URL="http://${IP}:${PORT}"
+            echo "Found ${HOSTNAME} at: ${IP}"
+            echo "URL: ${URL}"
+            echo "url=${URL}" >> $GITHUB_OUTPUT
+            echo "ip=${IP}" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "Attempt $i/$MAX_RETRIES: ${HOSTNAME} not found, waiting ${RETRY_DELAY}s..."
+          sleep "$RETRY_DELAY"
+        done
+
+        echo "::error::${HOSTNAME} not found in Tailscale network after ${MAX_RETRIES} attempts"
+        echo "success=false" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 1

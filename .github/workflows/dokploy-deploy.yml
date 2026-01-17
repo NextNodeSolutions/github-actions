@@ -109,35 +109,12 @@ jobs:
         shell: bash
         run: pip install tomli
 
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-          tags: tag:ci
-
       - name: Get Dokploy URL
         id: dokploy-url
-        run: |
-          echo "=== Getting admin-dokploy Tailscale IP ==="
-
-          MAX_ATTEMPTS=30
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            ADMIN_TS_IP=$(tailscale status --json | jq -r '.Peer | to_entries[] | select(.value.HostName == "admin-dokploy") | .value.TailscaleIPs[0]' 2>/dev/null || echo "")
-
-            if [[ -n "$ADMIN_TS_IP" && "$ADMIN_TS_IP" != "null" ]]; then
-              echo "Found admin-dokploy at: $ADMIN_TS_IP"
-              DOKPLOY_URL="http://${ADMIN_TS_IP}:3000"
-              echo "dokploy-url=${DOKPLOY_URL}" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            echo "Attempt $i/$MAX_ATTEMPTS: admin-dokploy not found, waiting 5s..."
-            sleep 5
-          done
-
-          echo "::error::admin-dokploy not found in Tailscale network"
-          exit 1
+        uses: ./.github-actions/actions/infrastructure/tailscale-dokploy-url
+        with:
+          tailscale-oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          tailscale-oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
 
       - name: Check Environment Enabled
         id: check-enabled
@@ -268,7 +245,7 @@ jobs:
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           tf-api-token: ${{ secrets.TF_API_TOKEN }}
-          dokploy-url: ${{ steps.dokploy-url.outputs.dokploy-url }}
+          dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           dokploy-ssh-key-id: ${{ secrets.DOKPLOY_SSH_KEY_ID }}
@@ -282,7 +259,7 @@ jobs:
           defaults-file: .github-actions/config/dokploy-defaults.toml
           environment: ${{ inputs.environment }}
           pr-number: ${{ inputs.pr-number }}
-          dokploy-url: ${{ steps.dokploy-url.outputs.dokploy-url }}
+          dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
