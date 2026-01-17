@@ -71,6 +71,9 @@ on:
       custom-vps-provisioned:
         description: 'Whether a custom VPS was provisioned'
         value: ${{ jobs.deploy.outputs.custom-vps-provisioned }}
+      skipped:
+        description: 'Whether deployment was skipped (environment disabled)'
+        value: ${{ jobs.deploy.outputs.skipped }}
 
 jobs:
   deploy:
@@ -80,8 +83,9 @@ jobs:
       project-id: ${{ steps.sync.outputs.project-id }}
       application-id: ${{ steps.sync.outputs.application-id }}
       domain: ${{ steps.sync.outputs.domain }}
-      success: ${{ steps.sync.outputs.success }}
+      success: ${{ steps.check-enabled.outputs.enabled == 'false' && 'skipped' || steps.sync.outputs.success }}
       custom-vps-provisioned: ${{ steps.check-vps.outputs.needs-custom-vps }}
+      skipped: ${{ steps.check-enabled.outputs.enabled == 'false' }}
 
     steps:
       - name: Checkout
@@ -102,9 +106,77 @@ jobs:
         shell: bash
         run: pip install tomli
 
+      - name: Check Environment Enabled
+        id: check-enabled
+        shell: python
+        env:
+          CONFIG_FILE: ${{ inputs.config-file }}
+          DEFAULTS_FILE: .github-actions/config/dokploy-defaults.toml
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          import os
+          import tomli
+          from pathlib import Path
+
+          config_file = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+          defaults_file = os.environ.get('DEFAULTS_FILE', '')
+          environment = os.environ.get('ENVIRONMENT', 'production')
+          output_file = os.environ.get('GITHUB_OUTPUT', '')
+
+          def deep_merge(base, override):
+              result = base.copy()
+              for key, value in override.items():
+                  if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                      result[key] = deep_merge(result[key], value)
+                  else:
+                      result[key] = value
+              return result
+
+          # Load defaults
+          defaults = {}
+          if defaults_file and Path(defaults_file).exists():
+              with open(defaults_file, 'rb') as f:
+                  defaults = tomli.load(f)
+
+          # Load project config
+          config = {}
+          if Path(config_file).exists():
+              with open(config_file, 'rb') as f:
+                  config = tomli.load(f)
+
+          # Merge configs
+          merged = deep_merge(defaults, config)
+
+          # Check if environment is enabled (production is always enabled)
+          enabled = True
+          if environment != 'production':
+              env_config = merged.get('environments', {}).get(environment, {})
+              enabled = env_config.get('enabled', True)
+
+          with open(output_file, 'a') as f:
+              f.write(f"enabled={'true' if enabled else 'false'}\n")
+
+          if enabled:
+              print(f"Environment '{environment}' is enabled")
+          else:
+              print(f"::notice::Environment '{environment}' is disabled in config, skipping deployment")
+
+      - name: Skip Disabled Environment
+        if: steps.check-enabled.outputs.enabled == 'false'
+        run: |
+          echo "## Deployment Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Environment \`${{ inputs.environment }}\` is disabled in \`dokploy.toml\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To enable, set:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`toml" >> $GITHUB_STEP_SUMMARY
+          echo "[environments.${{ inputs.environment }}]" >> $GITHUB_STEP_SUMMARY
+          echo "enabled = true" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
       - name: Check for Custom VPS
         id: check-vps
-        if: inputs.action == 'deploy' && inputs.environment == 'production'
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && inputs.environment == 'production'
         shell: python
         env:
           CONFIG_FILE: ${{ inputs.config-file }}
@@ -151,7 +223,7 @@ jobs:
 
       - name: Provision Custom VPS
         id: provision-vps
-        if: steps.check-vps.outputs.needs-custom-vps == 'true'
+        if: steps.check-enabled.outputs.enabled == 'true' && steps.check-vps.outputs.needs-custom-vps == 'true'
         uses: ./.github-actions/actions/deploy/vps-provision
         with:
           vps-name: ${{ steps.check-vps.outputs.vps-name }}
@@ -170,6 +242,7 @@ jobs:
 
       - name: Sync to Dokploy
         id: sync
+        if: steps.check-enabled.outputs.enabled == 'true'
         uses: ./.github-actions/actions/deploy/dokploy-sync
         with:
           config-file: ${{ inputs.config-file }}
@@ -185,7 +258,7 @@ jobs:
 
       - name: Get Server Public IP
         id: server-ip
-        if: inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
         shell: python
         env:
           CONFIG_FILE: ${{ inputs.config-file }}
@@ -253,7 +326,7 @@ jobs:
 
       - name: Configure DNS
         id: dns
-        if: inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.server-ip.outputs.public-ip != ''
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.server-ip.outputs.public-ip != ''
         uses: ./.github-actions/actions/infrastructure/cloudflare-dns-upsert
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -262,7 +335,7 @@ jobs:
           proxied: 'true'
 
       - name: Deployment Summary
-        if: inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
         run: |
           echo "## Deployment Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -280,7 +353,7 @@ jobs:
           fi
 
       - name: Cleanup Summary
-        if: inputs.action == 'cleanup' && steps.sync.outputs.success == 'true'
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'cleanup' && steps.sync.outputs.success == 'true'
         run: |
           echo "## Preview Cleanup Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
