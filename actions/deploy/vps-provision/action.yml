@@ -35,11 +35,8 @@ inputs:
   dokploy-url:
     description: 'Dokploy instance URL'
     required: true
-  dokploy-admin-email:
-    description: 'Dokploy admin email'
-    required: true
-  dokploy-admin-password:
-    description: 'Dokploy admin password'
+  dokploy-api-token:
+    description: 'Dokploy API token (generate from /settings/profile in Dokploy UI)'
     required: true
   dokploy-ssh-key-id:
     description: 'Dokploy SSH key ID for server registration'
@@ -155,31 +152,26 @@ runs:
       shell: bash
       env:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_EMAIL: ${{ inputs.dokploy-admin-email }}
-        DOKPLOY_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        DOKPLOY_API_TOKEN: ${{ inputs.dokploy-api-token }}
         SSH_KEY_ID: ${{ inputs.dokploy-ssh-key-id }}
         VPS_NAME: ${{ inputs.vps-name }}
         TAILSCALE_IP: ${{ steps.provision.outputs.tailscale-ip }}
       run: |
         echo "::group::Dokploy Registration"
 
-        # Login to Dokploy
-        LOGIN_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/auth.signIn" \
-          -H "Content-Type: application/json" \
-          -d "{\"email\": \"${DOKPLOY_EMAIL}\", \"password\": \"${DOKPLOY_PASSWORD}\"}")
+        # Verify API token works
+        AUTH_TEST=$(curl -sf -X GET "${DOKPLOY_URL}/api/server.all" \
+          -H "x-api-key: ${DOKPLOY_API_TOKEN}" \
+          -H "Content-Type: application/json" 2>&1) || true
 
-        JWT_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty')
-
-        if [[ -z "$JWT_TOKEN" ]]; then
-          echo "::error::Failed to authenticate with Dokploy"
+        if [[ "$AUTH_TEST" == *"Unauthorized"* ]] || [[ -z "$AUTH_TEST" ]]; then
+          echo "::error::API token is invalid or expired. Generate a new token from Dokploy UI (/settings/profile)"
           echo "success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
 
         # Check if server already exists
-        EXISTING_SERVERS=$(curl -sf -X GET "${DOKPLOY_URL}/api/server.all" \
-          -H "Authorization: Bearer ${JWT_TOKEN}" \
-          -H "Content-Type: application/json")
+        EXISTING_SERVERS="$AUTH_TEST"
 
         EXISTING_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"${VPS_NAME}\") | .serverId" 2>/dev/null || echo "")
 
@@ -191,7 +183,7 @@ runs:
           echo "Registering server in Dokploy..."
 
           CREATE_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/server.create" \
-            -H "Authorization: Bearer ${JWT_TOKEN}" \
+            -H "x-api-key: ${DOKPLOY_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
               --arg name "${VPS_NAME}" \
@@ -213,7 +205,7 @@ runs:
           # Setup server (installs Docker + Traefik)
           echo "Setting up server (this may take a few minutes)..."
           curl -sf -X POST "${DOKPLOY_URL}/api/server.setup" \
-            -H "Authorization: Bearer ${JWT_TOKEN}" \
+            -H "x-api-key: ${DOKPLOY_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')" || true
 
