@@ -191,26 +191,41 @@ runs:
         # =================================================================
         print("::group::Authenticating with Dokploy")
 
+        # Use session for cookie-based auth
+        session = requests.Session()
+        session.headers.update({"Content-Type": "application/json"})
+
         try:
-            login_resp = requests.post(
+            login_resp = session.post(
                 f"{DOKPLOY_URL}/api/auth.signIn",
                 json={"email": DOKPLOY_EMAIL, "password": DOKPLOY_PASSWORD},
                 timeout=30
             )
-            login_resp.raise_for_status()
-            token = login_resp.json().get('token')
-            if not token:
-                raise ValueError("No token in response")
-            print("Authentication successful")
+            print(f"Login response status: {login_resp.status_code}")
+
+            if not login_resp.ok:
+                print(f"Login response body: {login_resp.text[:500]}")
+                login_resp.raise_for_status()
+
+            # Dokploy may return token in response or set cookies
+            login_data = login_resp.json() if login_resp.text else {}
+            token = login_data.get('token')
+
+            if token:
+                # Use token-based auth (x-api-key header for Dokploy API)
+                session.headers.update({"x-api-key": token})
+                print("Authentication successful (token-based)")
+            elif session.cookies:
+                # Cookie-based auth - session handles this automatically
+                print(f"Authentication successful (session-based, cookies: {list(session.cookies.keys())})")
+            else:
+                print("::warning::No token or cookies received, API calls may fail")
+
         except Exception as e:
             print(f"::error::Failed to authenticate: {e}")
             output('success', 'false')
             sys.exit(1)
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
         print("::endgroup::")
 
         # =================================================================
@@ -220,7 +235,7 @@ runs:
             print("::group::Cleanup preview deployment")
             # Find and delete the preview application
             try:
-                projects_resp = requests.get(f"{DOKPLOY_URL}/api/project.all", headers=headers, timeout=30)
+                projects_resp = session.get(f"{DOKPLOY_URL}/api/project.all", timeout=30)
                 projects = projects_resp.json() if projects_resp.ok else []
 
                 project_name = config.get('project', {}).get('name', '')
@@ -228,18 +243,16 @@ runs:
 
                 for project in projects:
                     if project.get('name') == project_name:
-                        apps_resp = requests.get(
+                        apps_resp = session.get(
                             f"{DOKPLOY_URL}/api/application.all",
-                            headers=headers,
                             params={"projectId": project.get('projectId')},
                             timeout=30
                         )
                         apps = apps_resp.json() if apps_resp.ok else []
                         for app in apps:
                             if app.get('name') == preview_name:
-                                requests.post(
+                                session.post(
                                     f"{DOKPLOY_URL}/api/application.delete",
-                                    headers=headers,
                                     json={"applicationId": app.get('applicationId')},
                                     timeout=30
                                 )
@@ -259,7 +272,7 @@ runs:
 
         # project_name already validated and set earlier
         try:
-            projects_resp = requests.get(f"{DOKPLOY_URL}/api/project.all", headers=headers, timeout=30)
+            projects_resp = session.get(f"{DOKPLOY_URL}/api/project.all", timeout=30)
             projects = projects_resp.json() if projects_resp.ok else []
 
             project_id = None
@@ -270,9 +283,8 @@ runs:
                     break
 
             if not project_id:
-                create_resp = requests.post(
+                create_resp = session.post(
                     f"{DOKPLOY_URL}/api/project.create",
-                    headers=headers,
                     json={"name": project_name, "description": config.get('project', {}).get('description', '')},
                     timeout=30
                 )
@@ -305,7 +317,7 @@ runs:
 
         # Get server ID from Dokploy
         try:
-            servers_resp = requests.get(f"{DOKPLOY_URL}/api/server.all", headers=headers, timeout=30)
+            servers_resp = session.get(f"{DOKPLOY_URL}/api/server.all", timeout=30)
             servers = servers_resp.json() if servers_resp.ok else []
 
             server_id = None
@@ -342,9 +354,8 @@ runs:
 
         try:
             # Check if app exists
-            apps_resp = requests.get(
+            apps_resp = session.get(
                 f"{DOKPLOY_URL}/api/application.all",
-                headers=headers,
                 timeout=30
             )
             apps = apps_resp.json() if apps_resp.ok else []
@@ -366,9 +377,8 @@ runs:
                 if server_id:
                     app_data["serverId"] = server_id
 
-                create_app_resp = requests.post(
+                create_app_resp = session.post(
                     f"{DOKPLOY_URL}/api/application.create",
-                    headers=headers,
                     json=app_data,
                     timeout=30
                 )
@@ -397,9 +407,8 @@ runs:
                     "certificateType": "letsencrypt"
                 }
 
-                requests.post(
+                session.post(
                     f"{DOKPLOY_URL}/api/domain.create",
-                    headers=headers,
                     json=domain_data,
                     timeout=30
                 )
