@@ -151,6 +151,46 @@ runs:
         echo "  Proxied: $INPUT_PROXIED"
         echo ""
 
+        # Check for conflicting records (CNAME conflicts with A/AAAA and vice versa)
+        # CNAME records cannot coexist with any other record type for the same name
+        if [[ "$INPUT_RECORD_TYPE" == "A" || "$INPUT_RECORD_TYPE" == "AAAA" ]]; then
+          CONFLICTING_RECORD=$(curl -s "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?type=CNAME&name=${INPUT_DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json")
+          CONFLICTING_ID=$(echo "$CONFLICTING_RECORD" | jq -r '.result[0].id // empty')
+          CONFLICTING_TYPE="CNAME"
+        elif [[ "$INPUT_RECORD_TYPE" == "CNAME" ]]; then
+          # Check for A records
+          CONFLICTING_RECORD=$(curl -s "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?type=A&name=${INPUT_DOMAIN}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json")
+          CONFLICTING_ID=$(echo "$CONFLICTING_RECORD" | jq -r '.result[0].id // empty')
+          CONFLICTING_TYPE="A"
+          # Also check for AAAA records
+          if [[ -z "$CONFLICTING_ID" ]]; then
+            CONFLICTING_RECORD=$(curl -s "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?type=AAAA&name=${INPUT_DOMAIN}" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H "Content-Type: application/json")
+            CONFLICTING_ID=$(echo "$CONFLICTING_RECORD" | jq -r '.result[0].id // empty')
+            CONFLICTING_TYPE="AAAA"
+          fi
+        fi
+
+        # Delete conflicting record if found
+        if [[ -n "$CONFLICTING_ID" ]]; then
+          echo "Found conflicting $CONFLICTING_TYPE record, deleting before creating $INPUT_RECORD_TYPE..."
+          DELETE_RESPONSE=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records/${CONFLICTING_ID}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json")
+          DELETE_SUCCESS=$(echo "$DELETE_RESPONSE" | jq -r '.success')
+          if [[ "$DELETE_SUCCESS" == "true" ]]; then
+            echo "Conflicting $CONFLICTING_TYPE record deleted successfully"
+          else
+            echo "::warning::Failed to delete conflicting record, proceeding anyway..."
+            echo "$DELETE_RESPONSE" | jq '.errors'
+          fi
+        fi
+
         # Check if record exists
         EXISTING_RECORD=$(curl -s "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?type=${INPUT_RECORD_TYPE}&name=${INPUT_DOMAIN}" \
           -H "Authorization: Bearer ${CF_API_TOKEN}" \
