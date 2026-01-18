@@ -466,21 +466,12 @@ runs:
             apps = []
             if project_detail_resp.ok:
                 project_detail = project_detail_resp.json()
-                print(f"Project detail keys: {list(project_detail.keys())}")
 
-                # Applications might be directly on project or nested under environments
-                apps = project_detail.get('applications', [])
-
-                # Also check environments for applications
+                # Applications are nested under environments in Dokploy API
                 for env in project_detail.get('environments', []):
-                    env_apps = env.get('applications', [])
-                    if env_apps:
-                        print(f"Found {len(env_apps)} apps in environment {env.get('name')}")
-                        apps.extend(env_apps)
+                    apps.extend(env.get('applications', []))
 
                 print(f"Found {len(apps)} applications in project {project_name}")
-                for app in apps:
-                    print(f"  - {app.get('name')} ({app.get('applicationId')}) env={app.get('environmentId')}")
             else:
                 print(f"::warning::Failed to get project details: {project_detail_resp.status_code}")
 
