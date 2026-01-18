@@ -394,7 +394,12 @@ runs:
                         )
                         if ip_resp.ok:
                             ip_data = ip_resp.json()
-                            server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
+                            if isinstance(ip_data, str):
+                                server_public_ip = ip_data if ip_data else None
+                            elif isinstance(ip_data, dict):
+                                server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
+                            else:
+                                server_public_ip = None
                             if server_public_ip:
                                 print(f"Server public IP: {server_public_ip}")
                     except Exception as e:
