@@ -266,82 +266,14 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           action: ${{ inputs.action }}
 
-      - name: Get Server Public IP
-        id: server-ip
-        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != ''
-        shell: python
-        env:
-          CONFIG_FILE: ${{ inputs.config-file }}
-          DEFAULTS_FILE: .github-actions/config/dokploy-defaults.toml
-          ENVIRONMENT: ${{ inputs.environment }}
-          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-        run: |
-          import os
-          import tomli
-          import requests
-          from pathlib import Path
-
-          config_file = os.environ.get('CONFIG_FILE', 'dokploy.toml')
-          defaults_file = os.environ.get('DEFAULTS_FILE', '')
-          environment = os.environ.get('ENVIRONMENT', 'production')
-          hetzner_token = os.environ.get('HETZNER_TOKEN', '')
-          output_file = os.environ.get('GITHUB_OUTPUT', '')
-
-          # Load and merge configs
-          defaults = {}
-          if defaults_file and Path(defaults_file).exists():
-              with open(defaults_file, 'rb') as f:
-                  defaults = tomli.load(f)
-
-          config = {}
-          if Path(config_file).exists():
-              with open(config_file, 'rb') as f:
-                  config = tomli.load(f)
-
-          # Get server name based on environment
-          if environment == 'production':
-              server_name = config.get('production', {}).get('server', 'prod-worker')
-          else:
-              server_name = config.get('environments', {}).get(environment, {}).get('server', 'dev-worker')
-
-          print(f"Looking up public IP for server: {server_name}")
-
-          # Query Hetzner API for server's public IP
-          if hetzner_token:
-              try:
-                  resp = requests.get(
-                      'https://api.hetzner.cloud/v1/servers',
-                      headers={'Authorization': f'Bearer {hetzner_token}'},
-                      params={'name': server_name},
-                      timeout=30
-                  )
-                  resp.raise_for_status()
-                  servers = resp.json().get('servers', [])
-
-                  for server in servers:
-                      if server.get('name') == server_name:
-                          public_ip = server.get('public_net', {}).get('ipv4', {}).get('ip', '')
-                          if public_ip:
-                              print(f"Found public IP: {public_ip}")
-                              with open(output_file, 'a') as f:
-                                  f.write(f"public-ip={public_ip}\n")
-                                  f.write(f"server-name={server_name}\n")
-                              break
-                  else:
-                      print(f"::warning::Server {server_name} not found in Hetzner")
-              except Exception as e:
-                  print(f"::warning::Failed to get server IP: {e}")
-          else:
-              print("::warning::HETZNER_TOKEN not provided, skipping IP lookup")
-
       - name: Configure DNS
         id: dns
-        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != '' && steps.server-ip.outputs.public-ip != ''
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != '' && steps.sync.outputs.server-ip != ''
         uses: ./.github-actions/actions/infrastructure/cloudflare-dns-upsert
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           domain: ${{ steps.sync.outputs.domain }}
-          content: ${{ steps.server-ip.outputs.public-ip }}
+          content: ${{ steps.sync.outputs.server-ip }}
           proxied: 'true'
 
       - name: Deployment Summary
@@ -363,7 +295,7 @@ jobs:
             echo "| Custom VPS | \`${{ steps.check-vps.outputs.vps-name }}\` |" >> $GITHUB_STEP_SUMMARY
           fi
           if [[ -n "${{ steps.dns.outputs.action }}" ]]; then
-            echo "| DNS | ${{ steps.dns.outputs.action }} (\`${{ steps.server-ip.outputs.public-ip }}\`) |" >> $GITHUB_STEP_SUMMARY
+            echo "| DNS | ${{ steps.dns.outputs.action }} (\`${{ steps.sync.outputs.server-ip }}\`) |" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Cleanup Summary

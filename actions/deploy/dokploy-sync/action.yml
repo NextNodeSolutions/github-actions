@@ -51,6 +51,9 @@ outputs:
   success:
     description: 'Whether the operation succeeded'
     value: ${{ steps.sync.outputs.success }}
+  server-ip:
+    description: 'Server public IP address'
+    value: ${{ steps.sync.outputs.server-ip }}
 
 runs:
   using: 'composite'
@@ -373,6 +376,7 @@ runs:
         print(f"Target server: {server_name}")
 
         # Get server ID from Dokploy
+        server_public_ip = None
         try:
             servers_resp = session.get(f"{DOKPLOY_URL}/api/server.all", timeout=30)
             servers = servers_resp.json() if servers_resp.ok else []
@@ -381,6 +385,20 @@ runs:
             for s in servers:
                 if s.get('name') == server_name:
                     server_id = s.get('serverId')
+                    # Get server's public IP
+                    try:
+                        ip_resp = session.get(
+                            f"{DOKPLOY_URL}/api/server.publicIp",
+                            params={"serverId": server_id},
+                            timeout=30
+                        )
+                        if ip_resp.ok:
+                            ip_data = ip_resp.json()
+                            server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
+                            if server_public_ip:
+                                print(f"Server public IP: {server_public_ip}")
+                    except Exception as e:
+                        print(f"::warning::Failed to get server IP: {e}")
                     break
 
             if not server_id:
@@ -484,6 +502,7 @@ runs:
         output('project-id', project_id)
         output('application-id', app_id)
         output('domain', domain)
+        output('server-ip', server_public_ip or '')
         output('success', 'true')
 
         print("")
