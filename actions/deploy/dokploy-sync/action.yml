@@ -196,12 +196,19 @@ runs:
         session.headers.update({"Content-Type": "application/json"})
 
         # Authenticate via Better Auth endpoint
+        auth_url = f"{DOKPLOY_URL}/api/auth/sign-in/email"
+        print(f"Authenticating to: {auth_url}")
+        print(f"Email: {DOKPLOY_ADMIN_EMAIL}")
+
         try:
             auth_resp = session.post(
-                f"{DOKPLOY_URL}/api/auth/sign-in/email",
+                auth_url,
                 json={"email": DOKPLOY_ADMIN_EMAIL, "password": DOKPLOY_ADMIN_PASSWORD},
                 timeout=30
             )
+            print(f"Response status: {auth_resp.status_code}")
+            print(f"Response body: {auth_resp.text[:500] if auth_resp.text else '(empty)'}")
+
             if auth_resp.status_code == 401:
                 print("::error::Invalid email or password")
                 output('success', 'false')
