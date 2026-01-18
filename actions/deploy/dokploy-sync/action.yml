@@ -37,6 +37,10 @@ inputs:
     description: 'Action to perform: deploy, cleanup'
     required: false
     default: 'deploy'
+  docker-image:
+    description: 'Docker image to deploy (e.g., admin-dokploy:5000/repo:tag). When provided, uses Docker source instead of GitHub.'
+    required: false
+    default: ''
 
 outputs:
   project-id:
@@ -81,6 +85,7 @@ runs:
         TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         ACTION: ${{ inputs.action }}
+        DOCKER_IMAGE: ${{ inputs.docker-image }}
         GITHUB_OUTPUT: ${{ github.output }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
@@ -104,6 +109,7 @@ runs:
         TAILSCALE_API_KEY = os.environ['TAILSCALE_API_KEY']
         CLOUDFLARE_TOKEN = os.environ['CLOUDFLARE_API_TOKEN']
         ACTION = os.environ.get('ACTION', 'deploy')
+        DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE', '')
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
         GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
 
@@ -433,17 +439,27 @@ runs:
             resources.update({k: v for k, v in config['production'].items() if k in ['memory', 'cpu', 'replicas']})
 
         try:
-            # Check if app exists
-            apps_resp = session.get(
-                f"{DOKPLOY_URL}/api/application.all",
+            # Check if app exists - use project.one to get applications scoped to this project
+            # This fixes the duplicate services bug (INT-148) - application.all was returning
+            # all apps across all projects, causing false negatives on name matching
+            project_resp = session.get(
+                f"{DOKPLOY_URL}/api/project.one",
+                params={"projectId": project_id},
                 timeout=30
             )
-            apps = apps_resp.json() if apps_resp.ok else []
+
+            apps = []
+            if project_resp.ok:
+                project_data = project_resp.json()
+                apps = project_data.get('applications', [])
+                print(f"Found {len(apps)} applications in project {project_name}")
+                for app in apps:
+                    print(f"  - {app.get('name')} ({app.get('applicationId')})")
 
             app_id = None
             app_exists = False
             for a in apps:
-                if a.get('name') == app_name and a.get('projectId') == project_id:
+                if a.get('name') == app_name:
                     app_id = a.get('applicationId')
                     app_exists = True
                     print(f"Found existing application: {app_name} ({app_id})")
@@ -473,8 +489,28 @@ runs:
                 app_id = create_app_resp.json().get('applicationId')
                 print(f"Created application: {app_name} ({app_id})")
 
-            # Configure/update GitHub source for both new and existing apps
-            if github_url:
+            # Configure source: Docker image takes precedence, else GitHub
+            if DOCKER_IMAGE:
+                print(f"Configuring Docker source: {DOCKER_IMAGE}")
+                source_data = {
+                    "applicationId": app_id,
+                    "sourceType": "docker",
+                    "dockerImage": DOCKER_IMAGE,
+                }
+                try:
+                    source_resp = session.post(
+                        f"{DOKPLOY_URL}/api/application.update",
+                        json=source_data,
+                        timeout=30
+                    )
+                    if source_resp.ok:
+                        print(f"Application configured with Docker image: {DOCKER_IMAGE}")
+                    else:
+                        print(f"::warning::Docker source config response: {source_resp.status_code} - {source_resp.text[:200]}")
+                except Exception as e:
+                    print(f"::warning::Failed to configure Docker source: {e}")
+            elif github_url:
+                # Fallback to GitHub source if no Docker image provided
                 source_data = {
                     "applicationId": app_id,
                     "sourceType": "github",

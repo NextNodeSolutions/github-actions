@@ -26,6 +26,21 @@ on:
         required: false
         default: 'deploy'
         type: string
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        default: 'Dockerfile'
+        type: string
+      build-context:
+        description: 'Docker build context'
+        required: false
+        default: '.'
+        type: string
+      build-args:
+        description: 'Docker build arguments (KEY=VALUE format, one per line)'
+        required: false
+        default: ''
+        type: string
     secrets:
       DOKPLOY_ADMIN_EMAIL:
         description: 'Dokploy admin email'
@@ -50,8 +65,8 @@ on:
         description: 'Hetzner Cloud API token (for custom VPS)'
         required: false
       TAILSCALE_AUTH_KEY:
-        description: 'Tailscale auth key (for custom VPS)'
-        required: false
+        description: 'Tailscale auth key for connecting to private registry'
+        required: true
       TF_API_TOKEN:
         description: 'Terraform Cloud API token (for custom VPS)'
         required: false
@@ -77,11 +92,41 @@ on:
       skipped:
         description: 'Whether deployment was skipped (environment disabled)'
         value: ${{ jobs.deploy.outputs.skipped }}
+      docker-image:
+        description: 'Docker image that was built and pushed'
+        value: ${{ jobs.build.outputs.image }}
 
 jobs:
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    if: inputs.action == 'deploy'
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout Shared Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nextnodesolutions/github-actions
+          path: .github-actions
+
+      - name: Build and Push to Registry
+        id: build
+        uses: ./.github-actions/actions/build/docker-build-push
+        with:
+          tailscale-auth-key: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.build-context }}
+          build-args: ${{ inputs.build-args }}
+
   deploy:
     name: Deploy to Dokploy
     runs-on: ubuntu-latest
+    needs: [build]
+    if: always() && (inputs.action == 'cleanup' || needs.build.result == 'success')
     outputs:
       project-id: ${{ steps.sync.outputs.project-id }}
       application-id: ${{ steps.sync.outputs.application-id }}
@@ -265,6 +310,7 @@ jobs:
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           action: ${{ inputs.action }}
+          docker-image: ${{ needs.build.outputs.image }}
 
       - name: Configure DNS
         id: dns
@@ -291,6 +337,7 @@ jobs:
           fi
           echo "| Project ID | \`${{ steps.sync.outputs.project-id }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Application ID | \`${{ steps.sync.outputs.application-id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Image | \`${{ needs.build.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ steps.check-vps.outputs.needs-custom-vps }}" == "true" ]]; then
             echo "| Custom VPS | \`${{ steps.check-vps.outputs.vps-name }}\` |" >> $GITHUB_STEP_SUMMARY
           fi
