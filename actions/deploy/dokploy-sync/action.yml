@@ -191,7 +191,7 @@ runs:
         # =================================================================
         print("::group::Setting up Dokploy API session")
 
-        # Use session for automatic cookie handling
+        # Use session with Bearer token authentication
         session = requests.Session()
         session.headers.update({"Content-Type": "application/json"})
 
@@ -207,6 +207,16 @@ runs:
                 output('success', 'false')
                 sys.exit(1)
             auth_resp.raise_for_status()
+
+            # Extract token from response and set as Bearer auth
+            auth_data = auth_resp.json()
+            token = auth_data.get('token')
+            if not token:
+                print("::error::No token in auth response")
+                output('success', 'false')
+                sys.exit(1)
+
+            session.headers.update({"Authorization": f"Bearer {token}"})
             print("Authentication successful")
         except requests.exceptions.RequestException as e:
             print(f"::error::Failed to authenticate with Dokploy: {e}")

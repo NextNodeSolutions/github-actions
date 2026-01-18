@@ -163,15 +163,10 @@ runs:
       run: |
         echo "::group::Dokploy Registration"
 
-        # Create temp file for cookies
-        COOKIE_FILE=$(mktemp)
-        trap "rm -f $COOKIE_FILE" EXIT
-
-        # Authenticate via Better Auth endpoint and save session cookie
+        # Authenticate via Better Auth endpoint and get Bearer token
         echo "Authenticating with Dokploy..."
         AUTH_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
           -H "Content-Type: application/json" \
-          -c "$COOKIE_FILE" \
           -d "$(jq -n \
             --arg email "${DOKPLOY_ADMIN_EMAIL}" \
             --arg password "${DOKPLOY_ADMIN_PASSWORD}" \
@@ -183,12 +178,20 @@ runs:
           exit 1
         fi
 
+        # Extract Bearer token from response
+        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token // empty')
+        if [[ -z "$TOKEN" ]]; then
+          echo "::error::No token in auth response"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
         echo "Authentication successful"
 
         # Verify session by getting server list
         AUTH_TEST=$(curl -sf -X GET "${DOKPLOY_URL}/api/server.all" \
           -H "Content-Type: application/json" \
-          -b "$COOKIE_FILE" 2>&1) || true
+          -H "Authorization: Bearer ${TOKEN}" 2>&1) || true
 
         if [[ -z "$AUTH_TEST" ]] || [[ "$AUTH_TEST" == *"Unauthorized"* ]]; then
           echo "::error::Session verification failed"
@@ -210,7 +213,7 @@ runs:
 
           CREATE_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/server.create" \
             -H "Content-Type: application/json" \
-            -b "$COOKIE_FILE" \
+            -H "Authorization: Bearer ${TOKEN}" \
             -d "$(jq -n \
               --arg name "${VPS_NAME}" \
               --arg ip "${TAILSCALE_IP}" \
@@ -232,7 +235,7 @@ runs:
           echo "Setting up server (this may take a few minutes)..."
           curl -sf -X POST "${DOKPLOY_URL}/api/server.setup" \
             -H "Content-Type: application/json" \
-            -b "$COOKIE_FILE" \
+            -H "Authorization: Bearer ${TOKEN}" \
             -d "$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')" || true
 
           echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
