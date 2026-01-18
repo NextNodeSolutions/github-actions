@@ -441,11 +441,17 @@ runs:
             apps = apps_resp.json() if apps_resp.ok else []
 
             app_id = None
+            app_exists = False
             for a in apps:
                 if a.get('name') == app_name and a.get('projectId') == project_id:
                     app_id = a.get('applicationId')
+                    app_exists = True
                     print(f"Found existing application: {app_name} ({app_id})")
                     break
+
+            # Get GitHub repository URL
+            github_repo = os.environ.get('GITHUB_REPOSITORY', '')
+            github_url = f"https://github.com/{github_repo}" if github_repo else ''
 
             if not app_id:
                 # Create application
@@ -466,6 +472,27 @@ runs:
                 create_app_resp.raise_for_status()
                 app_id = create_app_resp.json().get('applicationId')
                 print(f"Created application: {app_name} ({app_id})")
+
+            # Configure/update GitHub source for both new and existing apps
+            if github_url:
+                source_data = {
+                    "applicationId": app_id,
+                    "sourceType": "github",
+                    "customGitUrl": github_url,
+                    "customGitBranch": "main"
+                }
+                try:
+                    source_resp = session.post(
+                        f"{DOKPLOY_URL}/api/application.update",
+                        json=source_data,
+                        timeout=30
+                    )
+                    if source_resp.ok:
+                        print(f"Source configured: {github_url}")
+                    else:
+                        print(f"::warning::Source config response: {source_resp.status_code} - {source_resp.text[:200]}")
+                except Exception as e:
+                    print(f"::warning::Failed to configure source: {e}")
 
         except Exception as e:
             print(f"::error::Failed to setup application: {e}")
