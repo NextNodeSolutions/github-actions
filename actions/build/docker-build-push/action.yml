@@ -77,6 +77,10 @@ runs:
       uses: docker/setup-buildx-action@v3
       with:
         driver-opts: network=host
+        buildkitd-config-inline: |
+          [registry."admin-dokploy:5000"]
+            http = true
+            insecure = true
 
     - name: Generate Image Tag
       id: tag
