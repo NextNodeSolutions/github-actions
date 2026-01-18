@@ -502,6 +502,26 @@ runs:
         print("::endgroup::")
 
         # =================================================================
+        # TRIGGER DEPLOYMENT
+        # =================================================================
+        print("::group::Triggering deployment")
+
+        try:
+            deploy_resp = session.post(
+                f"{DOKPLOY_URL}/api/application.deploy",
+                json={"applicationId": app_id},
+                timeout=60
+            )
+            if deploy_resp.ok:
+                print(f"Deployment triggered for {app_name}")
+            else:
+                print(f"::warning::Deployment trigger response: {deploy_resp.status_code}")
+        except Exception as e:
+            print(f"::warning::Failed to trigger deployment: {e}")
+
+        print("::endgroup::")
+
+        # =================================================================
         # OUTPUT RESULTS
         # =================================================================
         output('project-id', project_id)
