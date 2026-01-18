@@ -1,0 +1,132 @@
+name: 'Docker Build and Push'
+description: 'Build Docker image and push to private registry via Tailscale'
+author: 'NextNodeSolutions'
+
+inputs:
+  tailscale-auth-key:
+    description: 'Tailscale auth key for connecting to private network'
+    required: true
+  dockerfile:
+    description: 'Path to Dockerfile'
+    default: 'Dockerfile'
+  context:
+    description: 'Docker build context'
+    default: '.'
+  build-args:
+    description: 'Docker build arguments (KEY=VALUE format, one per line)'
+    default: ''
+  tags:
+    description: 'Image tags (comma-separated). Auto-generates if empty.'
+    default: ''
+
+outputs:
+  image:
+    description: 'Full image reference (registry/repo:tag)'
+    value: ${{ steps.push.outputs.image }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Connect to Tailscale
+      uses: tailscale/github-action@v3
+      with:
+        authkey: ${{ inputs.tailscale-auth-key }}
+        tags: tag:github-actions
+
+    - name: Wait for MagicDNS
+      shell: bash
+      run: |
+        echo "::group::Waiting for Tailscale MagicDNS"
+        for i in {1..30}; do
+          if getent hosts admin-dokploy >/dev/null 2>&1; then
+            echo "MagicDNS resolved admin-dokploy"
+            tailscale status
+            echo "::endgroup::"
+            exit 0
+          fi
+          echo "Attempt $i/30: waiting for DNS resolution..."
+          sleep 2
+        done
+        echo "::error::Failed to resolve admin-dokploy via MagicDNS after 60 seconds"
+        echo "::endgroup::"
+        exit 1
+
+    - name: Test Registry Connection
+      shell: bash
+      run: |
+        echo "::group::Testing registry connection"
+        if curl -sf http://admin-dokploy:5000/v2/; then
+          echo "Registry connection successful"
+        else
+          echo "::error::Cannot connect to registry at admin-dokploy:5000"
+          exit 1
+        fi
+        echo "::endgroup::"
+
+    - name: Configure Docker for Insecure Registry
+      shell: bash
+      run: |
+        echo "::group::Configuring Docker for private registry"
+        sudo mkdir -p /etc/docker
+        echo '{"insecure-registries": ["admin-dokploy:5000"]}' | sudo tee /etc/docker/daemon.json
+        sudo systemctl restart docker
+        echo "Docker configured for insecure registry (HTTP over Tailscale)"
+        echo "::endgroup::"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        driver-opts: network=host
+
+    - name: Generate Image Tag
+      id: tag
+      shell: bash
+      env:
+        CUSTOM_TAGS: ${{ inputs.tags }}
+      run: |
+        echo "::group::Generating image tag"
+        REPO_NAME="${GITHUB_REPOSITORY#*/}"
+        SHA_SHORT="${GITHUB_SHA:0:7}"
+
+        if [ -n "$CUSTOM_TAGS" ]; then
+          # Use first custom tag
+          FIRST_TAG="${CUSTOM_TAGS%%,*}"
+          IMAGE="admin-dokploy:5000/${REPO_NAME}:${FIRST_TAG}"
+        else
+          IMAGE="admin-dokploy:5000/${REPO_NAME}:${SHA_SHORT}"
+        fi
+
+        echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+        echo "Generated image tag: ${IMAGE}"
+        echo "::endgroup::"
+
+    - name: Build and Push
+      id: push
+      shell: bash
+      env:
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        CONTEXT: ${{ inputs.context }}
+        BUILD_ARGS: ${{ inputs.build-args }}
+        IMAGE: ${{ steps.tag.outputs.image }}
+      run: |
+        echo "::group::Building and pushing Docker image"
+
+        BUILD_ARGS_FLAGS=""
+        if [ -n "$BUILD_ARGS" ]; then
+          while IFS= read -r arg; do
+            [ -n "$arg" ] && BUILD_ARGS_FLAGS="$BUILD_ARGS_FLAGS --build-arg $arg"
+          done <<< "$BUILD_ARGS"
+        fi
+
+        # Build with buildx and push
+        docker buildx build \
+          --file "$DOCKERFILE" \
+          --tag "$IMAGE" \
+          --push \
+          --network=host \
+          $BUILD_ARGS_FLAGS \
+          "$CONTEXT"
+
+        echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+        echo "Successfully pushed image: ${IMAGE}"
+        echo "::endgroup::"
