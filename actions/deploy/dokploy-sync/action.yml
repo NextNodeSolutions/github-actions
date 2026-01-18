@@ -306,7 +306,17 @@ runs:
                     timeout=30
                 )
                 create_resp.raise_for_status()
-                project_id = create_resp.json().get('projectId')
+                create_data = create_resp.json()
+                # Handle both possible response formats (projectId or id)
+                project_id = create_data.get('projectId') or create_data.get('id')
+                if not project_id:
+                    print(f"::warning::Unexpected project.create response: {create_data}")
+                    # Try to find project by name as fallback
+                    projects_resp2 = session.get(f"{DOKPLOY_URL}/api/project.all", timeout=30)
+                    for p in projects_resp2.json() if projects_resp2.ok else []:
+                        if p.get('name') == project_name:
+                            project_id = p.get('projectId')
+                            break
                 print(f"Created project: {project_name} ({project_id})")
         except Exception as e:
             print(f"::error::Failed to setup project: {e}")
