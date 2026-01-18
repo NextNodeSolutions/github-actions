@@ -27,8 +27,11 @@ on:
         default: 'deploy'
         type: string
     secrets:
-      DOKPLOY_API_TOKEN:
-        description: 'Dokploy API token (generate from /settings/profile in Dokploy UI)'
+      DOKPLOY_ADMIN_EMAIL:
+        description: 'Dokploy admin email'
+        required: true
+      DOKPLOY_ADMIN_PASSWORD:
+        description: 'Dokploy admin password'
         required: true
       TAILSCALE_OAUTH_CLIENT_ID:
         description: 'Tailscale OAuth client ID'
@@ -243,7 +246,8 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           tf-api-token: ${{ secrets.TF_API_TOKEN }}
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
-          dokploy-api-token: ${{ secrets.DOKPLOY_API_TOKEN }}
+          dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
+          dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           dokploy-ssh-key-id: ${{ secrets.DOKPLOY_SSH_KEY_ID }}
 
       - name: Sync to Dokploy
@@ -256,7 +260,8 @@ jobs:
           environment: ${{ inputs.environment }}
           pr-number: ${{ inputs.pr-number }}
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
-          dokploy-api-token: ${{ secrets.DOKPLOY_API_TOKEN }}
+          dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
+          dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           action: ${{ inputs.action }}

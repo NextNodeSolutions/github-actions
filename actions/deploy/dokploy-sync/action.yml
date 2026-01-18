@@ -21,8 +21,11 @@ inputs:
   dokploy-url:
     description: 'Dokploy instance URL'
     required: true
-  dokploy-api-token:
-    description: 'Dokploy API token (generate from /settings/profile in Dokploy UI)'
+  dokploy-admin-email:
+    description: 'Dokploy admin email'
+    required: true
+  dokploy-admin-password:
+    description: 'Dokploy admin password'
     required: true
   tailscale-api-key:
     description: 'Tailscale API key for server IP resolution'
@@ -70,7 +73,8 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         PR_NUMBER: ${{ inputs.pr-number }}
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_API_TOKEN: ${{ inputs.dokploy-api-token }}
+        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
         TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         ACTION: ${{ inputs.action }}
@@ -92,7 +96,8 @@ runs:
         ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
         PR_NUMBER = os.environ.get('PR_NUMBER', '')
         DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_API_TOKEN = os.environ['DOKPLOY_API_TOKEN']
+        DOKPLOY_ADMIN_EMAIL = os.environ['DOKPLOY_ADMIN_EMAIL']
+        DOKPLOY_ADMIN_PASSWORD = os.environ['DOKPLOY_ADMIN_PASSWORD']
         TAILSCALE_API_KEY = os.environ['TAILSCALE_API_KEY']
         CLOUDFLARE_TOKEN = os.environ['CLOUDFLARE_API_TOKEN']
         ACTION = os.environ.get('ACTION', 'deploy')
@@ -182,28 +187,39 @@ runs:
         print("::endgroup::")
 
         # =================================================================
-        # SETUP API SESSION
+        # SETUP API SESSION (Better Auth)
         # =================================================================
         print("::group::Setting up Dokploy API session")
 
-        # Use session with x-api-key header (API token authentication)
+        # Use session for automatic cookie handling
         session = requests.Session()
-        session.headers.update({
-            "Content-Type": "application/json",
-            "x-api-key": DOKPLOY_API_TOKEN
-        })
+        session.headers.update({"Content-Type": "application/json"})
 
-        # Verify authentication by making a simple API call
+        # Authenticate via Better Auth endpoint
         try:
-            test_resp = session.get(f"{DOKPLOY_URL}/api/project.all", timeout=30)
-            if test_resp.status_code == 401:
-                print("::error::API token is invalid or expired. Generate a new token from Dokploy UI (/settings/profile)")
+            auth_resp = session.post(
+                f"{DOKPLOY_URL}/api/auth/sign-in/email",
+                json={"email": DOKPLOY_ADMIN_EMAIL, "password": DOKPLOY_ADMIN_PASSWORD},
+                timeout=30
+            )
+            if auth_resp.status_code == 401:
+                print("::error::Invalid email or password")
                 output('success', 'false')
                 sys.exit(1)
-            test_resp.raise_for_status()
-            print("API authentication successful")
+            auth_resp.raise_for_status()
+            print("Authentication successful")
         except requests.exceptions.RequestException as e:
-            print(f"::error::Failed to connect to Dokploy: {e}")
+            print(f"::error::Failed to authenticate with Dokploy: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        # Verify session works by fetching projects
+        try:
+            test_resp = session.get(f"{DOKPLOY_URL}/api/project.all", timeout=30)
+            test_resp.raise_for_status()
+            print("API session verified")
+        except requests.exceptions.RequestException as e:
+            print(f"::error::Session verification failed: {e}")
             output('success', 'false')
             sys.exit(1)
 
