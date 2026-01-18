@@ -459,11 +459,21 @@ runs:
             )
 
             apps = []
+            print(f"Application API response: status={apps_resp.status_code}")
             if apps_resp.ok:
-                apps = apps_resp.json() if apps_resp.ok else []
+                raw_apps = apps_resp.json()
+                print(f"Raw applications response type: {type(raw_apps)}, length: {len(raw_apps) if isinstance(raw_apps, list) else 'N/A'}")
+                # Filter by project ID since the API might not support projectId param
+                if isinstance(raw_apps, list):
+                    apps = [a for a in raw_apps if a.get('projectId') == project_id]
+                    print(f"After filtering by projectId: {len(apps)} applications")
+                else:
+                    apps = []
                 print(f"Found {len(apps)} applications in project {project_name}")
                 for app in apps:
                     print(f"  - {app.get('name')} ({app.get('applicationId')})")
+            else:
+                print(f"::warning::Failed to get applications: {apps_resp.status_code} - {apps_resp.text[:200]}")
 
             app_id = None
             app_exists = False
