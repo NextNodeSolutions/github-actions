@@ -45,7 +45,7 @@ runs:
       with:
         oauth-client-id: ${{ inputs.tailscale-oauth-client-id }}
         oauth-secret: ${{ inputs.tailscale-oauth-secret }}
-        tags: tag:ci
+        tags: tag:github-actions
 
     - name: Resolve Dokploy URL
       id: resolve
