@@ -449,19 +449,18 @@ runs:
             resources.update({k: v for k, v in config['production'].items() if k in ['memory', 'cpu', 'replicas']})
 
         try:
-            # Check if app exists - use project.one to get applications scoped to this project
-            # This fixes the duplicate services bug (INT-148) - application.all was returning
-            # all apps across all projects, causing false negatives on name matching
-            project_resp = session.get(
-                f"{DOKPLOY_URL}/api/project.one",
+            # Check if app exists - use application.all with projectId filter
+            # This fixes the duplicate services bug (INT-148) by properly scoping to project
+            # Note: project.one doesn't return applications, so we must use application.all
+            apps_resp = session.get(
+                f"{DOKPLOY_URL}/api/application.all",
                 params={"projectId": project_id},
                 timeout=30
             )
 
             apps = []
-            if project_resp.ok:
-                project_data = project_resp.json()
-                apps = project_data.get('applications', [])
+            if apps_resp.ok:
+                apps = apps_resp.json() if apps_resp.ok else []
                 print(f"Found {len(apps)} applications in project {project_name}")
                 for app in apps:
                     print(f"  - {app.get('name')} ({app.get('applicationId')})")
