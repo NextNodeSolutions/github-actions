@@ -391,11 +391,14 @@ runs:
                 if server_id:
                     app_data["serverId"] = server_id
 
+                print(f"Creating application with data: {app_data}")
                 create_app_resp = session.post(
                     f"{DOKPLOY_URL}/api/application.create",
                     json=app_data,
                     timeout=30
                 )
+                print(f"Create response status: {create_app_resp.status_code}")
+                print(f"Create response body: {create_app_resp.text[:500] if create_app_resp.text else '(empty)'}")
                 create_app_resp.raise_for_status()
                 app_id = create_app_resp.json().get('applicationId')
                 print(f"Created application: {app_name} ({app_id})")
