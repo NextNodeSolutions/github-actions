@@ -260,12 +260,18 @@ runs:
 
                 for project in projects:
                     if project.get('name') == project_name:
-                        apps_resp = session.get(
-                            f"{DOKPLOY_URL}/api/application.all",
+                        # Get apps via project.one (application.all endpoint doesn't exist)
+                        proj_resp = session.get(
+                            f"{DOKPLOY_URL}/api/project.one",
                             params={"projectId": project.get('projectId')},
                             timeout=30
                         )
-                        apps = apps_resp.json() if apps_resp.ok else []
+                        apps = []
+                        if proj_resp.ok:
+                            proj_data = proj_resp.json()
+                            apps = proj_data.get('applications', [])
+                            for env in proj_data.get('environments', []):
+                                apps.extend(env.get('applications', []))
                         for app in apps:
                             if app.get('name') == preview_name:
                                 session.post(
@@ -449,31 +455,34 @@ runs:
             resources.update({k: v for k, v in config['production'].items() if k in ['memory', 'cpu', 'replicas']})
 
         try:
-            # Check if app exists - use application.all with projectId filter
-            # This fixes the duplicate services bug (INT-148) by properly scoping to project
-            # Note: project.one doesn't return applications, so we must use application.all
-            apps_resp = session.get(
-                f"{DOKPLOY_URL}/api/application.all",
+            # Check if app exists by getting project details which include applications
+            # The application.all endpoint doesn't exist - apps are nested in project.one response
+            project_detail_resp = session.get(
+                f"{DOKPLOY_URL}/api/project.one",
                 params={"projectId": project_id},
                 timeout=30
             )
 
             apps = []
-            print(f"Application API response: status={apps_resp.status_code}")
-            if apps_resp.ok:
-                raw_apps = apps_resp.json()
-                print(f"Raw applications response type: {type(raw_apps)}, length: {len(raw_apps) if isinstance(raw_apps, list) else 'N/A'}")
-                # Filter by project ID since the API might not support projectId param
-                if isinstance(raw_apps, list):
-                    apps = [a for a in raw_apps if a.get('projectId') == project_id]
-                    print(f"After filtering by projectId: {len(apps)} applications")
-                else:
-                    apps = []
+            if project_detail_resp.ok:
+                project_detail = project_detail_resp.json()
+                print(f"Project detail keys: {list(project_detail.keys())}")
+
+                # Applications might be directly on project or nested under environments
+                apps = project_detail.get('applications', [])
+
+                # Also check environments for applications
+                for env in project_detail.get('environments', []):
+                    env_apps = env.get('applications', [])
+                    if env_apps:
+                        print(f"Found {len(env_apps)} apps in environment {env.get('name')}")
+                        apps.extend(env_apps)
+
                 print(f"Found {len(apps)} applications in project {project_name}")
                 for app in apps:
-                    print(f"  - {app.get('name')} ({app.get('applicationId')})")
+                    print(f"  - {app.get('name')} ({app.get('applicationId')}) env={app.get('environmentId')}")
             else:
-                print(f"::warning::Failed to get applications: {apps_resp.status_code} - {apps_resp.text[:200]}")
+                print(f"::warning::Failed to get project details: {project_detail_resp.status_code}")
 
             app_id = None
             app_exists = False
