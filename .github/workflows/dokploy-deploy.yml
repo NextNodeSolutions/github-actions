@@ -113,6 +113,81 @@ jobs:
           repository: nextnodesolutions/github-actions
           path: .github-actions
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tomli
+        shell: bash
+        run: pip install tomli
+
+      - name: Calculate Build URL
+        id: url
+        shell: python
+        env:
+          CONFIG_FILE: ${{ inputs.config-file }}
+          DEFAULTS_FILE: .github-actions/config/dokploy-defaults.toml
+          ENVIRONMENT: ${{ inputs.environment }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_OUTPUT: ${{ github.output }}
+        run: |
+          import os
+          import tomli
+          from pathlib import Path
+
+          def deep_merge(base, override):
+              result = base.copy()
+              for key, value in override.items():
+                  if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                      result[key] = deep_merge(result[key], value)
+                  else:
+                      result[key] = value
+              return result
+
+          config_file = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+          defaults_file = os.environ.get('DEFAULTS_FILE', '')
+          environment = os.environ.get('ENVIRONMENT', 'production')
+          pr_number = os.environ.get('PR_NUMBER', '')
+          output_file = os.environ.get('GITHUB_OUTPUT', '')
+
+          # Load defaults
+          defaults = {}
+          if defaults_file and Path(defaults_file).exists():
+              with open(defaults_file, 'rb') as f:
+                  defaults = tomli.load(f)
+              print(f"Loaded defaults from: {defaults_file}")
+
+          # Load project config
+          config = {}
+          if Path(config_file).exists():
+              with open(config_file, 'rb') as f:
+                  config = tomli.load(f)
+              print(f"Loaded project config from: {config_file}")
+
+          # Merge configs
+          merged = deep_merge(defaults, config)
+          base_domain = merged.get('project', {}).get('domain', '')
+
+          # Generate URL based on environment
+          url = ''
+          if base_domain:
+              if environment == 'production':
+                  url = f"https://{base_domain}"
+              elif environment == 'development':
+                  url = f"https://dev.{base_domain}"
+              elif environment == 'preview' and pr_number:
+                  url = f"https://pr-{pr_number}.dev.{base_domain}"
+              else:
+                  url = f"https://{environment}.{base_domain}"
+              print(f"Calculated URL: {url}")
+          else:
+              print("No domain configured, URL will be empty")
+
+          with open(output_file, 'a') as f:
+              f.write(f"url={url}\n")
+
       - name: Build and Push to Registry
         id: build
         uses: ./.github-actions/actions/build/docker-build-push
@@ -120,7 +195,9 @@ jobs:
           tailscale-auth-key: ${{ secrets.TAILSCALE_AUTH_KEY }}
           dockerfile: ${{ inputs.dockerfile }}
           context: ${{ inputs.build-context }}
-          build-args: ${{ inputs.build-args }}
+          build-args: |
+            URL=${{ steps.url.outputs.url }}
+            ${{ inputs.build-args }}
 
   deploy:
     name: Deploy to Dokploy
