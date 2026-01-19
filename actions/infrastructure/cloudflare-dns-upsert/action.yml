@@ -198,6 +198,7 @@ runs:
 
         RECORD_ID=$(echo "$EXISTING_RECORD" | jq -r '.result[0].id // empty')
         CURRENT_CONTENT=$(echo "$EXISTING_RECORD" | jq -r '.result[0].content // empty')
+        CURRENT_PROXIED=$(echo "$EXISTING_RECORD" | jq -r '.result[0].proxied // false')
 
         # Convert proxied to boolean for JSON
         PROXIED_BOOL="false"
@@ -230,21 +231,26 @@ runs:
             echo "::endgroup::"
             exit 1
           fi
-        elif [[ "$CURRENT_CONTENT" == "$RECORD_CONTENT" ]]; then
-          # No change needed
-          echo "Record already exists with correct content"
+        elif [[ "$CURRENT_CONTENT" == "$RECORD_CONTENT" && "$CURRENT_PROXIED" == "$PROXIED_BOOL" ]]; then
+          # No change needed - both content and proxied match
+          echo "Record already exists with correct content and proxy settings"
           echo "success=true" >> $GITHUB_OUTPUT
           echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
           echo "action=unchanged" >> $GITHUB_OUTPUT
           echo "resolved-content=$RECORD_CONTENT" >> $GITHUB_OUTPUT
         else
-          # Update existing record
-          echo "Updating $INPUT_RECORD_TYPE record: $INPUT_DOMAIN -> $RECORD_CONTENT (was: $CURRENT_CONTENT)"
+          # Update existing record (content and/or proxied changed)
+          if [[ "$CURRENT_CONTENT" != "$RECORD_CONTENT" ]]; then
+            echo "Updating $INPUT_RECORD_TYPE record: $INPUT_DOMAIN -> $RECORD_CONTENT (was: $CURRENT_CONTENT)"
+          fi
+          if [[ "$CURRENT_PROXIED" != "$PROXIED_BOOL" ]]; then
+            echo "Updating proxied setting: $PROXIED_BOOL (was: $CURRENT_PROXIED)"
+          fi
 
           UPDATE_RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records/${RECORD_ID}" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data "{\"content\":\"${RECORD_CONTENT}\"}")
+            --data "{\"content\":\"${RECORD_CONTENT}\",\"proxied\":${PROXIED_BOOL}}")
 
           SUCCESS=$(echo "$UPDATE_RESPONSE" | jq -r '.success')
 
