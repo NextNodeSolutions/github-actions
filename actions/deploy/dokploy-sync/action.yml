@@ -41,6 +41,10 @@ inputs:
     description: 'Docker image to deploy (e.g., admin-dokploy:5000/repo:tag). When provided, uses Docker source instead of GitHub.'
     required: false
     default: ''
+  hcloud-token:
+    description: 'Hetzner Cloud API token for accurate server public IP resolution'
+    required: false
+    default: ''
 
 outputs:
   project-id:
@@ -86,6 +90,7 @@ runs:
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         ACTION: ${{ inputs.action }}
         DOCKER_IMAGE: ${{ inputs.docker-image }}
+        HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
         GITHUB_OUTPUT: ${{ github.output }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
@@ -110,6 +115,7 @@ runs:
         CLOUDFLARE_TOKEN = os.environ['CLOUDFLARE_API_TOKEN']
         ACTION = os.environ.get('ACTION', 'deploy')
         DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE', '')
+        HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
         GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
 
@@ -397,41 +403,66 @@ runs:
 
         print(f"Target server: {server_name}")
 
-        # Get server ID from Dokploy
+        # Get server ID from Dokploy and public IP from Hetzner
         server_public_ip = None
+        server_id = None
+
+        # Step 1: Get public IP from Hetzner Cloud API (accurate source)
+        if HCLOUD_TOKEN:
+            try:
+                hetzner_resp = requests.get(
+                    f"https://api.hetzner.cloud/v1/servers?name={server_name}",
+                    headers={"Authorization": f"Bearer {HCLOUD_TOKEN}"},
+                    timeout=30
+                )
+                if hetzner_resp.ok:
+                    servers_data = hetzner_resp.json().get('servers', [])
+                    if servers_data:
+                        ipv4_data = servers_data[0].get('public_net', {}).get('ipv4', {})
+                        server_public_ip = ipv4_data.get('ip')
+                        if server_public_ip:
+                            print(f"Server public IP (from Hetzner): {server_public_ip}")
+                    else:
+                        print(f"::warning::Server {server_name} not found in Hetzner Cloud")
+                else:
+                    print(f"::warning::Hetzner API returned {hetzner_resp.status_code}")
+            except Exception as e:
+                print(f"::warning::Failed to get IP from Hetzner: {e}")
+
+        # Step 2: Get server ID from Dokploy (needed for deployment)
         try:
             servers_resp = session.get(f"{DOKPLOY_URL}/api/server.all", timeout=30)
             servers = servers_resp.json() if servers_resp.ok else []
 
-            server_id = None
             for s in servers:
                 if s.get('name') == server_name:
                     server_id = s.get('serverId')
-                    # Get server's public IP
-                    try:
-                        ip_resp = session.get(
-                            f"{DOKPLOY_URL}/api/server.publicIp",
-                            params={"serverId": server_id},
-                            timeout=30
-                        )
-                        if ip_resp.ok:
-                            ip_data = ip_resp.json()
-                            if isinstance(ip_data, str):
-                                server_public_ip = ip_data if ip_data else None
-                            elif isinstance(ip_data, dict):
-                                server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
-                            else:
-                                server_public_ip = None
-                            if server_public_ip:
-                                print(f"Server public IP: {server_public_ip}")
-                    except Exception as e:
-                        print(f"::warning::Failed to get server IP: {e}")
+                    print(f"Found server in Dokploy: {server_name} ({server_id})")
+
+                    # Fallback: Get IP from Dokploy if Hetzner failed
+                    if not server_public_ip:
+                        try:
+                            ip_resp = session.get(
+                                f"{DOKPLOY_URL}/api/server.publicIp",
+                                params={"serverId": server_id},
+                                timeout=30
+                            )
+                            if ip_resp.ok:
+                                ip_data = ip_resp.json()
+                                if isinstance(ip_data, str):
+                                    server_public_ip = ip_data if ip_data else None
+                                elif isinstance(ip_data, dict):
+                                    server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
+                                if server_public_ip:
+                                    print(f"Server public IP (from Dokploy fallback): {server_public_ip}")
+                        except Exception as e:
+                            print(f"::warning::Failed to get server IP from Dokploy: {e}")
                     break
 
             if not server_id:
                 print(f"::warning::Server {server_name} not found in Dokploy, using default")
         except Exception as e:
-            print(f"::warning::Failed to get servers: {e}")
+            print(f"::warning::Failed to get servers from Dokploy: {e}")
             server_id = None
 
         print("::endgroup::")

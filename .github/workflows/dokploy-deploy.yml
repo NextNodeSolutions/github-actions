@@ -309,6 +309,7 @@ jobs:
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          hcloud-token: ${{ secrets.HETZNER_TOKEN }}
           action: ${{ inputs.action }}
           docker-image: ${{ needs.build.outputs.image }}
 
