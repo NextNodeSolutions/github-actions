@@ -199,6 +199,10 @@ runs:
             domain = ''
             print("No domain configured, DNS setup will be skipped")
 
+        # Get application port (default 3000, commonly 4321 for Astro)
+        app_port = config.get('project', {}).get('port', 3000)
+        print(f"Application port: {app_port}")
+
         print("::endgroup::")
 
         # =================================================================
@@ -597,6 +601,7 @@ runs:
                 domain_data = {
                     "applicationId": app_id,
                     "host": domain,
+                    "port": app_port,
                     "https": True,
                     "certificateType": "letsencrypt"
                 }
@@ -606,7 +611,7 @@ runs:
                     json=domain_data,
                     timeout=30
                 )
-                print(f"Domain configured: {domain}")
+                print(f"Domain configured: {domain} (port {app_port})")
             except Exception as e:
                 print(f"::warning::Domain configuration: {e}")
         else:
