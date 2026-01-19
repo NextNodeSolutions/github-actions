@@ -140,11 +140,14 @@ runs:
           FILE_COUNT=$(find "$INPUT_OUTPUT_DIR" -type f | wc -l | tr -d ' ')
           echo "• Files generated: $FILE_COUNT"
 
-          # List largest files
+          # List largest files (use pipe handling to avoid broken pipe errors)
           echo "• Largest files:"
-          find "$INPUT_OUTPUT_DIR" -type f -exec du -h {} \; | sort -rh | head -5 | while read size file; do
-            echo "  - $size $(basename "$file")"
-          done
+          LARGEST_FILES=$(find "$INPUT_OUTPUT_DIR" -type f -exec du -h {} \; 2>/dev/null | sort -rh 2>/dev/null | head -5 2>/dev/null || true)
+          if [[ -n "$LARGEST_FILES" ]]; then
+            echo "$LARGEST_FILES" | while read -r size file; do
+              echo "  - $size $(basename "$file")"
+            done
+          fi
         else
           echo "⚠️ Output directory '$INPUT_OUTPUT_DIR' not found"
           echo "output-size=N/A" >> $GITHUB_OUTPUT
