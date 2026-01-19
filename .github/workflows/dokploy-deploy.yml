@@ -390,6 +390,25 @@ jobs:
           action: ${{ inputs.action }}
           docker-image: ${{ needs.build.outputs.image }}
 
+      - name: Detect Sub-subdomain
+        id: detect-subdomain
+        if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != ''
+        shell: bash
+        run: |
+          DOMAIN="${{ steps.sync.outputs.domain }}"
+          # Count dots in domain: 1 dot = apex (example.com), 2+ dots = subdomain/sub-subdomain
+          DOT_COUNT=$(echo "$DOMAIN" | tr -cd '.' | wc -c)
+
+          # Sub-subdomains (3+ levels like pr-5.dev.ya6ou.com) cannot use Cloudflare proxy
+          # because free SSL only covers *.domain.com, not *.subdomain.domain.com
+          if [[ $DOT_COUNT -ge 2 ]]; then
+            echo "Domain '$DOMAIN' is a sub-subdomain ($DOT_COUNT dots), disabling Cloudflare proxy"
+            echo "proxied=false" >> $GITHUB_OUTPUT
+          else
+            echo "Domain '$DOMAIN' is a standard domain ($DOT_COUNT dots), enabling Cloudflare proxy"
+            echo "proxied=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Configure DNS
         id: dns
         if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true' && steps.sync.outputs.domain != '' && steps.sync.outputs.server-ip != ''
@@ -398,7 +417,7 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           domain: ${{ steps.sync.outputs.domain }}
           content: ${{ steps.sync.outputs.server-ip }}
-          proxied: 'true'
+          proxied: ${{ steps.detect-subdomain.outputs.proxied || 'true' }}
 
       - name: Deployment Summary
         if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
@@ -420,7 +439,12 @@ jobs:
             echo "| Custom VPS | \`${{ steps.check-vps.outputs.vps-name }}\` |" >> $GITHUB_STEP_SUMMARY
           fi
           if [[ -n "${{ steps.dns.outputs.action }}" ]]; then
-            echo "| DNS | ${{ steps.dns.outputs.action }} (\`${{ steps.sync.outputs.server-ip }}\`) |" >> $GITHUB_STEP_SUMMARY
+            PROXY_STATUS="${{ steps.detect-subdomain.outputs.proxied }}"
+            if [[ "$PROXY_STATUS" == "false" ]]; then
+              echo "| DNS | ${{ steps.dns.outputs.action }} (\`${{ steps.sync.outputs.server-ip }}\`, DNS-only) |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| DNS | ${{ steps.dns.outputs.action }} (\`${{ steps.sync.outputs.server-ip }}\`, proxied) |" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
 
       - name: Cleanup Summary
