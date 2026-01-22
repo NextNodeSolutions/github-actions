@@ -1,0 +1,206 @@
+name: Infrastructure Health Check
+
+# EXTERNAL WORKFLOW - Monitors NextNode infrastructure health
+# Checks Docker Swarm cluster status and service health
+
+on:
+  workflow_call:
+    inputs:
+      check-swarm:
+        description: 'Check Docker Swarm cluster health'
+        required: false
+        default: true
+        type: boolean
+      check-services:
+        description: 'Check critical services status'
+        required: false
+        default: true
+        type: boolean
+      manager-host:
+        description: 'Swarm manager Tailscale hostname'
+        required: false
+        default: 'admin-dokploy'
+        type: string
+    secrets:
+      TAILSCALE_AUTHKEY:
+        description: 'Tailscale auth key for VPN connection'
+        required: true
+    outputs:
+      swarm-healthy:
+        description: 'Whether Swarm cluster is healthy'
+        value: ${{ jobs.health-check.outputs.swarm-healthy }}
+      services-healthy:
+        description: 'Whether all services are healthy'
+        value: ${{ jobs.health-check.outputs.services-healthy }}
+      node-count:
+        description: 'Number of Swarm nodes'
+        value: ${{ jobs.health-check.outputs.node-count }}
+      manager-count:
+        description: 'Number of manager nodes'
+        value: ${{ jobs.health-check.outputs.manager-count }}
+
+  # Allow scheduled runs (configure in calling workflow)
+  workflow_dispatch:
+    inputs:
+      check-swarm:
+        description: 'Check Docker Swarm cluster health'
+        required: false
+        default: true
+        type: boolean
+      check-services:
+        description: 'Check critical services status'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  health-check:
+    name: Infrastructure Health Check
+    runs-on: ubuntu-latest
+    outputs:
+      swarm-healthy: ${{ steps.swarm.outputs.healthy }}
+      services-healthy: ${{ steps.services.outputs.healthy }}
+      node-count: ${{ steps.swarm.outputs.node-count }}
+      manager-count: ${{ steps.swarm.outputs.manager-count }}
+
+    steps:
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          version: latest
+
+      - name: Wait for Tailscale connection
+        run: |
+          echo "::group::Waiting for Tailscale"
+          for i in {1..30}; do
+            if tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' > /dev/null; then
+              echo "Tailscale connected"
+              tailscale status
+              break
+            fi
+            echo "Waiting for Tailscale... ($i/30)"
+            sleep 2
+          done
+          echo "::endgroup::"
+
+      - name: Check Swarm cluster health
+        id: swarm
+        if: ${{ inputs.check-swarm }}
+        run: |
+          echo "::group::Swarm Cluster Health"
+          MANAGER_HOST="${{ inputs.manager-host || 'admin-dokploy' }}"
+
+          # Get node list from Swarm manager
+          NODE_OUTPUT=$(tailscale ssh "root@${MANAGER_HOST}" "docker node ls --format '{{.ID}}\t{{.Hostname}}\t{{.Status}}\t{{.Availability}}\t{{.ManagerStatus}}'" 2>/dev/null || echo "ERROR")
+
+          if [ "$NODE_OUTPUT" = "ERROR" ]; then
+            {
+              echo "healthy=false"
+              echo "node-count=0"
+              echo "manager-count=0"
+            } >> "$GITHUB_OUTPUT"
+            echo "::error::Failed to connect to Swarm manager"
+            exit 1
+          fi
+
+          echo "Swarm nodes:"
+          echo "$NODE_OUTPUT"
+          echo ""
+
+          # Count total nodes and managers
+          NODE_COUNT=$(echo "$NODE_OUTPUT" | wc -l | tr -d ' ')
+          MANAGER_COUNT=$(echo "$NODE_OUTPUT" | grep -c "Leader\|Reachable" || echo "0")
+          READY_COUNT=$(echo "$NODE_OUTPUT" | grep -c "Ready" || echo "0")
+
+          {
+            echo "node-count=${NODE_COUNT}"
+            echo "manager-count=${MANAGER_COUNT}"
+          } >> "$GITHUB_OUTPUT"
+
+          # Check if all nodes are Ready
+          if [ "$READY_COUNT" -eq "$NODE_COUNT" ] && [ "$NODE_COUNT" -gt 0 ]; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+            echo "All ${NODE_COUNT} nodes are healthy"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Only ${READY_COUNT} of ${NODE_COUNT} nodes are Ready"
+          fi
+          echo "::endgroup::"
+
+      - name: Check critical services
+        id: services
+        if: ${{ inputs.check-services }}
+        run: |
+          echo "::group::Service Health"
+          MANAGER_HOST="${{ inputs.manager-host || 'admin-dokploy' }}"
+
+          # Get service list from Swarm
+          SERVICE_OUTPUT=$(tailscale ssh "root@${MANAGER_HOST}" "docker service ls --format '{{.Name}}\t{{.Replicas}}\t{{.Image}}'" 2>/dev/null || echo "ERROR")
+
+          if [ "$SERVICE_OUTPUT" = "ERROR" ]; then
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Failed to get service list"
+            exit 1
+          fi
+
+          echo "Services:"
+          echo "$SERVICE_OUTPUT"
+          echo ""
+
+          # Check for unhealthy services (0/X replicas)
+          UNHEALTHY=$(echo "$SERVICE_OUTPUT" | grep "0/" || true)
+
+          if [ -z "$UNHEALTHY" ]; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+            echo "All services are healthy"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Some services have 0 replicas:"
+            echo "$UNHEALTHY"
+          fi
+          echo "::endgroup::"
+
+      - name: Check Dokploy status
+        run: |
+          echo "::group::Dokploy Status"
+          MANAGER_HOST="${{ inputs.manager-host || 'admin-dokploy' }}"
+
+          # Check Dokploy container
+          DOKPLOY_STATUS=$(tailscale ssh "root@${MANAGER_HOST}" "docker ps --filter 'name=dokploy' --format '{{.Status}}'" 2>/dev/null || echo "ERROR")
+
+          if [ "$DOKPLOY_STATUS" = "ERROR" ] || [ -z "$DOKPLOY_STATUS" ]; then
+            echo "::warning::Dokploy container not found or not running"
+          else
+            echo "Dokploy status: $DOKPLOY_STATUS"
+          fi
+          echo "::endgroup::"
+
+      - name: Check Registry status
+        run: |
+          echo "::group::Registry Status"
+          MANAGER_HOST="${{ inputs.manager-host || 'admin-dokploy' }}"
+
+          # Check Registry container
+          REGISTRY_STATUS=$(tailscale ssh "root@${MANAGER_HOST}" "docker ps --filter 'name=registry' --format '{{.Status}}'" 2>/dev/null || echo "ERROR")
+
+          if [ "$REGISTRY_STATUS" = "ERROR" ] || [ -z "$REGISTRY_STATUS" ]; then
+            echo "::warning::Registry container not found or not running"
+          else
+            echo "Registry status: $REGISTRY_STATUS"
+          fi
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Infrastructure Health Check Results"
+            echo ""
+            echo "| Check | Status |"
+            echo "|-------|--------|"
+            echo "| Swarm Cluster | ${{ steps.swarm.outputs.healthy == 'true' && '✅ Healthy' || '❌ Unhealthy' }} |"
+            echo "| Services | ${{ steps.services.outputs.healthy == 'true' && '✅ Healthy' || '❌ Unhealthy' }} |"
+            echo "| Node Count | ${{ steps.swarm.outputs.node-count || 'N/A' }} |"
+            echo "| Manager Count | ${{ steps.swarm.outputs.manager-count || 'N/A' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

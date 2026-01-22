@@ -1,0 +1,195 @@
+name: Swarm Service Rollback
+
+# EXTERNAL WORKFLOW - Rolls back a Swarm service to previous image version
+# Useful for quick recovery from failed deployments
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        description: 'Name of the Swarm service to rollback'
+        required: true
+        type: string
+      manager-host:
+        description: 'Swarm manager Tailscale hostname'
+        required: false
+        default: 'admin-dokploy'
+        type: string
+      verify-health:
+        description: 'Verify service health after rollback'
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      TAILSCALE_AUTHKEY:
+        description: 'Tailscale auth key for VPN connection'
+        required: true
+    outputs:
+      success:
+        description: 'Whether rollback succeeded'
+        value: ${{ jobs.rollback.outputs.success }}
+      previous-image:
+        description: 'Previous image that was rolled back from'
+        value: ${{ jobs.rollback.outputs.previous-image }}
+      current-image:
+        description: 'Current image after rollback'
+        value: ${{ jobs.rollback.outputs.current-image }}
+
+  workflow_dispatch:
+    inputs:
+      service-name:
+        description: 'Name of the Swarm service to rollback'
+        required: true
+        type: string
+      manager-host:
+        description: 'Swarm manager Tailscale hostname'
+        required: false
+        default: 'admin-dokploy'
+        type: string
+      verify-health:
+        description: 'Verify service health after rollback'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  rollback:
+    name: Rollback Service
+    runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.rollback.outputs.success }}
+      previous-image: ${{ steps.pre-check.outputs.current-image }}
+      current-image: ${{ steps.verify.outputs.current-image }}
+
+    steps:
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          version: latest
+
+      - name: Wait for Tailscale connection
+        run: |
+          echo "::group::Waiting for Tailscale"
+          for i in {1..30}; do
+            if tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' > /dev/null; then
+              echo "Tailscale connected"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          echo "::endgroup::"
+
+      - name: Pre-rollback check
+        id: pre-check
+        run: |
+          echo "::group::Pre-rollback Check"
+          MANAGER_HOST="${{ inputs.manager-host }}"
+          SERVICE="${{ inputs.service-name }}"
+
+          # Check if service exists
+          SERVICE_INFO=$(tailscale ssh "root@${MANAGER_HOST}" "docker service inspect ${SERVICE} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'" 2>/dev/null || echo "ERROR")
+
+          if [ "$SERVICE_INFO" = "ERROR" ]; then
+            echo "::error::Service '${SERVICE}' not found"
+            exit 1
+          fi
+
+          echo "current-image=${SERVICE_INFO}" >> "$GITHUB_OUTPUT"
+          echo "Current image: ${SERVICE_INFO}"
+
+          # Get service replicas status
+          REPLICAS=$(tailscale ssh "root@${MANAGER_HOST}" "docker service ls --filter name=${SERVICE} --format '{{.Replicas}}'" 2>/dev/null)
+          echo "Current replicas: ${REPLICAS}"
+          echo "::endgroup::"
+
+      - name: Perform rollback
+        id: rollback
+        run: |
+          echo "::group::Rolling back service"
+          MANAGER_HOST="${{ inputs.manager-host }}"
+          SERVICE="${{ inputs.service-name }}"
+
+          # Execute rollback
+          ROLLBACK_OUTPUT=$(tailscale ssh "root@${MANAGER_HOST}" "docker service update --rollback ${SERVICE}" 2>&1 || echo "ERROR")
+
+          if echo "$ROLLBACK_OUTPUT" | grep -q "ERROR"; then
+            echo "::error::Rollback failed: ${ROLLBACK_OUTPUT}"
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "Rollback initiated successfully"
+          echo "$ROLLBACK_OUTPUT"
+          echo "success=true" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Wait for rollback completion
+        run: |
+          echo "::group::Waiting for rollback to complete"
+          MANAGER_HOST="${{ inputs.manager-host }}"
+          SERVICE="${{ inputs.service-name }}"
+
+          # Wait for service to stabilize (max 2 minutes)
+          for i in {1..24}; do
+            UPDATE_STATE=$(tailscale ssh "root@${MANAGER_HOST}" "docker service inspect ${SERVICE} --format '{{.UpdateStatus.State}}'" 2>/dev/null || echo "unknown")
+
+            if [ "$UPDATE_STATE" = "completed" ] || [ "$UPDATE_STATE" = "" ]; then
+              echo "Rollback completed"
+              break
+            elif [ "$UPDATE_STATE" = "rollback_completed" ]; then
+              echo "Rollback completed (rollback state)"
+              break
+            elif [ "$UPDATE_STATE" = "paused" ]; then
+              echo "::warning::Rollback paused - manual intervention may be required"
+              break
+            fi
+
+            echo "Update state: ${UPDATE_STATE} (waiting... $i/24)"
+            sleep 5
+          done
+          echo "::endgroup::"
+
+      - name: Verify rollback
+        id: verify
+        if: ${{ inputs.verify-health }}
+        run: |
+          echo "::group::Verifying rollback"
+          MANAGER_HOST="${{ inputs.manager-host }}"
+          SERVICE="${{ inputs.service-name }}"
+
+          # Get new image
+          NEW_IMAGE=$(tailscale ssh "root@${MANAGER_HOST}" "docker service inspect ${SERVICE} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'" 2>/dev/null)
+          echo "current-image=${NEW_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Image after rollback: ${NEW_IMAGE}"
+
+          # Check replicas
+          REPLICAS=$(tailscale ssh "root@${MANAGER_HOST}" "docker service ls --filter name=${SERVICE} --format '{{.Replicas}}'" 2>/dev/null)
+          echo "Replicas: ${REPLICAS}"
+
+          # Verify replicas are healthy
+          RUNNING=$(echo "$REPLICAS" | cut -d'/' -f1)
+          DESIRED=$(echo "$REPLICAS" | cut -d'/' -f2)
+
+          if [ "$RUNNING" = "$DESIRED" ] && [ "$RUNNING" -gt 0 ]; then
+            echo "Service is healthy after rollback"
+          else
+            echo "::warning::Service may not be fully healthy: ${RUNNING}/${DESIRED} replicas running"
+          fi
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Swarm Service Rollback Results"
+            echo ""
+            echo "**Service:** ${{ inputs.service-name }}"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Status | ${{ steps.rollback.outputs.success == 'true' && '✅ Success' || '❌ Failed' }} |"
+            echo "| Previous Image | ${{ steps.pre-check.outputs.current-image || 'N/A' }} |"
+            echo "| Current Image | ${{ steps.verify.outputs.current-image || 'N/A' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
