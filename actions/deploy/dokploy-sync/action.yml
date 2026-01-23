@@ -472,6 +472,46 @@ runs:
         print("::endgroup::")
 
         # =================================================================
+        # GET TRAEFIK SERVER IP (for DNS - all traffic routes through Traefik)
+        # =================================================================
+        print("::group::Getting Traefik server IP")
+
+        # In Swarm mode, all DNS records point to the Traefik ingress server
+        traefik_server = config.get('cluster', {}).get('traefik-server', 'admin-dokploy')
+        traefik_public_ip = None
+
+        print(f"Traefik server (from cluster config): {traefik_server}")
+
+        if HCLOUD_TOKEN:
+            try:
+                traefik_resp = requests.get(
+                    f"https://api.hetzner.cloud/v1/servers?name={traefik_server}",
+                    headers={"Authorization": f"Bearer {HCLOUD_TOKEN}"},
+                    timeout=30
+                )
+                if traefik_resp.ok:
+                    traefik_servers = traefik_resp.json().get('servers', [])
+                    if traefik_servers:
+                        traefik_ipv4 = traefik_servers[0].get('public_net', {}).get('ipv4', {})
+                        traefik_public_ip = traefik_ipv4.get('ip')
+                        if traefik_public_ip:
+                            print(f"Traefik server public IP: {traefik_public_ip}")
+                    else:
+                        print(f"::warning::Traefik server {traefik_server} not found in Hetzner Cloud")
+                else:
+                    print(f"::warning::Hetzner API returned {traefik_resp.status_code}")
+            except Exception as e:
+                print(f"::warning::Failed to get Traefik server IP from Hetzner: {e}")
+
+        # Fallback to worker server IP if Traefik lookup fails (backwards compatibility)
+        if not traefik_public_ip:
+            traefik_public_ip = server_public_ip
+            if traefik_public_ip:
+                print(f"::warning::Using worker server IP as fallback: {traefik_public_ip}")
+
+        print("::endgroup::")
+
+        # =================================================================
         # CREATE/UPDATE APPLICATION
         # =================================================================
         print("::group::Setting up application")
@@ -645,7 +685,8 @@ runs:
         output('project-id', project_id)
         output('application-id', app_id)
         output('domain', domain)
-        output('server-ip', server_public_ip or '')
+        # Use Traefik server IP for DNS (all traffic routes through Traefik in Swarm mode)
+        output('server-ip', traefik_public_ip or '')
         output('success', 'true')
 
         print("")

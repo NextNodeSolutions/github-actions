@@ -2,6 +2,14 @@
 # Projects only need to override what differs from these defaults
 
 # =============================================================================
+# CLUSTER CONFIGURATION (Docker Swarm)
+# =============================================================================
+[cluster]
+# Traefik ingress server - all DNS records point here
+# In Swarm mode, Traefik routes traffic to services on worker nodes
+traefik-server = "admin-dokploy"
+
+# =============================================================================
 # BUILD CONFIGURATION
 # =============================================================================
 [build]
