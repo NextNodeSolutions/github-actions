@@ -73,6 +73,9 @@ on:
       DOKPLOY_SSH_KEY_ID:
         description: 'Dokploy SSH key ID (for custom VPS)'
         required: false
+      DOKPLOY_SSH_PRIVATE_KEY:
+        description: 'SSH private key for cross-Swarm routing (nextnode-dokploy-ci)'
+        required: false
     outputs:
       project-id:
         description: 'Dokploy project ID'
@@ -419,6 +422,24 @@ jobs:
           content: ${{ steps.sync.outputs.server-ip }}
           proxied: ${{ steps.detect-subdomain.outputs.proxied || 'true' }}
 
+      - name: Configure Cross-Swarm Routing
+        id: cross-swarm
+        if: |
+          steps.check-enabled.outputs.enabled == 'true' &&
+          inputs.action == 'deploy' &&
+          steps.sync.outputs.success == 'true' &&
+          steps.sync.outputs.cross-swarm == 'true' &&
+          steps.sync.outputs.worker-tailscale-ip != ''
+        uses: ./.github-actions/actions/deploy/cross-swarm-routing
+        with:
+          app-name: ${{ steps.sync.outputs.application-name }}
+          domain: ${{ steps.sync.outputs.domain }}
+          worker-tailscale-ip: ${{ steps.sync.outputs.worker-tailscale-ip }}
+          admin-tailscale-ip: ${{ steps.dokploy-url.outputs.ip }}
+          container-port: ${{ steps.sync.outputs.container-port }}
+          use-https: 'true'
+          ssh-private-key: ${{ secrets.DOKPLOY_SSH_PRIVATE_KEY }}
+
       - name: Deployment Summary
         if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true'
         run: |
@@ -445,6 +466,9 @@ jobs:
             else
               echo "| DNS | ${{ steps.dns.outputs.action }} (\`${{ steps.sync.outputs.server-ip }}\`, proxied) |" >> $GITHUB_STEP_SUMMARY
             fi
+          fi
+          if [[ "${{ steps.sync.outputs.cross-swarm }}" == "true" ]]; then
+            echo "| Cross-Swarm | Traefik → \`${{ steps.sync.outputs.worker-tailscale-ip }}:${{ steps.cross-swarm.outputs.external-port }}\` |" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Cleanup Summary

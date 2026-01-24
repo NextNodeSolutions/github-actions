@@ -53,6 +53,9 @@ outputs:
   application-id:
     description: 'Dokploy application ID'
     value: ${{ steps.sync.outputs.application-id }}
+  application-name:
+    description: 'Dokploy application name'
+    value: ${{ steps.sync.outputs.application-name }}
   domain:
     description: 'Deployed domain'
     value: ${{ steps.sync.outputs.domain }}
@@ -62,6 +65,18 @@ outputs:
   server-ip:
     description: 'Server public IP address'
     value: ${{ steps.sync.outputs.server-ip }}
+  cross-swarm:
+    description: 'Whether cross-Swarm routing is needed (service on different server than Traefik)'
+    value: ${{ steps.sync.outputs.cross-swarm }}
+  container-port:
+    description: 'Container port the application listens on'
+    value: ${{ steps.sync.outputs.container-port }}
+  server-name:
+    description: 'Target server name where application is deployed'
+    value: ${{ steps.sync.outputs.server-name }}
+  worker-tailscale-ip:
+    description: 'Tailscale IP of the worker server'
+    value: ${{ steps.sync.outputs.worker-tailscale-ip }}
 
 runs:
   using: 'composite'
@@ -97,6 +112,7 @@ runs:
         import os
         import sys
         import json
+        import re
         import tomli
         import requests
         from pathlib import Path
@@ -134,6 +150,43 @@ runs:
                 else:
                     result[key] = value
             return result
+
+        def read_env_file(env_path='.env'):
+            """Read .env file and return dict of key=value pairs."""
+            env_vars = {}
+            env_file = Path(env_path)
+            if not env_file.exists():
+                return env_vars
+
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, _, value = line.partition('=')
+                    env_vars[key.strip()] = value.strip().strip('"\'')
+            return env_vars
+
+        def detect_port():
+            """
+            Detect application port from multiple sources.
+            Priority: .env > Dockerfile ARG > default
+            Standard: APP_PORT (NextNode convention)
+            """
+            # 1. Check .env file for APP_PORT
+            env_vars = read_env_file('.env')
+            if 'APP_PORT' in env_vars:
+                return int(env_vars['APP_PORT']), '.env'
+
+            # 2. Check Dockerfile for ARG APP_PORT=X
+            dockerfile = Path('Dockerfile')
+            if dockerfile.exists():
+                content = dockerfile.read_text()
+                match = re.search(r'^ARG\s+APP_PORT\s*=\s*(\d+)', content, re.MULTILINE)
+                if match:
+                    return int(match.group(1)), 'Dockerfile'
+
+            return None, None
 
         # =================================================================
         # LOAD AND MERGE CONFIGURATION
@@ -199,9 +252,25 @@ runs:
             domain = ''
             print("No domain configured, DNS setup will be skipped")
 
-        # Get application port (default 3000, commonly 4321 for Astro)
-        app_port = config.get('project', {}).get('port', 3000)
-        print(f"Application port: {app_port}")
+        print("::endgroup::")
+
+        # Detect application port
+        print("::group::Port Detection")
+
+        # Config takes priority (explicit override)
+        config_port = config.get('project', {}).get('port')
+        if config_port:
+            app_port = int(config_port)
+            print(f"Port: {app_port} (from dokploy.toml)")
+        else:
+            # Auto-detect from .env or Dockerfile
+            detected_port, source = detect_port()
+            if detected_port:
+                app_port = detected_port
+                print(f"Port: {app_port} (auto-detected from {source})")
+            else:
+                app_port = 3000
+                print(f"Port: {app_port} (default)")
 
         print("::endgroup::")
 
@@ -660,6 +729,58 @@ runs:
         print("::endgroup::")
 
         # =================================================================
+        # CROSS-SWARM ROUTING DETECTION
+        # =================================================================
+        print("::group::Cross-Swarm Detection")
+
+        traefik_server = config.get('cluster', {}).get('traefik-server', 'admin-dokploy')
+        needs_cross_swarm = server_name != traefik_server and domain
+
+        if needs_cross_swarm:
+            print(f"Cross-Swarm routing needed: {server_name} != {traefik_server}")
+
+            # Get worker's Tailscale IP for cross-Swarm routing
+            worker_tailscale_ip = None
+            try:
+                # Query Tailscale API for device by hostname
+                ts_resp = requests.get(
+                    "https://api.tailscale.com/api/v2/tailnet/-/devices",
+                    headers={"Authorization": f"Bearer {TAILSCALE_API_KEY}"},
+                    timeout=30
+                )
+                if ts_resp.ok:
+                    devices = ts_resp.json().get('devices', [])
+                    for device in devices:
+                        # Match by hostname (server_name is the hostname)
+                        if device.get('hostname', '').lower() == server_name.lower():
+                            addresses = device.get('addresses', [])
+                            # Get first IPv4 address (Tailscale IPs are typically 100.x.x.x)
+                            for addr in addresses:
+                                if addr.startswith('100.'):
+                                    worker_tailscale_ip = addr
+                                    print(f"Worker Tailscale IP: {worker_tailscale_ip}")
+                                    break
+                            break
+                    if not worker_tailscale_ip:
+                        print(f"::warning::Could not find Tailscale IP for {server_name}")
+                else:
+                    print(f"::warning::Tailscale API returned {ts_resp.status_code}")
+            except Exception as e:
+                print(f"::warning::Failed to get Tailscale IP: {e}")
+
+            output('cross-swarm', 'true')
+            output('worker-tailscale-ip', worker_tailscale_ip or '')
+        else:
+            print(f"Same-Swarm deployment ({server_name} == {traefik_server}), no cross-Swarm routing needed")
+            output('cross-swarm', 'false')
+            output('worker-tailscale-ip', '')
+
+        output('container-port', str(app_port))
+        output('server-name', server_name)
+
+        print("::endgroup::")
+
+        # =================================================================
         # TRIGGER DEPLOYMENT
         # =================================================================
         print("::group::Triggering deployment")
@@ -684,6 +805,7 @@ runs:
         # =================================================================
         output('project-id', project_id)
         output('application-id', app_id)
+        output('application-name', app_name)
         output('domain', domain)
         # Use Traefik server IP for DNS (all traffic routes through Traefik in Swarm mode)
         output('server-ip', traefik_public_ip or '')
