@@ -439,6 +439,7 @@ jobs:
           container-port: ${{ steps.sync.outputs.container-port }}
           use-https: 'true'
           ssh-private-key: ${{ secrets.DOKPLOY_SSH_PRIVATE_KEY }}
+          expected-image: ${{ needs.build.outputs.image }}
 
       - name: Deployment Summary
         if: steps.check-enabled.outputs.enabled == 'true' && inputs.action == 'deploy' && steps.sync.outputs.success == 'true'

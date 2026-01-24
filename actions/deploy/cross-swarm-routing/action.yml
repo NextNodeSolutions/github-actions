@@ -25,6 +25,10 @@ inputs:
   ssh-private-key:
     description: 'SSH private key for connecting to servers'
     required: true
+  expected-image:
+    description: 'Expected Docker image tag (e.g., admin-dokploy:5000/app:abc123). If provided, waits for deployment to complete with this image before adding ports.'
+    required: false
+    default: ''
 
 outputs:
   external-port:
@@ -49,6 +53,7 @@ runs:
         ADMIN_IP="${{ inputs.admin-tailscale-ip }}"
         CONTAINER_PORT="${{ inputs.container-port }}"
         USE_HTTPS="${{ inputs.use-https }}"
+        EXPECTED_IMAGE="${{ inputs.expected-image }}"
 
         echo "App Name: $APP_NAME"
         echo "Domain: $DOMAIN"
@@ -56,6 +61,9 @@ runs:
         echo "Admin IP: $ADMIN_IP"
         echo "Container Port: $CONTAINER_PORT"
         echo "Use HTTPS: $USE_HTTPS"
+        if [ -n "$EXPECTED_IMAGE" ]; then
+          echo "Expected Image: $EXPECTED_IMAGE"
+        fi
 
         # Generate deterministic port from app name hash
         # Using first 8 chars of MD5 hash, converted to decimal, mapped to port range 10000-65535
@@ -83,7 +91,30 @@ runs:
         ssh $SSH_OPTS root@$WORKER_IP bash <<WORKER_SCRIPT
         set -e
 
+        EXPECTED_IMAGE="$EXPECTED_IMAGE"
+        MAX_WAIT=300  # 5 minutes
+        WAIT_INTERVAL=10
+
         echo "Looking for Docker service with image matching: $APP_NAME"
+
+        # If expected image is provided, wait for deployment to complete with that image
+        if [ -n "\$EXPECTED_IMAGE" ]; then
+          echo "Waiting for deployment to complete with image: \$EXPECTED_IMAGE"
+          ELAPSED=0
+          while [ \$ELAPSED -lt \$MAX_WAIT ]; do
+            CURRENT_IMAGE=\$(docker service ls --format '{{.Image}}' --filter "name=app-" | grep -F "/${APP_NAME}:" | head -1 || echo "")
+            if [ "\$CURRENT_IMAGE" = "\$EXPECTED_IMAGE" ]; then
+              echo "Deployment completed - found expected image"
+              break
+            fi
+            echo "Current image: \$CURRENT_IMAGE (waiting for \$EXPECTED_IMAGE)..."
+            sleep \$WAIT_INTERVAL
+            ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
+          done
+          if [ \$ELAPSED -ge \$MAX_WAIT ]; then
+            echo "::warning::Timeout waiting for expected image, proceeding anyway"
+          fi
+        fi
 
         # Find the service by its image name
         # Dokploy creates random service names like "app-navigate-haptic-array-ukwb4a"
