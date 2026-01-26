@@ -76,6 +76,13 @@ on:
       DOKPLOY_SSH_PRIVATE_KEY:
         description: 'SSH private key for cross-Swarm routing (nextnode-dokploy-ci)'
         required: false
+      # Optional: Required for Infisical secrets management
+      INFISICAL_CLIENT_ID:
+        description: 'Infisical Machine Identity client ID'
+        required: false
+      INFISICAL_CLIENT_SECRET:
+        description: 'Infisical Machine Identity client secret'
+        required: false
     outputs:
       project-id:
         description: 'Dokploy project ID'
@@ -233,6 +240,17 @@ jobs:
       - name: Install tomli
         shell: bash
         run: pip install tomli
+
+      - name: Fetch App Secrets from Infisical
+        if: ${{ secrets.INFISICAL_CLIENT_ID != '' }}
+        uses: Infisical/secrets-action@v1.0.7
+        with:
+          method: "universal-auth"
+          env-slug: ${{ inputs.environment == 'production' && 'prod' || (inputs.environment == 'preview' && 'staging' || 'dev') }}
+          project-slug: ${{ github.event.repository.name }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          domain: "https://secrets.nextnode.fr"
 
       - name: Get Dokploy URL
         id: dokploy-url
