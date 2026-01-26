@@ -54,9 +54,7 @@ on:
       TAILSCALE_OAUTH_SECRET:
         description: 'Tailscale OAuth secret'
         required: true
-      TAILSCALE_API_KEY:
-        description: 'Tailscale API key'
-        required: true
+      # TAILSCALE_API_KEY removed - OAuth tokens are used instead
       CLOUDFLARE_API_TOKEN:
         description: 'Cloudflare API token'
         required: true
@@ -64,9 +62,7 @@ on:
       HETZNER_TOKEN:
         description: 'Hetzner Cloud API token (for custom VPS)'
         required: false
-      TAILSCALE_AUTH_KEY:
-        description: 'Tailscale auth key for connecting to private registry'
-        required: true
+      # TAILSCALE_AUTH_KEY removed - OAuth credentials are used instead
       TF_API_TOKEN:
         description: 'Terraform Cloud API token (for custom VPS)'
         required: false
@@ -202,7 +198,8 @@ jobs:
         id: build
         uses: ./.github-actions/actions/build/docker-build-push
         with:
-          tailscale-auth-key: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          tailscale-oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          tailscale-oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
           dockerfile: ${{ inputs.dockerfile }}
           context: ${{ inputs.build-context }}
           build-args: |
@@ -374,6 +371,17 @@ jobs:
           else:
               print(f"Using shared worker: {server}")
 
+      - name: Get VPS Provisioning Credentials
+        id: vps-tailscale
+        if: steps.check-enabled.outputs.enabled == 'true' && steps.check-vps.outputs.needs-custom-vps == 'true'
+        uses: ./.github-actions/actions/infrastructure/tailscale-oauth
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          generate-auth-key: 'true'
+          auth-key-tags: 'tag:server'
+          auth-key-expiry: '3600'
+
       - name: Provision Custom VPS
         id: provision-vps
         if: steps.check-enabled.outputs.enabled == 'true' && steps.check-vps.outputs.needs-custom-vps == 'true'
@@ -384,14 +392,22 @@ jobs:
           server-type: ${{ steps.check-vps.outputs.vps-type }}
           environment: production
           hetzner-token: ${{ secrets.HETZNER_TOKEN }}
-          tailscale-auth-key: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
+          tailscale-auth-key: ${{ steps.vps-tailscale.outputs.auth-key }}
+          tailscale-api-token: ${{ steps.vps-tailscale.outputs.api-token }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           tf-api-token: ${{ secrets.TF_API_TOKEN }}
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
           dokploy-ssh-key-id: ${{ secrets.DOKPLOY_SSH_KEY_ID }}
+
+      - name: Get Tailscale API Token
+        id: tailscale-api
+        if: steps.check-enabled.outputs.enabled == 'true'
+        uses: ./.github-actions/actions/infrastructure/tailscale-oauth
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
 
       - name: Sync to Dokploy
         id: sync
@@ -405,7 +421,7 @@ jobs:
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
-          tailscale-api-key: ${{ secrets.TAILSCALE_API_KEY }}
+          tailscale-api-token: ${{ steps.tailscale-api.outputs.api-token }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           hcloud-token: ${{ secrets.HETZNER_TOKEN }}
           action: ${{ inputs.action }}
