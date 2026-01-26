@@ -1,0 +1,163 @@
+name: 'Tailscale OAuth'
+description: 'Exchange Tailscale OAuth credentials for API token and optionally generate auth key'
+author: 'NextNodeSolutions'
+
+inputs:
+  oauth-client-id:
+    description: 'Tailscale OAuth client ID'
+    required: true
+  oauth-secret:
+    description: 'Tailscale OAuth client secret'
+    required: true
+  generate-auth-key:
+    description: 'Generate an auth key for server provisioning'
+    required: false
+    default: 'false'
+  auth-key-tags:
+    description: 'Tags for the auth key (comma-separated)'
+    required: false
+    default: 'tag:server'
+  auth-key-expiry:
+    description: 'Auth key expiry in seconds'
+    required: false
+    default: '3600'
+  auth-key-ephemeral:
+    description: 'Create ephemeral auth key (device removed when disconnected)'
+    required: false
+    default: 'false'
+  auth-key-preauthorized:
+    description: 'Create preauthorized auth key (no admin approval needed)'
+    required: false
+    default: 'true'
+  auth-key-reusable:
+    description: 'Create reusable auth key (can be used multiple times)'
+    required: false
+    default: 'true'
+
+outputs:
+  api-token:
+    description: 'OAuth access token for Tailscale API calls'
+    value: ${{ steps.oauth.outputs.api-token }}
+  auth-key:
+    description: 'Auth key for server provisioning (if requested)'
+    value: ${{ steps.auth-key.outputs.auth-key }}
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.oauth.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Exchange OAuth Credentials for API Token
+      id: oauth
+      shell: bash
+      env:
+        OAUTH_CLIENT_ID: ${{ inputs.oauth-client-id }}
+        OAUTH_SECRET: ${{ inputs.oauth-secret }}
+      run: |
+        echo "::group::Tailscale OAuth Token Exchange"
+
+        # Exchange OAuth credentials for access token
+        RESPONSE=$(curl -s -X POST "https://api.tailscale.com/api/v2/oauth/token" \
+          -u "${OAUTH_CLIENT_ID}:${OAUTH_SECRET}" \
+          -H "Content-Type: application/x-www-form-urlencoded" \
+          -d "grant_type=client_credentials")
+
+        # Check for error
+        if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+          ERROR=$(echo "$RESPONSE" | jq -r '.error // "unknown error"')
+          ERROR_DESC=$(echo "$RESPONSE" | jq -r '.error_description // "no description"')
+          echo "::error::OAuth token exchange failed: $ERROR - $ERROR_DESC"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        # Extract access token
+        ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token // empty')
+
+        if [[ -z "$ACCESS_TOKEN" ]]; then
+          echo "::error::No access token in OAuth response"
+          echo "Response: $RESPONSE"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "OAuth token exchange successful"
+        echo "api-token=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+    - name: Generate Auth Key
+      id: auth-key
+      if: ${{ inputs.generate-auth-key == 'true' && steps.oauth.outputs.success == 'true' }}
+      shell: bash
+      env:
+        API_TOKEN: ${{ steps.oauth.outputs.api-token }}
+        AUTH_KEY_TAGS: ${{ inputs.auth-key-tags }}
+        AUTH_KEY_EXPIRY: ${{ inputs.auth-key-expiry }}
+        AUTH_KEY_EPHEMERAL: ${{ inputs.auth-key-ephemeral }}
+        AUTH_KEY_PREAUTHORIZED: ${{ inputs.auth-key-preauthorized }}
+        AUTH_KEY_REUSABLE: ${{ inputs.auth-key-reusable }}
+      run: |
+        echo "::group::Generate Tailscale Auth Key"
+
+        # Convert tags to JSON array
+        TAGS_JSON=$(echo "$AUTH_KEY_TAGS" | tr ',' '\n' | jq -R . | jq -s .)
+
+        # Build capabilities JSON
+        CAPABILITIES=$(jq -n \
+          --argjson tags "$TAGS_JSON" \
+          '{
+            devices: {
+              create: {
+                reusable: ($ENV.AUTH_KEY_REUSABLE == "true"),
+                ephemeral: ($ENV.AUTH_KEY_EPHEMERAL == "true"),
+                preauthorized: ($ENV.AUTH_KEY_PREAUTHORIZED == "true"),
+                tags: $tags
+              }
+            }
+          }')
+
+        # Create auth key
+        RESPONSE=$(curl -s -X POST "https://api.tailscale.com/api/v2/tailnet/-/keys" \
+          -H "Authorization: Bearer ${API_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "$(jq -n \
+            --argjson capabilities "$CAPABILITIES" \
+            --arg expirySeconds "$AUTH_KEY_EXPIRY" \
+            '{
+              capabilities: $capabilities,
+              expirySeconds: ($expirySeconds | tonumber)
+            }')")
+
+        # Check for error
+        if echo "$RESPONSE" | jq -e '.message' > /dev/null 2>&1; then
+          ERROR=$(echo "$RESPONSE" | jq -r '.message // "unknown error"')
+          echo "::error::Auth key generation failed: $ERROR"
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        # Extract auth key
+        AUTH_KEY=$(echo "$RESPONSE" | jq -r '.key // empty')
+
+        if [[ -z "$AUTH_KEY" ]]; then
+          echo "::error::No key in auth key response"
+          echo "Response: $RESPONSE"
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "Auth key generated successfully"
+        echo "  Tags: $AUTH_KEY_TAGS"
+        echo "  Expiry: ${AUTH_KEY_EXPIRY}s"
+        echo "  Ephemeral: $AUTH_KEY_EPHEMERAL"
+        echo "  Preauthorized: $AUTH_KEY_PREAUTHORIZED"
+        echo "  Reusable: $AUTH_KEY_REUSABLE"
+
+        echo "auth-key=$AUTH_KEY" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
