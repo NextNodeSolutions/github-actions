@@ -5,6 +5,12 @@ name: Debug Cloudflare Token
 
 on:
   workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to test zone access for'
+        required: true
+        default: 'nextnode.fr'
+        type: string
 
 jobs:
   test-token:
@@ -16,10 +22,10 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          echo "::group::🔍 Testing Token Validity"
+          echo "::group::Testing Token Validity"
 
           if [[ -z "$CF_API_TOKEN" ]]; then
-            echo "❌ CLOUDFLARE_API_TOKEN secret is not set"
+            echo "CLOUDFLARE_API_TOKEN secret is not set"
             exit 1
           fi
 
@@ -38,9 +44,9 @@ jobs:
           STATUS=$(echo "$VERIFY_RESPONSE" | jq -r '.result.status // "unknown"')
 
           if [[ "$SUCCESS" == "true" && "$STATUS" == "active" ]]; then
-            echo "✅ Token is VALID and ACTIVE"
+            echo "Token is VALID and ACTIVE"
           else
-            echo "❌ Token is INVALID or INACTIVE"
+            echo "Token is INVALID or INACTIVE"
             echo "Success: $SUCCESS"
             echo "Status: $STATUS"
             exit 1
@@ -53,7 +59,7 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          echo "::group::📋 Listing All Cloudflare Zones"
+          echo "::group::Listing All Cloudflare Zones"
 
           echo "Testing endpoint: https://api.cloudflare.com/client/v4/zones"
           echo ""
@@ -70,13 +76,13 @@ jobs:
           ZONE_COUNT=$(echo "$ZONES_RESPONSE" | jq -r '.result | length')
 
           if [[ "$SUCCESS" == "true" ]]; then
-            echo "✅ Successfully listed zones"
-            echo "📊 Total zones found: $ZONE_COUNT"
+            echo "Successfully listed zones"
+            echo "Total zones found: $ZONE_COUNT"
             echo ""
             echo "Zone Names:"
             echo "$ZONES_RESPONSE" | jq -r '.result[].name'
           else
-            echo "❌ Failed to list zones"
+            echo "Failed to list zones"
             echo "Errors:"
             echo "$ZONES_RESPONSE" | jq '.errors'
             exit 1
@@ -84,17 +90,18 @@ jobs:
 
           echo "::endgroup::"
 
-      - name: Search for nextnode.fr Zone
+      - name: Search for Domain Zone
         id: search-zone
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DOMAIN: ${{ inputs.domain }}
         run: |
-          echo "::group::🔍 Searching for nextnode.fr Zone"
+          echo "::group::Searching for $DOMAIN Zone"
 
-          echo "Testing endpoint: https://api.cloudflare.com/client/v4/zones?name=nextnode.fr"
+          echo "Testing endpoint: https://api.cloudflare.com/client/v4/zones?name=$DOMAIN"
           echo ""
 
-          SEARCH_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=nextnode.fr" \
+          SEARCH_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json")
 
@@ -107,13 +114,13 @@ jobs:
           ZONE_NAME=$(echo "$SEARCH_RESPONSE" | jq -r '.result[0].name // empty')
 
           if [[ "$SUCCESS" == "true" && -n "$ZONE_ID" ]]; then
-            echo "✅ Found nextnode.fr zone!"
-            echo "  • Zone ID: $ZONE_ID"
-            echo "  • Zone Name: $ZONE_NAME"
+            echo "Found $DOMAIN zone!"
+            echo "  Zone ID: $ZONE_ID"
+            echo "  Zone Name: $ZONE_NAME"
             echo ""
-            echo "::notice title=Zone Found::Zone ID for nextnode.fr is $ZONE_ID"
+            echo "::notice title=Zone Found::Zone ID for $DOMAIN is $ZONE_ID"
           else
-            echo "❌ Zone nextnode.fr NOT FOUND"
+            echo "Zone $DOMAIN NOT FOUND"
             echo ""
             echo "Possible reasons:"
             echo "  1. Domain doesn't exist in this Cloudflare account"
@@ -131,18 +138,19 @@ jobs:
         id: test-ssl
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DOMAIN: ${{ inputs.domain }}
         run: |
-          echo "::group::🔒 Testing SSL/TLS Settings Access"
+          echo "::group::Testing SSL/TLS Settings Access"
 
           # First get zone ID
-          SEARCH_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=nextnode.fr" \
+          SEARCH_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json")
 
           ZONE_ID=$(echo "$SEARCH_RESPONSE" | jq -r '.result[0].id // empty')
 
           if [[ -z "$ZONE_ID" ]]; then
-            echo "⚠️ Cannot test SSL settings - zone not found"
+            echo "Cannot test SSL settings - zone not found"
             exit 0
           fi
 
@@ -161,14 +169,14 @@ jobs:
           SSL_MODE=$(echo "$SSL_RESPONSE" | jq -r '.result.value // empty')
 
           if [[ "$SUCCESS" == "true" && -n "$SSL_MODE" ]]; then
-            echo "✅ Token has SSL/TLS settings access"
-            echo "  • Current SSL mode: $SSL_MODE"
+            echo "Token has SSL/TLS settings access"
+            echo "  Current SSL mode: $SSL_MODE"
           else
-            echo "❌ Token CANNOT access SSL/TLS settings"
+            echo "Token CANNOT access SSL/TLS settings"
             echo "Errors:"
             echo "$SSL_RESPONSE" | jq '.errors'
             echo ""
-            echo "Required permission: Zone Settings → Edit"
+            echo "Required permission: Zone Settings -> Edit"
             exit 1
           fi
 
@@ -176,32 +184,36 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          DOMAIN: ${{ inputs.domain }}
         run: |
-          echo "::group::📊 Diagnostic Summary"
+          echo "::group::Diagnostic Summary"
+          echo ""
+          echo "Domain tested: $DOMAIN"
           echo ""
           echo "| Test | Status |"
           echo "|------|--------|"
-          echo "| Token Validity | ${{ steps.verify.outcome == 'success' && '✅ PASS' || '❌ FAIL' }} |"
-          echo "| List Zones Permission | ${{ steps.list-zones.outcome == 'success' && '✅ PASS' || '❌ FAIL' }} |"
-          echo "| Find nextnode.fr Zone | ${{ steps.search-zone.outcome == 'success' && '✅ PASS' || '❌ FAIL' }} |"
-          echo "| SSL/TLS Settings Access | ${{ steps.test-ssl.outcome == 'success' && '✅ PASS' || '❌ FAIL' }} |"
+          echo "| Token Validity | ${{ steps.verify.outcome == 'success' && 'PASS' || 'FAIL' }} |"
+          echo "| List Zones Permission | ${{ steps.list-zones.outcome == 'success' && 'PASS' || 'FAIL' }} |"
+          echo "| Find $DOMAIN Zone | ${{ steps.search-zone.outcome == 'success' && 'PASS' || 'FAIL' }} |"
+          echo "| SSL/TLS Settings Access | ${{ steps.test-ssl.outcome == 'success' && 'PASS' || 'FAIL' }} |"
           echo ""
 
           if [[ "${{ steps.verify.outcome }}" != "success" ]]; then
-            echo "⚠️ ACTION REQUIRED: Token is invalid or expired"
-            echo "   → Regenerate token at https://dash.cloudflare.com/profile/api-tokens"
+            echo "ACTION REQUIRED: Token is invalid or expired"
+            echo "   -> Regenerate token at https://dash.cloudflare.com/profile/api-tokens"
           elif [[ "${{ steps.list-zones.outcome }}" != "success" ]]; then
-            echo "⚠️ ACTION REQUIRED: Token missing Zone:Read permission"
-            echo "   → Add 'Zone → Zone → Read' permission to token"
+            echo "ACTION REQUIRED: Token missing Zone:Read permission"
+            echo "   -> Add 'Zone -> Zone -> Read' permission to token"
           elif [[ "${{ steps.search-zone.outcome }}" != "success" ]]; then
-            echo "⚠️ ACTION REQUIRED: Zone nextnode.fr not accessible"
-            echo "   → Verify domain exists in Cloudflare account"
-            echo "   → Check token has access to this specific zone"
+            echo "ACTION REQUIRED: Zone $DOMAIN not accessible"
+            echo "   -> Verify domain exists in Cloudflare account"
+            echo "   -> Check token has access to this specific zone"
           elif [[ "${{ steps.test-ssl.outcome }}" != "success" ]]; then
-            echo "⚠️ ACTION REQUIRED: Token missing SSL/TLS settings permission"
-            echo "   → Add 'Zone → Zone Settings → Edit' permission to token"
+            echo "ACTION REQUIRED: Token missing SSL/TLS settings permission"
+            echo "   -> Add 'Zone -> Zone Settings -> Edit' permission to token"
           else
-            echo "✅ ALL TESTS PASSED - Token is working correctly!"
+            echo "ALL TESTS PASSED - Token is working correctly!"
           fi
 
           echo "::endgroup::"

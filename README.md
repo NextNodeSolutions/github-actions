@@ -2,33 +2,31 @@
 
 > Reusable GitHub Actions and workflows for NextNode projects - **pnpm only**
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 github-actions/
 ├── .github/workflows/          # Reusable workflows (external + internal)
 │   ├── quality-checks.yml     # Full quality pipeline (workflow_call)
-│   ├── deploy.yml             # Railway deployment (workflow_call)
-│   ├── pr-preview.yml         # PR preview deployments (workflow_call)
-│   ├── pr-preview-cleanup.yml # PR preview cleanup (workflow_call)
+│   ├── dokploy-deploy.yml     # Dokploy deployment (workflow_call)
 │   ├── release.yml            # NPM library release (workflow_call)
 │   ├── publish-release.yml    # Publish workflow with repository_dispatch
 │   ├── version-management.yml # Automated versioning with changesets
 │   └── [additional workflows] # Security, health checks, etc.
 ├── actions/                    # Domain-organized atomic actions
-│   ├── build/                 # 🏗️ Build & Setup domain
-│   ├── quality/               # 🔍 Code Quality domain
-│   ├── deploy/                # 🚀 Railway Deployment domain
-│   ├── release/               # 📦 NPM Release Management domain
-│   ├── domain/                # 🌐 Domain Management domain
-│   ├── monitoring/            # 🔍 Monitoring domain
-│   ├── utilities/             # 🛠️ Generic Utilities domain
-│   ├── node-setup-complete/   # ✅ Global: Complete Node.js setup
-│   ├── test/                  # ✅ Global: Test execution
-│   └── health-check/          # ✅ Global: URL health monitoring
+│   ├── build/                 # Build & Setup domain
+│   ├── quality/               # Code Quality domain
+│   ├── deploy/                # Dokploy Deployment domain
+│   ├── release/               # NPM Release Management domain
+│   ├── ssl/                   # SSL/TLS Configuration domain
+│   ├── monitoring/            # Monitoring domain
+│   ├── utilities/             # Generic Utilities domain
+│   ├── node-setup-complete/   # Global: Complete Node.js setup
+│   ├── test/                  # Global: Test execution
+│   └── health-check/          # Global: URL health monitoring
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Using Global Actions
 
@@ -38,21 +36,21 @@ Global actions are available at the root level for external projects.
 # Complete Node.js and pnpm setup with caching (auto-detects versions)
 - name: Setup Node.js and pnpm
   uses: nextnodesolutions/github-actions/actions/node-setup-complete@main
-    
+
 - name: Run Tests
   uses: nextnodesolutions/github-actions/actions/test@main
   with:
     coverage: true
     coverage-threshold: '80'
-    
+
 - name: Health Check
   uses: nextnodesolutions/github-actions/actions/health-check@main
   with:
-    url: 'https://my-app.railway.app'
+    url: 'https://my-app.example.com'
     max-attempts: 5
 ```
 
-## 🔧 Version Auto-Detection
+## Version Auto-Detection
 
 All workflows and actions automatically detect Node.js and pnpm versions from your project's configuration. **No version inputs required!**
 
@@ -76,10 +74,10 @@ All workflows and actions automatically detect Node.js and pnpm versions from yo
 
 ### Benefits
 
-✅ **Single source of truth** - Versions defined in one place  
-✅ **No version conflicts** - Local and CI environments always match  
-✅ **Easy maintenance** - Update `package.json` and everywhere stays in sync  
-✅ **Corepack compatible** - Works with modern Node.js toolchain  
+- **Single source of truth** - Versions defined in one place
+- **No version conflicts** - Local and CI environments always match
+- **Easy maintenance** - Update `package.json` and everywhere stays in sync
+- **Corepack compatible** - Works with modern Node.js toolchain
 
 ### Using Reusable Workflows
 
@@ -100,43 +98,6 @@ jobs:
 ```
 
 ```yaml
-# Railway deployment workflow
-name: Deploy
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
-    with:
-      environment: production
-      app-name: my-app
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-```yaml
-# PR preview deployment workflow
-name: PR Preview
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  preview:
-    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
-    with:
-      app-name: my-app
-      base-domain: my-domain.com
-      run-quality-checks: true
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-```yaml
 # NPM library release workflow
 name: Release
 
@@ -154,7 +115,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## 📦 Available Actions
+## Available Actions
 
 ### Global Actions (External Use)
 
@@ -166,30 +127,27 @@ jobs:
 
 ### Domain Actions (Internal Use)
 
-#### 🏗️ Build Domain
+#### Build Domain
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
 | `build/install` | Install dependencies with pnpm | `frozen-lockfile`, `working-directory` |
 | `build/build-project` | Build project with pnpm | `build-command`, `output-directory` |
 | `build/smart-cache` | Intelligent dependency caching | `cache-key`, `restore-keys` |
 
-#### 🔍 Quality Domain
+#### Quality Domain
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
 | `quality/lint` | Run ESLint with optional auto-fix | `fix`, `fail-on-warning` |
 | `quality/typecheck` | Run TypeScript type checking | `strict`, `tsconfig-path` |
 | `quality/security-audit` | Run security audit | `audit-level`, `fix` |
 
-#### 🚀 Deploy Domain
+#### Deploy Domain
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
-| `deploy/railway-deploy` | Deploy to Railway platform | `service-name`, `environment` |
-| `deploy/railway-service-setup` | Setup Railway service and environment | `app-name`, `environment`, `service-name-override` (optional) |
-| `deploy/railway-pr-cleanup` | Clean up PR preview deployment | `app-name`, `pr-number` |
-| `deploy/railway-cli-setup` | Setup Railway CLI | `token`, `version` |
-| `deploy/railway-variables` | Set Railway environment variables | `variables`, `service-name` |
+| `deploy/dokploy-sync` | Sync dokploy.toml to Dokploy API | `environment`, `config-path` |
+| `deploy/vps-provision` | Auto-provision Hetzner VPS | `vps-name`, `vps-type` |
 
-#### 📦 Release Domain
+#### Release Domain
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
 | `release/changesets-setup` | Setup changesets for versioning | `version`, `working-directory` |
@@ -197,7 +155,7 @@ jobs:
 | `release/changesets-publish` | Publish packages with changesets | `publish-script`, `registry-url` |
 | `release/npm-provenance` | Setup NPM provenance attestation | `token`, `package-name` |
 
-#### 🛠️ Utility Actions
+#### Utility Actions
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
 | `utilities/log-step` | Enhanced logging with groups | `title`, `message`, `level` |
@@ -205,7 +163,7 @@ jobs:
 | `utilities/run-command` | Run shell commands | `command`, `working-directory` |
 | `utilities/check-command` | Check if command exists | `command`, `fail-if-missing` |
 
-## 🔧 Available Reusable Workflows
+## Available Reusable Workflows
 
 ### Quality Checks Workflow
 **File:** `.github/workflows/quality-checks.yml`
@@ -232,216 +190,40 @@ jobs:
       coverage-threshold: '80'
 ```
 
-### Railway Deployment Workflow
-**File:** `.github/workflows/deploy.yml`
+### Dokploy Deployment Workflow
+**File:** `.github/workflows/dokploy-deploy.yml`
 
-Unified deployment workflow for Railway supporting multiple environments.
+Unified deployment workflow for Dokploy (self-hosted PaaS).
 
 **Features:**
-- Environment-based configuration
+- Environment-based configuration via `dokploy.toml`
 - Quality checks before deployment
 - Health checks after deployment
-- DNS configuration support
+- Auto VPS provisioning for custom servers
 
 **Example:**
 ```yaml
 jobs:
   deploy:
-    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
+    uses: nextnodesolutions/github-actions/.github/workflows/dokploy-deploy.yml@main
     with:
       environment: production
-      app-name: nextnode-app
-      memory-mb: '1024'
-      run-quality-checks: true
-      test-coverage: true
     secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
 ```
 
-### PR Preview Workflows
-**Files:** `.github/workflows/pr-preview.yml` & `.github/workflows/pr-preview-cleanup.yml`
+### VPS Auto-Provisioning
 
-Automated PR preview deployments to Railway with automatic cleanup.
+Projects can request a dedicated VPS by configuring `dokploy.toml`:
 
-**Features:**
-- Automatic deployment on PR open/update
-- Custom domain per PR: `pr-{number}.dev.{base-domain}`
-- Configurable base environment (defaults to `development`)
-- Optional quality checks before deployment (lint + typecheck)
-- Automatic cleanup when PR is closed
-- PR comments with deployment status and URL
-- Health checks after deployment
-- Composes existing Railway actions (no duplication)
-- Shares configured base environment resources
-
-**PR Preview Deployment Example:**
-```yaml
-# .github/workflows/pr-preview.yml
-name: PR Preview
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-jobs:
-  preview:
-    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
-    with:
-      app-name: nextnode-front
-      base-domain: nextnode.fr
-      base-environment: 'development'  # Optional, defaults to 'development'
-      run-quality-checks: true  # Lint + Typecheck before deploy
-      memory-mb: '512'
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+```toml
+[production]
+server = "custom"          # Triggers VPS provisioning
+vps = "my-app-worker"      # VPS name
+vps_type = "cx33"          # Hetzner server type
 ```
 
-**PR Preview Cleanup Example:**
-```yaml
-# .github/workflows/pr-preview-cleanup.yml
-name: PR Preview Cleanup
-
-on:
-  pull_request:
-    types: [closed]
-
-jobs:
-  cleanup:
-    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview-cleanup.yml@main
-    with:
-      app-name: nextnode-front
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-**How it works:**
-1. **PR Opened**: Creates new Railway service `pr-{number}_{app-name}` in development environment
-2. **PR Updated**: Redeploys to same service with latest changes
-3. **PR Closed**: Automatically removes the service and domain
-4. **Comments**: Adds/updates PR comment with deployment URL and status
-
-**Domain Structure:**
-- Production: `nextnode.fr`
-- Development: `dev.nextnode.fr`
-- PR #123: `pr-123.dev.nextnode.fr`
-- PR #456: `pr-456.dev.nextnode.fr`
-
-### Multi-Service Linking
-
-**Feature:** Automatically link services within the same Railway project for service-to-service communication.
-
-**How it works:**
-- Services in separate repositories deploy to the same Railway project
-- Workflows automatically configure service references using Railway's template syntax
-- Railway enforces environment isolation (development ↔ production)
-- Services communicate via private networking (no egress fees)
-- Service names are matched exactly (with automatic PR number normalization)
-
-**Example: Frontend + CMS Architecture**
-
-**CMS Repository** (`nextnode-cms`):
-```yaml
-# .github/workflows/deploy-production.yml
-name: Deploy Production
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
-    with:
-      environment: production
-      app-name: nextnode-cms
-      # No linked-services needed - CMS doesn't depend on frontend
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-**Frontend Repository** (`nextnode-front`):
-```yaml
-# .github/workflows/deploy-production.yml
-name: Deploy Production
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
-    with:
-      environment: production
-      app-name: nextnode-front
-
-      # Automatically link to CMS service
-      linked-services: |
-        prod_nextnode-cms
-
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-**PR Preview with Service Linking:**
-```yaml
-# Frontend PR-58 workflow
-name: PR Preview
-
-on:
-  pull_request:
-
-jobs:
-  preview:
-    uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
-    with:
-      app-name: nextnode-front
-      base-domain: nextnode.fr
-
-      # Try PR-specific CMS first, fallback to development CMS
-      linked-services: |
-        pr-58_nextnode-cms
-        dev_nextnode-cms
-
-    secrets:
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-```
-
-**What happens automatically:**
-1. Workflow checks Railway development environment for `pr-58_nextnode-cms` → Not found
-2. Workflow checks for `dev_nextnode-cms` → Found! ✅
-3. Sets environment variable: `SERVICE_URL=http://${{dev_nextnode-cms.RAILWAY_PRIVATE_DOMAIN}}:${{dev_nextnode-cms.PORT}}`
-4. Railway resolves template at runtime: `SERVICE_URL=http://dev_nextnode-cms.railway.internal:1337`
-5. Frontend can now access CMS via `process.env.SERVICE_URL`
-
-**Integration with `@nextnode/config`:**
-```typescript
-// packages/config/src/services.ts
-export const services = {
-  cms: {
-    url: process.env.SERVICE_URL
-  }
-}
-
-// Frontend usage
-import { services } from '@nextnode/config'
-
-const posts = await fetch(`${services.cms.url}/api/posts`)
-```
-
-**Service Naming Convention:**
-- Production: `prod_nextnode-cms`, `prod_nextnode-front`
-- Development: `dev_nextnode-cms`, `dev_nextnode-front`
-- PR Previews: `pr-58_nextnode-cms`, `pr-23_nextnode-front`
-
-**Key Features:**
-- ✅ **Automatic environment isolation** - Railway enforces development ↔ production boundaries
-- ✅ **Exact name matching** - No ambiguity with similar service names
-- ✅ **PR number normalization** - `pr58_cms` → `pr-58_nextnode-cms`
-- ✅ **Priority fallback** - Try PR-specific service first, then development
-- ✅ **Fail-fast** - Deployment fails if no service found (no silent failures)
-- ✅ **Private networking** - Free, fast, secure service-to-service communication
-- ✅ **Automatic port detection** - Railway reads PORT from service configuration
+When `server = "custom"` is set, the workflow automatically provisions a Hetzner VPS via Terraform before deployment.
 
 ### NPM Release Workflow
 **File:** `.github/workflows/release.yml`
@@ -491,7 +273,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Default Values
 
@@ -501,7 +283,6 @@ Default values are defined directly in each action's `action.yml` file:
 - **pnpm version**: `10.12.4`
 - **Audit level**: `high`
 - **Working directory**: `.`
-- **Railway memory**: `512MB` (staging), `1024MB` (production)
 - **Timeouts**: 30s health checks, 15min deploys
 
 ### Environment-Based Settings
@@ -515,7 +296,7 @@ The deployment workflow automatically adjusts settings based on environment:
 | Coverage Threshold | 60% | 80% |
 | Fail on Warning | No | Yes |
 
-## 🧪 Testing
+## Testing
 
 Internal testing is handled by the repository's own workflows.
 
@@ -529,20 +310,20 @@ act workflow_dispatch -W .github/workflows/quality-checks.yml
 gh workflow run quality-checks.yml
 ```
 
-## 📋 Requirements
+## Requirements
 
 - **Node.js:** v20+ recommended
 - **pnpm:** v10.12.4+ required (npm and yarn are not supported)
 - **GitHub Actions:** All workflows use GitHub-hosted runners
 
-## 🔒 Security
+## Security
 
 - All workflows use `pnpm audit` for security scanning
 - Production deployments require passing security checks
 - Automated dependency updates via Dependabot
 - Secrets are never logged or exposed
 
-## 🤝 Contributing
+## Contributing
 
 1. Create atomic actions for single responsibilities
 2. Use pnpm exclusively (no npm/yarn support)
@@ -551,7 +332,7 @@ gh workflow run quality-checks.yml
 5. Write clear documentation with examples
 6. Test internally before external use
 
-## 📝 Migration Guide
+## Migration Guide
 
 ### From npm/yarn to pnpm
 
@@ -577,7 +358,7 @@ Update to use domain-organized actions and reusable workflows:
 - uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
 ```
 
-## 📚 Best Practices
+## Best Practices
 
 1. **Use Reusable Workflows:** Prefer complete workflows for common patterns
 2. **Domain Organization:** Use domain-specific actions when building custom workflows
@@ -589,7 +370,7 @@ Update to use domain-organized actions and reusable workflows:
 8. **Security First:** Use provenance attestation for NPM packages
 9. **Automated Versioning:** Use changesets for semantic releases
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -603,13 +384,13 @@ Update to use domain-organized actions and reusable workflows:
 - **Solution:** Adjust threshold or improve test coverage
 
 **Issue:** Deployment failing
-- **Solution:** Check Railway API token and project configuration
+- **Solution:** Check Dokploy API token and project configuration
 
-## 📄 License
+## License
 
-MIT © NextNode Solutions
+MIT NextNode Solutions
 
-## 🔗 Links
+## Links
 
 - [NextNode](https://nextnode.dev)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
