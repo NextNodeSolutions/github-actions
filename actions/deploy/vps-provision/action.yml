@@ -23,8 +23,8 @@ inputs:
   tailscale-auth-key:
     description: 'Tailscale authentication key'
     required: true
-  tailscale-api-key:
-    description: 'Tailscale API key for IP resolution'
+  tailscale-api-token:
+    description: 'Tailscale API token for IP resolution'
     required: true
   cloudflare-api-token:
     description: 'Cloudflare API token'
@@ -92,7 +92,7 @@ runs:
         TF_VAR_project_name: ${{ inputs.project-name }}
         TF_VAR_server_type: ${{ inputs.server-type }}
         TF_VAR_environment: ${{ inputs.environment }}
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
       run: |
         echo "::group::VPS Provisioning"
         cd .infrastructure/terraform/app-vps

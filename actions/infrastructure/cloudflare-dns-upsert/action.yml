@@ -22,8 +22,8 @@ inputs:
   tailscale-hostname:
     description: 'If provided, resolve Tailscale IP for this hostname as record content'
     required: false
-  tailscale-api-key:
-    description: 'Tailscale API key (required if tailscale-hostname is provided)'
+  tailscale-api-token:
+    description: 'Tailscale API token (required if tailscale-hostname is provided)'
     required: false
   ttl:
     description: 'TTL in seconds (1 = auto)'
@@ -77,7 +77,7 @@ runs:
         INPUT_RECORD_TYPE: ${{ inputs.record-type }}
         INPUT_CONTENT: ${{ inputs.content }}
         INPUT_TAILSCALE_HOSTNAME: ${{ inputs.tailscale-hostname }}
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
         INPUT_TTL: ${{ inputs.ttl }}
         INPUT_PROXIED: ${{ inputs.proxied }}
         INPUT_MAX_RETRIES: ${{ inputs.max-retries }}

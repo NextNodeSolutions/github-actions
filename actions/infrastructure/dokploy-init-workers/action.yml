@@ -15,8 +15,8 @@ inputs:
   dokploy-ssh-private-key:
     description: 'SSH private key to import into Dokploy for worker access'
     required: true
-  tailscale-api-key:
-    description: 'Tailscale API key for worker IP resolution'
+  tailscale-api-token:
+    description: 'Tailscale API token for worker IP resolution'
     required: true
   target:
     description: 'Target server(s) to initialize: all, dev-worker, prod-worker'
@@ -53,7 +53,7 @@ runs:
         DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
         DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
         DOKPLOY_SSH_PRIVATE_KEY: ${{ inputs.dokploy-ssh-private-key }}
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
         TARGET: ${{ inputs.target }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         RETRY_DELAY: ${{ inputs.retry-delay }}
