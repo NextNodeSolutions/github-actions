@@ -3,8 +3,8 @@ description: 'Delete Tailscale devices matching hostname patterns'
 author: 'NextNodeSolutions'
 
 inputs:
-  tailscale-api-key:
-    description: 'Tailscale API key with device management permissions'
+  tailscale-api-token:
+    description: 'Tailscale API token (from OAuth or API key) with device management permissions'
     required: true
   target:
     description: 'Target pattern: all, admin-dokploy, dev-worker, prod-worker, or custom comma-separated patterns'
@@ -26,7 +26,7 @@ runs:
       id: cleanup
       shell: bash
       env:
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
         INPUT_TARGET: ${{ inputs.target }}
       run: |
         echo "::group::Delete Tailscale devices for target: $INPUT_TARGET"

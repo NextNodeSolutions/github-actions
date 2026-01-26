@@ -27,8 +27,8 @@ inputs:
   dokploy-admin-password:
     description: 'Dokploy admin password'
     required: true
-  tailscale-api-key:
-    description: 'Tailscale API key for server IP resolution'
+  tailscale-api-token:
+    description: 'Tailscale API token for server IP resolution'
     required: true
   cloudflare-api-token:
     description: 'Cloudflare API token for DNS'
@@ -108,7 +108,7 @@ runs:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
         DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
         DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
         ACTION: ${{ inputs.action }}
         DOCKER_IMAGE: ${{ inputs.docker-image }}
