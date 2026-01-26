@@ -94,6 +94,41 @@ The actions are organized into logical domains to improve maintainability and di
 - **🛠️ utilities/**: Generic helper actions used across domains
 - **Root level**: Only globally-used actions that external projects depend on
 
+## Secrets Management
+
+### Infisical Integration (INT-32/INT-33)
+
+NextNode uses Infisical (self-hosted at https://secrets.nextnode.fr) for centralized application secrets:
+
+**Secrets Strategy:**
+- **GitHub Secrets (infrastructure bootstrap):** `HETZNER_TOKEN`, `TAILSCALE_*`, `CLOUDFLARE_*`, `DOKPLOY_*`, `TF_API_TOKEN`, `INFISICAL_CLIENT_*`
+- **Infisical (application secrets):** Database URLs, external API keys, app-specific credentials
+
+**Why this split:** Infisical runs on admin-dokploy VPS. Can't fetch secrets from Infisical to provision the VPS that hosts Infisical (circular dependency).
+
+**Usage in `dokploy-deploy.yml`:**
+
+The workflow automatically fetches app secrets from Infisical when `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET` are provided:
+
+```yaml
+secrets:
+  INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+  INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+```
+
+Environment mapping:
+- `production` → `prod` slug
+- `preview` → `staging` slug
+- `development` → `dev` slug
+
+Secrets are exported as environment variables and passed to the deployed container.
+
+**Infisical setup for new projects:**
+1. Create project in Infisical UI (https://secrets.nextnode.fr via Tailscale)
+2. Create environments: `dev`, `staging`, `prod`
+3. Add secrets per environment
+4. Project slug must match the repository name
+
 ## Usage Patterns
 
 ### For External Projects
