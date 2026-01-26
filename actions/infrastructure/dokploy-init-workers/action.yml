@@ -205,6 +205,50 @@ runs:
         }
 
         # =================================================================
+        # STEP 3.6: Configure internal Docker registry
+        # Required for Cluster tab visibility in Dokploy UI
+        # =================================================================
+        echo ""
+        echo "=== Configuring internal Docker registry ==="
+
+        EXISTING_REGISTRIES=$(dokploy_api GET "registry.all")
+        INTERNAL_REGISTRY_ID=$(echo "$EXISTING_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
+
+        if [[ -z "$INTERNAL_REGISTRY_ID" ]]; then
+          echo "Adding internal registry: admin-dokploy:5000"
+
+          CREATE_REGISTRY_RESPONSE=$(dokploy_api POST "registry.create" "$(jq -n \
+            --arg registryName "Internal Registry" \
+            --arg registryUrl "http://admin-dokploy:5000" \
+            --arg registryType "cloud" \
+            --arg username "docker" \
+            --arg password "unused" \
+            --arg imagePrefix "dokploy" \
+            '{
+              registryName: $registryName,
+              registryUrl: $registryUrl,
+              registryType: $registryType,
+              username: $username,
+              password: $password,
+              imagePrefix: $imagePrefix
+            }')")
+
+          # Verify registry was created
+          sleep 1
+          VERIFY_REGISTRIES=$(dokploy_api GET "registry.all")
+          REGISTRY_ID=$(echo "$VERIFY_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
+
+          if [[ -n "$REGISTRY_ID" ]]; then
+            echo "Registry configured: $REGISTRY_ID"
+          else
+            echo "::warning::Failed to verify registry creation"
+            echo "Create response: $CREATE_REGISTRY_RESPONSE"
+          fi
+        else
+          echo "Registry already configured: $INTERNAL_REGISTRY_ID"
+        fi
+
+        # =================================================================
         # STEP 4: Import SSH key into Dokploy
         # =================================================================
         echo ""
