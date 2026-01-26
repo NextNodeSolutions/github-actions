@@ -3,8 +3,11 @@ description: 'Build Docker image and push to private registry via Tailscale'
 author: 'NextNodeSolutions'
 
 inputs:
-  tailscale-auth-key:
-    description: 'Tailscale auth key for connecting to private network'
+  tailscale-oauth-client-id:
+    description: 'Tailscale OAuth client ID for connecting to private network'
+    required: true
+  tailscale-oauth-secret:
+    description: 'Tailscale OAuth secret for connecting to private network'
     required: true
   dockerfile:
     description: 'Path to Dockerfile'
@@ -30,7 +33,8 @@ runs:
     - name: Connect to Tailscale
       uses: tailscale/github-action@v3
       with:
-        authkey: ${{ inputs.tailscale-auth-key }}
+        oauth-client-id: ${{ inputs.tailscale-oauth-client-id }}
+        oauth-secret: ${{ inputs.tailscale-oauth-secret }}
         tags: tag:github-actions
 
     - name: Wait for MagicDNS
