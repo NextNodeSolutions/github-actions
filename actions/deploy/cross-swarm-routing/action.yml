@@ -33,204 +33,52 @@ inputs:
 outputs:
   external-port:
     description: 'Deterministic external port assigned to this service'
-    value: ${{ steps.routing.outputs.external-port }}
+    value: ${{ steps.port.outputs.external-port }}
   traefik-config-path:
     description: 'Path to generated Traefik config file'
-    value: ${{ steps.routing.outputs.traefik-config-path }}
+    value: ${{ steps.traefik.outputs.traefik-config-path }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Configure Cross-Swarm Routing
-      id: routing
+    - name: Publish port on worker
+      id: port
+      uses: nextnodesolutions/github-actions/actions/deploy/publish-service-port@main
+      with:
+        app-name: ${{ inputs.app-name }}
+        container-port: ${{ inputs.container-port }}
+        server-ip: ${{ inputs.worker-tailscale-ip }}
+        ssh-private-key: ${{ inputs.ssh-private-key }}
+        expected-image: ${{ inputs.expected-image }}
+
+    - name: Deploy Traefik config
+      id: traefik
       shell: bash
       run: |
-        echo "::group::Cross-Swarm Routing Configuration"
+        echo "::group::Deploying Traefik config to admin (${{ inputs.admin-tailscale-ip }})"
 
         APP_NAME="${{ inputs.app-name }}"
         DOMAIN="${{ inputs.domain }}"
         WORKER_IP="${{ inputs.worker-tailscale-ip }}"
         ADMIN_IP="${{ inputs.admin-tailscale-ip }}"
-        CONTAINER_PORT="${{ inputs.container-port }}"
+        EXTERNAL_PORT="${{ steps.port.outputs.external-port }}"
         USE_HTTPS="${{ inputs.use-https }}"
-        EXPECTED_IMAGE="${{ inputs.expected-image }}"
-
-        echo "App Name: $APP_NAME"
-        echo "Domain: $DOMAIN"
-        echo "Worker IP: $WORKER_IP"
-        echo "Admin IP: $ADMIN_IP"
-        echo "Container Port: $CONTAINER_PORT"
-        echo "Use HTTPS: $USE_HTTPS"
-        if [ -n "$EXPECTED_IMAGE" ]; then
-          echo "Expected Image: $EXPECTED_IMAGE"
-        fi
-
-        # Generate deterministic port from app name hash
-        # Using first 8 chars of MD5 hash, converted to decimal, mapped to port range 10000-65535
-        HASH=$(echo -n "$APP_NAME" | md5sum | cut -c1-8)
-        HASH_DEC=$((16#$HASH))
-        EXTERNAL_PORT=$((10000 + (HASH_DEC % 55535)))
-
-        echo "Calculated external port: $EXTERNAL_PORT (from hash: $HASH)"
-        echo "external-port=$EXTERNAL_PORT" >> $GITHUB_OUTPUT
-
-        # Setup SSH key
-        mkdir -p ~/.ssh
-        echo "${{ inputs.ssh-private-key }}" > ~/.ssh/cross_swarm_key
-        chmod 600 ~/.ssh/cross_swarm_key
-        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/cross_swarm_key"
-
-        echo "::endgroup::"
-
-        # Step 1: Publish port on worker server
-        echo "::group::Publishing port on worker ($WORKER_IP)"
-
-        # Dokploy creates Docker Swarm services with random names
-        # We find the service by its image name which follows a predictable pattern
-
-        ssh $SSH_OPTS root@$WORKER_IP bash <<WORKER_SCRIPT
-        set -e
-
-        EXPECTED_IMAGE="$EXPECTED_IMAGE"
-        MAX_WAIT=300  # 5 minutes
-        WAIT_INTERVAL=5
-        STABILITY_CHECKS=3  # Number of consecutive stable checks required
-
-        echo "Looking for Docker service with image matching: $APP_NAME"
-
-        # Find the service by its image name
-        # Dokploy creates random service names like "app-navigate-haptic-array-ukwb4a"
-        # But the image follows the pattern: admin-dokploy:5000/{app-name}:{commit-sha}
-        find_service() {
-          docker service ls --format '{{.Name}}\t{{.Image}}' | grep -F "/${APP_NAME}:" | cut -f1 | head -1 || echo ""
-        }
-
-        # Wait for service to exist
-        echo "Waiting for service to be created..."
-        ELAPSED=0
-        while [ \$ELAPSED -lt \$MAX_WAIT ]; do
-          SERVICE_NAME=\$(find_service)
-          if [ -n "\$SERVICE_NAME" ]; then
-            echo "Found service: \$SERVICE_NAME"
-            break
-          fi
-          echo "Service not found yet, waiting..."
-          sleep \$WAIT_INTERVAL
-          ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
-        done
-
-        if [ -z "\$SERVICE_NAME" ]; then
-          echo "::error::No service found with image containing /${APP_NAME}:"
-          echo "Available services:"
-          docker service ls --format '{{.Name}}\t{{.Image}}'
-          exit 1
-        fi
-
-        # If expected image is provided, wait for deployment to complete with that image
-        if [ -n "\$EXPECTED_IMAGE" ]; then
-          echo "Waiting for deployment to complete with image: \$EXPECTED_IMAGE"
-          ELAPSED=0
-          while [ \$ELAPSED -lt \$MAX_WAIT ]; do
-            CURRENT_IMAGE=\$(docker service ls --format '{{.Image}}' --filter "name=app-" | grep -F "/${APP_NAME}:" | head -1 || echo "")
-            if [ "\$CURRENT_IMAGE" = "\$EXPECTED_IMAGE" ]; then
-              echo "Found expected image"
-              break
-            fi
-            echo "Current image: \$CURRENT_IMAGE (waiting for \$EXPECTED_IMAGE)..."
-            sleep \$WAIT_INTERVAL
-            ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
-          done
-          if [ \$ELAPSED -ge \$MAX_WAIT ]; then
-            echo "::warning::Timeout waiting for expected image, proceeding anyway"
-          fi
-        fi
-
-        # Wait for Docker service update to be stable (no pending updates)
-        echo "Waiting for service to be stable..."
-        STABLE_COUNT=0
-        ELAPSED=0
-        while [ \$ELAPSED -lt \$MAX_WAIT ] && [ \$STABLE_COUNT -lt \$STABILITY_CHECKS ]; do
-          # Check update state
-          UPDATE_STATE=\$(docker service inspect \$SERVICE_NAME --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{else}}stable{{end}}' 2>/dev/null || echo "unknown")
-
-          # Check if service has running replicas
-          REPLICAS=\$(docker service ls --filter "name=\$SERVICE_NAME" --format '{{.Replicas}}' 2>/dev/null | head -1 || echo "0/0")
-
-          echo "Service state: \$UPDATE_STATE, Replicas: \$REPLICAS"
-
-          # Service is stable if: update is completed/paused/stable AND replicas are ready
-          if [ "\$UPDATE_STATE" = "completed" ] || [ "\$UPDATE_STATE" = "paused" ] || [ "\$UPDATE_STATE" = "stable" ]; then
-            # Check if replicas are ready (e.g., "1/1" means ready)
-            READY=\$(echo "\$REPLICAS" | cut -d'/' -f1)
-            DESIRED=\$(echo "\$REPLICAS" | cut -d'/' -f2)
-            if [ "\$READY" = "\$DESIRED" ] && [ "\$DESIRED" != "0" ]; then
-              STABLE_COUNT=\$((STABLE_COUNT + 1))
-              echo "Service stable (check \$STABLE_COUNT/\$STABILITY_CHECKS)"
-            else
-              STABLE_COUNT=0
-              echo "Replicas not ready, resetting stability counter"
-            fi
-          else
-            STABLE_COUNT=0
-            echo "Service updating, resetting stability counter"
-          fi
-
-          if [ \$STABLE_COUNT -lt \$STABILITY_CHECKS ]; then
-            sleep \$WAIT_INTERVAL
-            ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
-          fi
-        done
-
-        if [ \$STABLE_COUNT -lt \$STABILITY_CHECKS ]; then
-          echo "::warning::Service did not stabilize within timeout, proceeding anyway"
-        else
-          echo "Service is stable, waiting 10s safety buffer..."
-          sleep 10
-        fi
-
-        # Check if port is already published
-        EXISTING_PORTS=\$(docker service inspect \$SERVICE_NAME --format '{{range .Endpoint.Ports}}{{.PublishedPort}}:{{.TargetPort}} {{end}}' 2>/dev/null || echo "")
-        echo "Existing published ports: \$EXISTING_PORTS"
-
-        if echo "\$EXISTING_PORTS" | grep -q "$EXTERNAL_PORT:$CONTAINER_PORT"; then
-          echo "Port $EXTERNAL_PORT:$CONTAINER_PORT already published"
-        else
-          echo "Publishing port $EXTERNAL_PORT:$CONTAINER_PORT"
-          docker service update --publish-add $EXTERNAL_PORT:$CONTAINER_PORT \$SERVICE_NAME || {
-            echo "Warning: Failed to update service"
-            exit 1
-          }
-
-          # Wait for our update to complete
-          echo "Waiting for port publish to complete..."
-          sleep 5
-
-          # Verify port was added
-          VERIFY_PORTS=\$(docker service inspect \$SERVICE_NAME --format '{{range .Endpoint.Ports}}{{.PublishedPort}}:{{.TargetPort}} {{end}}' 2>/dev/null || echo "")
-          echo "Ports after update: \$VERIFY_PORTS"
-
-          if ! echo "\$VERIFY_PORTS" | grep -q "$EXTERNAL_PORT:$CONTAINER_PORT"; then
-            echo "::error::Port was not persisted after update!"
-            exit 1
-          fi
-          echo "Port successfully published and verified"
-        fi
-        WORKER_SCRIPT
-
-        echo "::endgroup::"
-
-        # Step 2: Generate and deploy Traefik config
-        echo "::group::Deploying Traefik config to admin ($ADMIN_IP)"
 
         TRAEFIK_CONFIG_PATH="/var/lib/dokploy/traefik/dynamic/${APP_NAME}.yml"
         echo "traefik-config-path=$TRAEFIK_CONFIG_PATH" >> $GITHUB_OUTPUT
+
+        # Setup SSH key
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh-private-key }}" > ~/.ssh/traefik_config_key
+        chmod 600 ~/.ssh/traefik_config_key
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/traefik_config_key"
 
         # Generate Traefik configuration
         if [ "$USE_HTTPS" = "true" ]; then
           cat > /tmp/traefik-config.yml <<EOF
         # Auto-generated by cross-swarm-routing action
         # App: $APP_NAME
-        # Worker: $WORKER_IP:$EXTERNAL_PORT -> :$CONTAINER_PORT
+        # Worker: $WORKER_IP:$EXTERNAL_PORT -> :${{ inputs.container-port }}
         http:
           routers:
             $APP_NAME:
@@ -257,7 +105,7 @@ runs:
           cat > /tmp/traefik-config.yml <<EOF
         # Auto-generated by cross-swarm-routing action
         # App: $APP_NAME
-        # Worker: $WORKER_IP:$EXTERNAL_PORT -> :$CONTAINER_PORT
+        # Worker: $WORKER_IP:$EXTERNAL_PORT -> :${{ inputs.container-port }}
         http:
           routers:
             $APP_NAME:
@@ -283,7 +131,7 @@ runs:
         echo "Traefik will auto-reload via file provider watch"
 
         # Cleanup
-        rm -f /tmp/traefik-config.yml ~/.ssh/cross_swarm_key
+        rm -f /tmp/traefik-config.yml ~/.ssh/traefik_config_key
 
         echo "::endgroup::"
 

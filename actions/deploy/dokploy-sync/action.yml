@@ -45,6 +45,10 @@ inputs:
     description: 'Hetzner Cloud API token for accurate server public IP resolution'
     required: false
     default: ''
+  ssh-private-key:
+    description: 'SSH private key for port publishing. When provided, enables automatic port persistence after deployment.'
+    required: false
+    default: ''
 
 outputs:
   project-id:
@@ -77,6 +81,9 @@ outputs:
   worker-tailscale-ip:
     description: 'Tailscale IP of the worker server'
     value: ${{ steps.sync.outputs.worker-tailscale-ip }}
+  external-port:
+    description: 'Deterministic external port for this service (only set when ssh-private-key is provided)'
+    value: ${{ steps.port.outputs.external-port }}
 
 runs:
   using: 'composite'
@@ -820,3 +827,14 @@ runs:
             print("Domain: (not configured)")
         print(f"Environment: {ENVIRONMENT}")
         print("=" * 60)
+
+    - name: Publish service port (optional)
+      id: port
+      if: ${{ inputs.ssh-private-key != '' && steps.sync.outputs.worker-tailscale-ip != '' && steps.sync.outputs.success == 'true' }}
+      uses: nextnodesolutions/github-actions/actions/deploy/publish-service-port@main
+      with:
+        app-name: ${{ steps.sync.outputs.application-name }}
+        container-port: ${{ steps.sync.outputs.container-port }}
+        server-ip: ${{ steps.sync.outputs.worker-tailscale-ip }}
+        ssh-private-key: ${{ inputs.ssh-private-key }}
+        expected-image: ${{ inputs.docker-image }}
