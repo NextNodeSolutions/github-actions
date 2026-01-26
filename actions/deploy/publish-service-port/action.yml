@@ -1,0 +1,243 @@
+name: 'Publish Service Port'
+description: 'Publish a port for a Docker Swarm service via SSH'
+author: 'NextNodeSolutions'
+
+inputs:
+  app-name:
+    description: 'Application name (used to find Docker service by image pattern)'
+    required: true
+  container-port:
+    description: 'Container port the application listens on'
+    required: true
+  server-ip:
+    description: 'Tailscale IP of the server running the service'
+    required: true
+  ssh-private-key:
+    description: 'SSH private key for connecting to the server'
+    required: true
+  expected-image:
+    description: 'Expected Docker image tag. If provided, waits for this image before publishing.'
+    required: false
+    default: ''
+  max-wait:
+    description: 'Maximum wait time in seconds for service to be ready'
+    required: false
+    default: '180'
+  stability-checks:
+    description: 'Number of consecutive stable checks required before publishing'
+    required: false
+    default: '3'
+
+outputs:
+  external-port:
+    description: 'Deterministic external port assigned to this service'
+    value: ${{ steps.publish.outputs.external-port }}
+  service-name:
+    description: 'Docker Swarm service name'
+    value: ${{ steps.publish.outputs.service-name }}
+  success:
+    description: 'Whether port was successfully published'
+    value: ${{ steps.publish.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Publish Service Port
+      id: publish
+      shell: bash
+      run: |
+        echo "::group::Port Publishing Configuration"
+
+        APP_NAME="${{ inputs.app-name }}"
+        CONTAINER_PORT="${{ inputs.container-port }}"
+        SERVER_IP="${{ inputs.server-ip }}"
+        EXPECTED_IMAGE="${{ inputs.expected-image }}"
+        MAX_WAIT="${{ inputs.max-wait }}"
+        STABILITY_CHECKS="${{ inputs.stability-checks }}"
+
+        echo "App Name: $APP_NAME"
+        echo "Container Port: $CONTAINER_PORT"
+        echo "Server IP: $SERVER_IP"
+        echo "Max Wait: ${MAX_WAIT}s"
+        echo "Stability Checks: $STABILITY_CHECKS"
+        if [ -n "$EXPECTED_IMAGE" ]; then
+          echo "Expected Image: $EXPECTED_IMAGE"
+        fi
+
+        # Generate deterministic port from app name hash
+        # Using first 8 chars of MD5 hash, converted to decimal, mapped to port range 10000-65535
+        HASH=$(echo -n "$APP_NAME" | md5sum | cut -c1-8)
+        HASH_DEC=$((16#$HASH))
+        EXTERNAL_PORT=$((10000 + (HASH_DEC % 55535)))
+
+        echo "Calculated external port: $EXTERNAL_PORT (from hash: $HASH)"
+        echo "external-port=$EXTERNAL_PORT" >> $GITHUB_OUTPUT
+
+        # Setup SSH key
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh-private-key }}" > ~/.ssh/publish_port_key
+        chmod 600 ~/.ssh/publish_port_key
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i ~/.ssh/publish_port_key"
+
+        echo "::endgroup::"
+
+        echo "::group::Publishing port on server ($SERVER_IP)"
+
+        # Dokploy creates Docker Swarm services with random names
+        # We find the service by its image name which follows a predictable pattern
+
+        SERVICE_NAME=$(ssh $SSH_OPTS root@$SERVER_IP bash <<WORKER_SCRIPT
+        set -e
+
+        EXPECTED_IMAGE="$EXPECTED_IMAGE"
+        MAX_WAIT=$MAX_WAIT
+        WAIT_INTERVAL=5
+        STABILITY_CHECKS=$STABILITY_CHECKS
+
+        echo "Looking for Docker service with image matching: $APP_NAME" >&2
+
+        # Find the service by its image name
+        # Dokploy creates random service names like "app-navigate-haptic-array-ukwb4a"
+        # But the image follows the pattern: admin-dokploy:5000/{app-name}:{commit-sha}
+        find_service() {
+          docker service ls --format '{{.Name}}\t{{.Image}}' | grep -F "/${APP_NAME}:" | cut -f1 | head -1 || echo ""
+        }
+
+        # Wait for service to exist
+        echo "Waiting for service to be created..." >&2
+        ELAPSED=0
+        while [ \$ELAPSED -lt \$MAX_WAIT ]; do
+          SERVICE_NAME=\$(find_service)
+          if [ -n "\$SERVICE_NAME" ]; then
+            echo "Found service: \$SERVICE_NAME" >&2
+            break
+          fi
+          echo "Service not found yet, waiting..." >&2
+          sleep \$WAIT_INTERVAL
+          ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
+        done
+
+        if [ -z "\$SERVICE_NAME" ]; then
+          echo "::error::No service found with image containing /${APP_NAME}:" >&2
+          echo "Available services:" >&2
+          docker service ls --format '{{.Name}}\t{{.Image}}' >&2
+          exit 1
+        fi
+
+        # If expected image is provided, wait for deployment to complete with that image
+        if [ -n "\$EXPECTED_IMAGE" ]; then
+          echo "Waiting for deployment to complete with image: \$EXPECTED_IMAGE" >&2
+          ELAPSED=0
+          while [ \$ELAPSED -lt \$MAX_WAIT ]; do
+            CURRENT_IMAGE=\$(docker service ls --format '{{.Image}}' --filter "name=app-" | grep -F "/${APP_NAME}:" | head -1 || echo "")
+            if [ "\$CURRENT_IMAGE" = "\$EXPECTED_IMAGE" ]; then
+              echo "Found expected image" >&2
+              break
+            fi
+            echo "Current image: \$CURRENT_IMAGE (waiting for \$EXPECTED_IMAGE)..." >&2
+            sleep \$WAIT_INTERVAL
+            ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
+          done
+          if [ \$ELAPSED -ge \$MAX_WAIT ]; then
+            echo "::warning::Timeout waiting for expected image, proceeding anyway" >&2
+          fi
+        fi
+
+        # Wait for Docker service update to be stable (no pending updates)
+        echo "Waiting for service to be stable..." >&2
+        STABLE_COUNT=0
+        ELAPSED=0
+        while [ \$ELAPSED -lt \$MAX_WAIT ] && [ \$STABLE_COUNT -lt \$STABILITY_CHECKS ]; do
+          # Check update state
+          UPDATE_STATE=\$(docker service inspect \$SERVICE_NAME --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{else}}stable{{end}}' 2>/dev/null || echo "unknown")
+
+          # Check if service has running replicas
+          REPLICAS=\$(docker service ls --filter "name=\$SERVICE_NAME" --format '{{.Replicas}}' 2>/dev/null | head -1 || echo "0/0")
+
+          echo "Service state: \$UPDATE_STATE, Replicas: \$REPLICAS" >&2
+
+          # Service is stable if: update is completed/paused/stable AND replicas are ready
+          if [ "\$UPDATE_STATE" = "completed" ] || [ "\$UPDATE_STATE" = "paused" ] || [ "\$UPDATE_STATE" = "stable" ]; then
+            # Check if replicas are ready (e.g., "1/1" means ready)
+            READY=\$(echo "\$REPLICAS" | cut -d'/' -f1)
+            DESIRED=\$(echo "\$REPLICAS" | cut -d'/' -f2)
+            if [ "\$READY" = "\$DESIRED" ] && [ "\$DESIRED" != "0" ]; then
+              STABLE_COUNT=\$((STABLE_COUNT + 1))
+              echo "Service stable (check \$STABLE_COUNT/\$STABILITY_CHECKS)" >&2
+            else
+              STABLE_COUNT=0
+              echo "Replicas not ready, resetting stability counter" >&2
+            fi
+          else
+            STABLE_COUNT=0
+            echo "Service updating, resetting stability counter" >&2
+          fi
+
+          if [ \$STABLE_COUNT -lt \$STABILITY_CHECKS ]; then
+            sleep \$WAIT_INTERVAL
+            ELAPSED=\$((ELAPSED + WAIT_INTERVAL))
+          fi
+        done
+
+        if [ \$STABLE_COUNT -lt \$STABILITY_CHECKS ]; then
+          echo "::warning::Service did not stabilize within timeout, proceeding anyway" >&2
+        else
+          echo "Service is stable, waiting 10s safety buffer..." >&2
+          sleep 10
+        fi
+
+        # Check if port is already published
+        EXISTING_PORTS=\$(docker service inspect \$SERVICE_NAME --format '{{range .Endpoint.Ports}}{{.PublishedPort}}:{{.TargetPort}} {{end}}' 2>/dev/null || echo "")
+        echo "Existing published ports: \$EXISTING_PORTS" >&2
+
+        if echo "\$EXISTING_PORTS" | grep -q "$EXTERNAL_PORT:$CONTAINER_PORT"; then
+          echo "Port $EXTERNAL_PORT:$CONTAINER_PORT already published" >&2
+        else
+          echo "Publishing port $EXTERNAL_PORT:$CONTAINER_PORT" >&2
+          docker service update --publish-add $EXTERNAL_PORT:$CONTAINER_PORT \$SERVICE_NAME || {
+            echo "::error::Failed to update service" >&2
+            exit 1
+          }
+
+          # Wait for our update to complete
+          echo "Waiting for port publish to complete..." >&2
+          sleep 5
+
+          # Verify port was added
+          VERIFY_PORTS=\$(docker service inspect \$SERVICE_NAME --format '{{range .Endpoint.Ports}}{{.PublishedPort}}:{{.TargetPort}} {{end}}' 2>/dev/null || echo "")
+          echo "Ports after update: \$VERIFY_PORTS" >&2
+
+          if ! echo "\$VERIFY_PORTS" | grep -q "$EXTERNAL_PORT:$CONTAINER_PORT"; then
+            echo "::error::Port was not persisted after update!" >&2
+            exit 1
+          fi
+          echo "Port successfully published and verified" >&2
+        fi
+
+        # Output service name to stdout (only output)
+        echo "\$SERVICE_NAME"
+        WORKER_SCRIPT
+        )
+
+        SSH_EXIT_CODE=$?
+
+        echo "::endgroup::"
+
+        # Cleanup SSH key
+        rm -f ~/.ssh/publish_port_key
+
+        if [ $SSH_EXIT_CODE -ne 0 ]; then
+          echo "::error::Failed to publish port"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "service-name=" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "service-name=$SERVICE_NAME" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
+
+        echo ""
+        echo "Port publishing completed successfully!"
+        echo "  Service: $SERVICE_NAME"
+        echo "  External Port: $EXTERNAL_PORT"
+        echo "  Container Port: $CONTAINER_PORT"
