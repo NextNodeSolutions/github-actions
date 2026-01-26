@@ -139,7 +139,6 @@ runs:
             if GITHUB_OUTPUT:
                 with open(GITHUB_OUTPUT, 'a') as f:
                     f.write(f"{key}={value}\n")
-            print(f"::set-output name={key}::{value}")
 
         def deep_merge(base, override):
             """Deep merge two dicts, override wins."""

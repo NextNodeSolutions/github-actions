@@ -15,9 +15,7 @@ This is a **reusable GitHub Actions repository** for NextNode projects. It provi
 github-actions/
 ├── .github/workflows/              # Reusable workflows (external + internal)
 │   ├── quality-checks.yml         # Full quality pipeline (workflow_call)
-│   ├── deploy.yml                 # Railway deployment (workflow_call)
-│   ├── pr-preview.yml             # PR preview deployments (workflow_call)
-│   ├── pr-preview-cleanup.yml     # PR preview cleanup (workflow_call)
+│   ├── dokploy-deploy.yml         # Dokploy deployment (workflow_call)
 │   ├── release.yml                # NPM library release (workflow_call)
 │   ├── publish-release.yml        # Publish workflow with repository_dispatch
 │   ├── version-management.yml     # Automated versioning with changesets
@@ -25,45 +23,36 @@ github-actions/
 │   ├── health-check.yml           # Health monitoring (workflow_call)
 │   └── [additional workflows]     # Lint, test, typecheck individual workflows
 ├── actions/                        # Domain-organized atomic actions
-│   ├── build/                     # 🏗️ Build & Setup domain
+│   ├── build/                     # Build & Setup domain
 │   │   ├── install/               # Dependency installation
 │   │   ├── build-project/         # Project building
 │   │   └── smart-cache/           # Intelligent caching
-│   ├── quality/                   # 🔍 Code Quality domain
+│   ├── quality/                   # Code Quality domain
 │   │   ├── lint/                  # ESLint checks
 │   │   ├── typecheck/             # TypeScript validation
 │   │   └── security-audit/        # Security scanning
-│   ├── deploy/                    # 🚀 Railway Deployment domain
-│   │   ├── railway-cli-setup/     # Railway CLI configuration
-│   │   ├── railway-project-setup/ # Railway project management
-│   │   ├── railway-service-setup/ # Railway service configuration (supports custom service names)
-│   │   ├── railway-deploy/        # Main deployment action
-│   │   ├── railway-deploy-trigger/ # Deployment triggering
-│   │   ├── railway-deployment-wait/ # Deployment monitoring
-│   │   ├── railway-pr-cleanup/    # PR preview cleanup
-│   │   ├── railway-variables/     # Environment variables
-│   │   └── railway-url-generate/  # URL generation
-│   ├── release/                   # 📦 NPM Release Management domain
+│   ├── deploy/                    # Dokploy Deployment domain
+│   │   ├── dokploy-sync/          # Sync dokploy.toml config to Dokploy API
+│   │   └── vps-provision/         # Auto-provision Hetzner VPS for custom servers
+│   ├── release/                   # NPM Release Management domain
 │   │   ├── changesets-setup/      # Setup changesets for versioning
 │   │   ├── changesets-version/    # Create version PRs with changesets
 │   │   ├── changesets-publish/    # Publish packages with changesets
 │   │   ├── changesets-pr-merge/   # Auto-merge version PRs
 │   │   └── npm-provenance/        # NPM provenance attestation
-│   ├── domain/                    # 🌐 Domain Management domain
-│   │   └── railway-domain-setup/  # Domain configuration
-│   ├── ssl/                       # 🔒 SSL/TLS Configuration domain
+│   ├── ssl/                       # SSL/TLS Configuration domain
 │   │   └── cloudflare-ssl-setup/  # Cloudflare SSL/TLS mode configuration
-│   ├── monitoring/                # 🔍 Monitoring domain
+│   ├── monitoring/                # Monitoring domain
 │   │   └── check-job-results/     # Job result verification
-│   ├── utilities/                 # 🛠️ Generic Utilities domain
+│   ├── utilities/                 # Generic Utilities domain
 │   │   ├── log-step/              # Enhanced logging
 │   │   ├── run-command/           # Command wrapper
 │   │   ├── check-command/         # Command availability check
 │   │   ├── set-env-vars/          # Environment management
 │   │   └── should-run/            # Conditional logic
-│   ├── node-setup-complete/       # ✅ Global: Complete Node.js setup (used externally)
-│   ├── test/                      # ✅ Global: Test execution (used externally)
-│   └── health-check/              # ✅ Global: URL health monitoring (used externally)
+│   ├── node-setup-complete/       # Global: Complete Node.js setup (used externally)
+│   ├── test/                      # Global: Test execution (used externally)
+│   └── health-check/              # Global: URL health monitoring (used externally)
 └── README.md                       # User documentation
 ```
 
@@ -84,50 +73,36 @@ github-actions/
 
 The actions are organized into logical domains to improve maintainability and discoverability:
 
-- **🏗️ build/**: Everything related to project setup, dependency installation, and building
-- **🔍 quality/**: Code quality checks including linting, type checking, and security
-- **🚀 deploy/**: Railway platform deployment and infrastructure management
-- **📦 release/**: NPM package release management with changesets and provenance
-- **🌐 domain/**: Domain and DNS management (separate from deployment)
-- **🔒 ssl/**: SSL/TLS configuration and certificate management
-- **🔍 monitoring/**: Health checks and job result verification
-- **🛠️ utilities/**: Generic helper actions used across domains
+- **build/**: Everything related to project setup, dependency installation, and building
+- **quality/**: Code quality checks including linting, type checking, and security
+- **deploy/**: Dokploy platform deployment and VPS provisioning
+- **release/**: NPM package release management with changesets and provenance
+- **ssl/**: SSL/TLS configuration and certificate management
+- **monitoring/**: Health checks and job result verification
+- **utilities/**: Generic helper actions used across domains
 - **Root level**: Only globally-used actions that external projects depend on
 
-## Secrets Management
+## Deployment Architecture
 
-### Infisical Integration (INT-32/INT-33)
+### Dokploy Deployment
 
-NextNode uses Infisical (self-hosted at https://secrets.nextnode.fr) for centralized application secrets:
+NextNode uses Dokploy (self-hosted PaaS) for application deployment:
 
-**Secrets Strategy:**
-- **GitHub Secrets (infrastructure bootstrap):** `HETZNER_TOKEN`, `TAILSCALE_*`, `CLOUDFLARE_*`, `DOKPLOY_*`, `TF_API_TOKEN`, `INFISICAL_CLIENT_*`
-- **Infisical (application secrets):** Database URLs, external API keys, app-specific credentials
+- **dokploy-sync**: Syncs `dokploy.toml` configuration to Dokploy API
+- **vps-provision**: Auto-provisions Hetzner VPS when project uses `server = "custom"`
 
-**Why this split:** Infisical runs on admin-dokploy VPS. Can't fetch secrets from Infisical to provision the VPS that hosts Infisical (circular dependency).
+### VPS Auto-Provisioning (INT-28)
 
-**Usage in `dokploy-deploy.yml`:**
+Projects can request a dedicated VPS by setting `server = "custom"` in `dokploy.toml`:
 
-The workflow automatically fetches app secrets from Infisical when `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET` are provided:
-
-```yaml
-secrets:
-  INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-  INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+```toml
+[production]
+server = "custom"          # Triggers VPS provisioning
+vps = "my-app-worker"      # VPS name
+vps_type = "cx33"          # Hetzner server type
 ```
 
-Environment mapping:
-- `production` → `prod` slug
-- `preview` → `staging` slug
-- `development` → `dev` slug
-
-Secrets are exported as environment variables and passed to the deployed container.
-
-**Infisical setup for new projects:**
-1. Create project in Infisical UI (https://secrets.nextnode.fr via Tailscale)
-2. Create environments: `dev`, `staging`, `prod`
-3. Add secrets per environment
-4. Project slug must match the repository name
+The `vps-provision` action calls the infrastructure repo's Terraform module to create the VPS.
 
 ## Usage Patterns
 
@@ -138,9 +113,7 @@ External projects can call workflows in two ways:
 1. **Full pipelines** (reusable workflows):
 ```yaml
 uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
-uses: nextnodesolutions/github-actions/.github/workflows/deploy.yml@main
-uses: nextnodesolutions/github-actions/.github/workflows/pr-preview.yml@main
-uses: nextnodesolutions/github-actions/.github/workflows/pr-preview-cleanup.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/dokploy-deploy.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/release.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/version-management.yml@main
 ```
@@ -154,17 +127,17 @@ uses: nextnodesolutions/github-actions/actions/test@main
 uses: nextnodesolutions/github-actions/actions/health-check@main
 ```
 
-**Domain-specific actions (NextNode internal projects only - not external):**
+**Domain-specific actions (NextNode internal projects only):**
 ```yaml
 # Build domain
 uses: nextnodesolutions/github-actions/actions/build/install@main
 
-# Quality domain  
+# Quality domain
 uses: nextnodesolutions/github-actions/actions/quality/lint@main
 uses: nextnodesolutions/github-actions/actions/quality/typecheck@main
 
 # Deploy domain
-uses: nextnodesolutions/github-actions/actions/deploy/railway-deploy@main
+uses: nextnodesolutions/github-actions/actions/deploy/dokploy-sync@main
 
 # SSL domain
 uses: nextnodesolutions/github-actions/actions/ssl/cloudflare-ssl-setup@main
@@ -180,12 +153,12 @@ Internal testing uses `internal-tests.yml` with manual trigger only to avoid rec
 ## Important Notes for Development
 
 ### When Adding New Actions
-1. **Choose appropriate domain**: Place in correct domain folder (`build/`, `quality/`, `deploy/`, `domain/`, `ssl/`, `monitoring/`, `utilities/`)
+1. **Choose appropriate domain**: Place in correct domain folder (`build/`, `quality/`, `deploy/`, `ssl/`, `monitoring/`, `utilities/`)
 2. Create a new folder in `/actions/{domain}/` with descriptive name
 3. Add `action.yml` (not `action.yaml`)
 4. Use inputs with sensible defaults
 5. Add logging with `::group::` and `::endgroup::`
-6. Include timing information  
+6. Include timing information
 7. Document inputs/outputs clearly
 8. **Never add to root level** unless it's globally used by external projects
 
@@ -228,9 +201,8 @@ touch actions/utilities/my-new-action/action.yml
 ### Domain Selection Guide
 - **build/**: Installation, building, caching (Node setup is now global)
 - **quality/**: Linting, type checking, testing, security audits
-- **deploy/**: Railway deployment and infrastructure
+- **deploy/**: Dokploy deployment and VPS provisioning
 - **release/**: NPM package release management, changesets, provenance
-- **domain/**: Domain and DNS management
 - **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks, job verification
 - **utilities/**: Generic helpers and tools
@@ -263,77 +235,17 @@ Replaced inefficient 53-job matrix system with single actionlint job:
 - **Trigger Change**: Now runs on PRs to main (with path filters) + manual dispatch, NOT on every push
 - **Savings**: ~99% reduction in CI minutes
 
-### Previous Migration: Railway + Cloudflare Sub-subdomain Fix (2025)
-Fixed critical Railway CNAME detection issue with Cloudflare proxied sub-subdomains:
-- **Problem**: Railway couldn't detect CNAME for `pr-56.dev.nextnode.fr` (3+ level domains)
-- **Root Cause**: Cloudflare proxy converts CNAME → A records, blocking Railway SSL provisioning
-- **Railway Limitation**: Sub-subdomains (*.subdomain.domain.com) incompatible with Cloudflare proxy without Advanced Certificate Manager
-- **Solution**: Auto-detect sub-subdomain depth and disable Cloudflare proxy (`proxied=false`)
-- **Detection Logic**: Count dots in domain - if ≥2 dots → sub-subdomain → `proxied=false`
-- **ACME Challenge**: Auto-create `_acme-challenge.{domain}` CNAME (DNS-only) for Railway SSL validation
-- **Examples**:
-  - `pr-56.dev.nextnode.fr` (3 levels) → `proxied=false` ✅ Railway can detect CNAME
-  - `dev.nextnode.fr` (2 levels) → `proxied=true` ✅ Cloudflare proxy enabled
-  - `nextnode.fr` (apex) → `proxied=true` ✅ Cloudflare proxy enabled
-- **Trade-off**: PR previews lose Cloudflare CDN/DDoS protection (acceptable for dev environments)
-- **Documentation**: Railway requires CNAME visibility for Let's Encrypt certificate provisioning
-
-### Previous Migration: SSL/TLS Configuration Integration (2025)
-Added automatic SSL/TLS mode configuration for Railway + Cloudflare deployments:
-- **Added**: New `ssl/` domain with `cloudflare-ssl-setup` action
-- **Enhanced**: DNS workflow now includes automatic SSL/TLS configuration (enabled by default)
-- **Feature**: Configures Cloudflare SSL/TLS to "Full" mode for Railway compatibility
-- **Inputs**: `enable-ssl-setup` (default: true) and `ssl-mode` (default: "full")
-- **Outputs**: `ssl-configured`, `ssl-mode` for workflow visibility
-- **Fix**: Resolves `ERR_SSL_VERSION_OR_CIPHER_MISMATCH` errors with Railway deployments
-- **Best Practice**: Railway requires "Full" SSL mode, not "Full (Strict)" or "Flexible"
-
-### Previous Migration: PR Preview Deployments Refactor (2025)
-Refactored PR preview system to maximize action reuse and flexibility:
-- **Refactored**: PR preview workflow now composes existing atomic actions (removed `railway-pr-preview` action)
-- **Enhanced**: `railway-service-setup` now supports `service-name-override` input for custom service names
-- **Added**: `base-environment` input to PR preview workflow (configurable, defaults to 'development')
-- **Feature**: Automatic deployment to `pr-{number}.dev.{base-domain}` for each PR
-- **Feature**: Auto-cleanup when PR is closed (removes service but keeps base environment)
-- **Feature**: PR comments with deployment status, URL, and quality check results
-- **Architecture**: Follows DRY principle by composing atomic Railway actions
-- **Flexibility**: Can be adapted for staging PRs, feature branches, etc.
-
-### Previous Migration: Changesets Publish Action Refactor (2025)
-Simplified and fixed the changesets publish action:
-- **Fixed**: "Invalid format '[]'" error by removing problematic JSON package parsing
-- **Simplified**: Reduced complex nested conditionals from 50+ lines to clean 25 lines
-- **Improved**: Direct command execution with `if OUTPUT=$(...)`  instead of exit code capture
-- **Removed**: Unnecessary `packages` output that caused GitHub Actions format errors
-- **Enhanced**: More reliable changesets output detection with "packages published successfully"
-
-### Previous Migration: Release Management Integration (2025)
-Added comprehensive NPM release management capabilities:
-- **Added**: New `release/` domain with changesets integration
-- **Added**: Complete release workflows (`release.yml`, `publish-release.yml`, `version-management.yml`)
-- **Enhanced**: Automated versioning with PR creation and auto-merge
-- **Added**: NPM provenance attestation for enhanced security
-- **Integrated**: Repository dispatch events for cross-repo release coordination
-
-### Previous Migration: Domain Organization (2025)
-Reorganized repository by domain for better maintainability:
-- **Organized**: Actions grouped into logical domains (`build/`, `quality/`, `deploy/`, etc.)
-- **Preserved**: Global actions `test/` and `health-check/` at root for external compatibility
-- **Separated**: Deploy vs Domain management (Railway deployment vs DNS/domain setup)
-- **Updated**: All internal workflow references to use new paths
-
 ### Previous Migrations
-- Removed: workflow-templates/, packs/, internal/ directories  
+- Migrated from Railway to Dokploy (self-hosted PaaS)
+- Removed: workflow-templates/, packs/, internal/ directories
 - Removed: Fly.io deployment support
 - Removed: npm/yarn support
 - Simplified: Action paths (removed unnecessary nesting)
-- Unified: Deployment workflows (single file for all environments)
 
 ## Dependencies
 
 - **pnpm**: Version 10.12.4+ required
 - **Node.js**: Version 20+ recommended
-- **Railway CLI**: For deployment workflows
 - **Docker**: For containerized deployments
 
 ## Security Considerations

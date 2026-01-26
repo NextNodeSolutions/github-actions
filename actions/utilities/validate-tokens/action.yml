@@ -1,12 +1,9 @@
 name: 'Validate Tokens'
-description: 'Validates multiple API tokens in parallel (Cloudflare, Railway, NPM)'
+description: 'Validates multiple API tokens in parallel (Cloudflare, NPM)'
 
 inputs:
   cloudflare-api-token:
     description: 'Cloudflare API token to validate (optional)'
-    required: false
-  railway-api-token:
-    description: 'Railway API token to validate (optional)'
     required: false
   npm-token:
     description: 'NPM authentication token to validate (optional)'
@@ -27,9 +24,6 @@ outputs:
   cloudflare-valid:
     description: 'Cloudflare token validity (true/false/skipped)'
     value: ${{ steps.summary.outputs.cloudflare-valid }}
-  railway-valid:
-    description: 'Railway token validity (true/false/skipped)'
-    value: ${{ steps.summary.outputs.railway-valid }}
   npm-valid:
     description: 'NPM token validity (true/false/skipped)'
     value: ${{ steps.summary.outputs.npm-valid }}
@@ -53,16 +47,7 @@ runs:
       uses: ./.github-actions-validation/actions/utilities/validate-cloudflare-token
       with:
         cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
-        fail-on-invalid: 'false'  # We'll handle failure in summary
-      continue-on-error: true
-
-    - name: Validate Railway Token
-      id: railway
-      if: inputs.railway-api-token != ''
-      uses: ./.github-actions-validation/actions/utilities/validate-railway-token
-      with:
-        railway-api-token: ${{ inputs.railway-api-token }}
-        fail-on-invalid: 'false'  # We'll handle failure in summary
+        fail-on-invalid: 'false'
       continue-on-error: true
 
     - name: Validate NPM Token
@@ -72,7 +57,7 @@ runs:
       with:
         npm-token: ${{ inputs.npm-token }}
         registry-url: ${{ inputs.npm-registry-url }}
-        fail-on-invalid: 'false'  # We'll handle failure in summary
+        fail-on-invalid: 'false'
       continue-on-error: true
 
     - name: Validation Summary
@@ -84,17 +69,13 @@ runs:
         CF_STATUS: ${{ steps.cloudflare.outputs.status }}
         CF_ERROR: ${{ steps.cloudflare.outputs.error-message }}
 
-        RW_PROVIDED: ${{ inputs.railway-api-token != '' }}
-        RW_VALID: ${{ steps.railway.outputs.is-valid }}
-        RW_ERROR: ${{ steps.railway.outputs.error-message }}
-
         NPM_PROVIDED: ${{ inputs.npm-token != '' }}
         NPM_VALID: ${{ steps.npm.outputs.is-valid }}
         NPM_ERROR: ${{ steps.npm.outputs.error-message }}
 
         FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
       run: |
-        echo "::group::📊 Token Validation Summary"
+        echo "::group::Token Validation Summary"
         echo ""
 
         # Determine individual validation results
@@ -102,12 +83,6 @@ runs:
           CF_RESULT="${CF_VALID:-false}"
         else
           CF_RESULT="skipped"
-        fi
-
-        if [[ "$RW_PROVIDED" == "true" ]]; then
-          RW_RESULT="${RW_VALID:-false}"
-        else
-          RW_RESULT="skipped"
         fi
 
         if [[ "$NPM_PROVIDED" == "true" ]]; then
@@ -121,27 +96,19 @@ runs:
         echo "|---------|--------|---------|"
 
         if [[ "$CF_RESULT" == "true" ]]; then
-          echo "| Cloudflare | ✅ Valid | Status: $CF_STATUS |"
+          echo "| Cloudflare | Valid | Status: $CF_STATUS |"
         elif [[ "$CF_RESULT" == "false" ]]; then
-          echo "| Cloudflare | ❌ Invalid | $CF_ERROR |"
+          echo "| Cloudflare | Invalid | $CF_ERROR |"
         else
-          echo "| Cloudflare | ➖ Skipped | Not provided |"
-        fi
-
-        if [[ "$RW_RESULT" == "true" ]]; then
-          echo "| Railway | ✅ Valid | Authenticated |"
-        elif [[ "$RW_RESULT" == "false" ]]; then
-          echo "| Railway | ❌ Invalid | $RW_ERROR |"
-        else
-          echo "| Railway | ➖ Skipped | Not provided |"
+          echo "| Cloudflare | Skipped | Not provided |"
         fi
 
         if [[ "$NPM_RESULT" == "true" ]]; then
-          echo "| NPM | ✅ Valid | Authenticated |"
+          echo "| NPM | Valid | Authenticated |"
         elif [[ "$NPM_RESULT" == "false" ]]; then
-          echo "| NPM | ❌ Invalid | $NPM_ERROR |"
+          echo "| NPM | Invalid | $NPM_ERROR |"
         else
-          echo "| NPM | ➖ Skipped | Not provided |"
+          echo "| NPM | Skipped | Not provided |"
         fi
 
         echo ""
@@ -153,11 +120,6 @@ runs:
         if [[ "$CF_RESULT" == "false" ]]; then
           ALL_VALID="false"
           FAILED_SERVICES="Cloudflare "
-        fi
-
-        if [[ "$RW_RESULT" == "false" ]]; then
-          ALL_VALID="false"
-          FAILED_SERVICES="${FAILED_SERVICES}Railway "
         fi
 
         if [[ "$NPM_RESULT" == "false" ]]; then
@@ -174,10 +136,6 @@ runs:
             "status": "${CF_STATUS:-}",
             "error": "${CF_ERROR:-}"
           },
-          "railway": {
-            "valid": "$RW_RESULT",
-            "error": "${RW_ERROR:-}"
-          },
           "npm": {
             "valid": "$NPM_RESULT",
             "error": "${NPM_ERROR:-}"
@@ -189,16 +147,15 @@ runs:
         # Set outputs
         echo "all-valid=$ALL_VALID" >> $GITHUB_OUTPUT
         echo "cloudflare-valid=$CF_RESULT" >> $GITHUB_OUTPUT
-        echo "railway-valid=$RW_RESULT" >> $GITHUB_OUTPUT
         echo "npm-valid=$NPM_RESULT" >> $GITHUB_OUTPUT
         echo "validation-summary<<EOF" >> $GITHUB_OUTPUT
         echo "$VALIDATION_JSON" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
 
         if [[ "$ALL_VALID" == "true" ]]; then
-          echo "✅ All provided tokens are valid!"
+          echo "All provided tokens are valid!"
         else
-          echo "❌ Token validation failed for: $FAILED_SERVICES"
+          echo "Token validation failed for: $FAILED_SERVICES"
         fi
 
         echo "::endgroup::"
