@@ -689,6 +689,7 @@ runs:
                     compose_data = {
                         "name": app_name,
                         "projectId": project_id,
+                        "environmentId": environment_id,
                         "composeType": "docker-compose",
                     }
                     if server_id:
@@ -699,6 +700,8 @@ runs:
                         json=compose_data,
                         timeout=30
                     )
+                    if not create_compose_resp.ok:
+                        print(f"::warning::compose.create response: {create_compose_resp.status_code} - {create_compose_resp.text[:500]}")
                     create_compose_resp.raise_for_status()
                     compose_id = create_compose_resp.json().get('composeId')
                     print(f"Created compose stack: {app_name} ({compose_id})")
