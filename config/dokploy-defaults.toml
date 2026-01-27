@@ -33,7 +33,8 @@ cpu_limit = 1                 # Hard limit
 [healthcheck]
 enabled = true
 path = "/health"
-port = 3000
+# port defaults to detected APP_PORT from Dockerfile/.env
+# only set explicitly if healthcheck runs on a different port than app
 interval = 30                 # seconds
 timeout = 10                  # seconds
 retries = 3
