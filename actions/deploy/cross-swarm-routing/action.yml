@@ -64,7 +64,9 @@ runs:
         EXTERNAL_PORT="${{ steps.port.outputs.external-port }}"
         USE_HTTPS="${{ inputs.use-https }}"
 
-        TRAEFIK_CONFIG_PATH="/var/lib/dokploy/traefik/dynamic/${APP_NAME}.yml"
+        # Use /etc/traefik/dynamic/ directly (not the symlinked dokploy subdir)
+        # Traefik's file provider doesn't reliably watch through symlinks
+        TRAEFIK_CONFIG_PATH="/etc/traefik/dynamic/${APP_NAME}.yml"
         echo "traefik-config-path=$TRAEFIK_CONFIG_PATH" >> $GITHUB_OUTPUT
 
         # Setup SSH key
