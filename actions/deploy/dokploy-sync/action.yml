@@ -899,7 +899,7 @@ runs:
                 hc_retries = healthcheck_config.get('retries', 3)
                 hc_start_period_ns = healthcheck_config.get('start_period', 40) * 1_000_000_000
 
-                # Docker Swarm healthcheck format (JSON string)
+                # Docker Swarm healthcheck format
                 healthcheck_swarm = {
                     "Test": ["CMD", "curl", "-f", f"http://localhost:{hc_port}{hc_path}"],
                     "Interval": hc_interval_ns,
@@ -908,14 +908,27 @@ runs:
                     "Retries": hc_retries
                 }
 
+                # Rollback config (rollback to previous version if healthcheck fails)
+                rollback_enabled = healthcheck_config.get('rollback', True)
+                update_delay_ns = healthcheck_config.get('update_delay', 10) * 1_000_000_000
+
+                update_config_swarm = {
+                    "Parallelism": 1,
+                    "Delay": update_delay_ns,
+                    "FailureAction": "rollback" if rollback_enabled else "pause",
+                    "Order": "start-first"  # Zero-downtime: start new before stopping old
+                }
+
                 try:
                     hc_data = {
                         "applicationId": app_id,
-                        "healthCheckSwarm": json.dumps(healthcheck_swarm),
+                        "healthCheckSwarm": healthcheck_swarm,
+                        "updateConfigSwarm": update_config_swarm,
                     }
                     hc_resp = session.post(f"{DOKPLOY_URL}/api/application.update", json=hc_data, timeout=30)
                     if hc_resp.ok:
                         print(f"Health check configured: curl -f http://localhost:{hc_port}{hc_path}")
+                        print(f"Update config: start-first, {'auto-rollback' if rollback_enabled else 'pause'} on failure")
                     else:
                         print(f"::warning::Health check config response: {hc_resp.status_code} - {hc_resp.text[:200]}")
                 except Exception as e:

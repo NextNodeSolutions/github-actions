@@ -35,10 +35,12 @@ enabled = true
 path = "/health"
 # port defaults to detected APP_PORT from Dockerfile/.env
 # only set explicitly if healthcheck runs on a different port than app
-interval = 30                 # seconds
-timeout = 10                  # seconds
-retries = 3
-start_period = 40             # seconds
+interval = 30                 # seconds between checks
+timeout = 10                  # seconds before check times out
+retries = 3                   # failures before unhealthy
+start_period = 40             # seconds grace period on startup
+rollback = true               # auto-rollback to previous version on failure
+update_delay = 10             # seconds between container updates
 
 # =============================================================================
 # DEPLOYMENT DEFAULTS
