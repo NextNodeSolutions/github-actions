@@ -22,9 +22,6 @@ inputs:
     description: 'Whether to use HTTPS for the domain (with Let''s Encrypt)'
     required: false
     default: 'true'
-  ssh-private-key:
-    description: 'SSH private key for connecting to servers'
-    required: true
   expected-image:
     description: 'Expected Docker image tag (e.g., admin-dokploy:5000/app:abc123). If provided, waits for deployment to complete with this image before adding ports.'
     required: false
@@ -48,7 +45,6 @@ runs:
         app-name: ${{ inputs.app-name }}
         container-port: ${{ inputs.container-port }}
         server-ip: ${{ inputs.admin-tailscale-ip }}
-        ssh-private-key: ${{ inputs.ssh-private-key }}
         expected-image: ${{ inputs.expected-image }}
 
     - name: Deploy Traefik config
@@ -68,12 +64,6 @@ runs:
         # Traefik's file provider doesn't reliably watch through symlinks
         TRAEFIK_CONFIG_PATH="/etc/traefik/dynamic/${APP_NAME}.yml"
         echo "traefik-config-path=$TRAEFIK_CONFIG_PATH" >> $GITHUB_OUTPUT
-
-        # Setup SSH key
-        mkdir -p ~/.ssh
-        echo "${{ inputs.ssh-private-key }}" > ~/.ssh/traefik_config_key
-        chmod 600 ~/.ssh/traefik_config_key
-        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/traefik_config_key"
 
         # Generate Traefik configuration
         if [ "$USE_HTTPS" = "true" ]; then
@@ -126,14 +116,15 @@ runs:
         echo "Generated Traefik config:"
         cat /tmp/traefik-config.yml
 
-        # Copy config to admin server
-        scp $SSH_OPTS /tmp/traefik-config.yml root@$ADMIN_IP:$TRAEFIK_CONFIG_PATH
+        # Copy config to admin server using Tailscale SSH
+        # Runner must be connected to Tailscale before this action runs
+        cat /tmp/traefik-config.yml | tailscale ssh "root@${ADMIN_IP}" "cat > ${TRAEFIK_CONFIG_PATH}"
 
         echo "Traefik config deployed to $TRAEFIK_CONFIG_PATH"
         echo "Traefik will auto-reload via file provider watch"
 
         # Cleanup
-        rm -f /tmp/traefik-config.yml ~/.ssh/traefik_config_key
+        rm -f /tmp/traefik-config.yml
 
         echo "::endgroup::"
 

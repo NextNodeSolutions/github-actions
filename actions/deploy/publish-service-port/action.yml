@@ -12,9 +12,6 @@ inputs:
   server-ip:
     description: 'Tailscale IP of the Swarm manager (must be a manager node to run docker service commands)'
     required: true
-  ssh-private-key:
-    description: 'SSH private key for connecting to the server'
-    required: true
   expected-image:
     description: 'Expected Docker image tag. If provided, waits for this image before publishing.'
     required: false
@@ -73,20 +70,15 @@ runs:
         echo "Calculated external port: $EXTERNAL_PORT (from hash: $HASH)"
         echo "external-port=$EXTERNAL_PORT" >> $GITHUB_OUTPUT
 
-        # Setup SSH key
-        mkdir -p ~/.ssh
-        echo "${{ inputs.ssh-private-key }}" > ~/.ssh/publish_port_key
-        chmod 600 ~/.ssh/publish_port_key
-        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i ~/.ssh/publish_port_key"
-
         echo "::endgroup::"
 
         echo "::group::Publishing port on server ($SERVER_IP)"
 
         # Dokploy creates Docker Swarm services with random names
         # We find the service by its image name which follows a predictable pattern
+        # Uses Tailscale SSH - runner must be connected to Tailscale before this action runs
 
-        SERVICE_NAME=$(ssh $SSH_OPTS root@$SERVER_IP bash <<WORKER_SCRIPT
+        SERVICE_NAME=$(tailscale ssh "root@${SERVER_IP}" bash <<WORKER_SCRIPT
         set -e
 
         EXPECTED_IMAGE="$EXPECTED_IMAGE"
@@ -222,9 +214,6 @@ runs:
         SSH_EXIT_CODE=$?
 
         echo "::endgroup::"
-
-        # Cleanup SSH key
-        rm -f ~/.ssh/publish_port_key
 
         if [ $SSH_EXIT_CODE -ne 0 ]; then
           echo "::error::Failed to publish port"
