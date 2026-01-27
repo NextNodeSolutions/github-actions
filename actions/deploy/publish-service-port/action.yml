@@ -77,7 +77,9 @@ runs:
         # Dokploy creates Docker Swarm services with random names
         # We find the service by its image name which follows a predictable pattern
         # Uses Tailscale SSH - runner must be connected to Tailscale before this action runs
+        # Note: SSH_OPTIONS bypasses host key verification when server hasn't enabled Tailscale SSH
 
+        export SSH_OPTIONS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
         SERVICE_NAME=$(tailscale ssh "root@${SERVER_IP}" bash <<WORKER_SCRIPT
         set -e
 
