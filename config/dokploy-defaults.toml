@@ -72,6 +72,9 @@ size = "small"
 enabled = false
 bucket = "uploads"
 
+[services.infisical]
+enabled = false
+
 # =============================================================================
 # ENVIRONMENT: DEVELOPMENT
 # Domain: dev.{project.domain}

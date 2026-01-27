@@ -238,8 +238,58 @@ jobs:
         shell: bash
         run: pip install tomli
 
+      - name: Check Infisical Config
+        id: check-infisical
+        shell: python
+        env:
+          CONFIG_FILE: ${{ inputs.config-file }}
+          DEFAULTS_FILE: .github-actions/config/dokploy-defaults.toml
+        run: |
+          import os
+          import tomli
+          from pathlib import Path
+
+          config_file = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+          defaults_file = os.environ.get('DEFAULTS_FILE', '')
+          output_file = os.environ.get('GITHUB_OUTPUT', '')
+
+          def deep_merge(base, override):
+              result = base.copy()
+              for key, value in override.items():
+                  if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                      result[key] = deep_merge(result[key], value)
+                  else:
+                      result[key] = value
+              return result
+
+          # Load defaults
+          defaults = {}
+          if defaults_file and Path(defaults_file).exists():
+              with open(defaults_file, 'rb') as f:
+                  defaults = tomli.load(f)
+
+          # Load project config
+          config = {}
+          if Path(config_file).exists():
+              with open(config_file, 'rb') as f:
+                  config = tomli.load(f)
+
+          # Merge configs
+          merged = deep_merge(defaults, config)
+
+          # Check if Infisical is enabled
+          enabled = merged.get('services', {}).get('infisical', {}).get('enabled', False)
+
+          with open(output_file, 'a') as f:
+              f.write(f"enabled={'true' if enabled else 'false'}\n")
+
+          if enabled:
+              print("Infisical secrets enabled")
+          else:
+              print("Infisical secrets disabled (default)")
+
       - name: Fetch App Secrets from Infisical
-        if: ${{ secrets.INFISICAL_CLIENT_ID != '' }}
+        if: steps.check-infisical.outputs.enabled == 'true'
         uses: Infisical/secrets-action@v1.0.7
         with:
           method: "universal-auth"
