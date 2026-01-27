@@ -10,7 +10,7 @@ inputs:
     description: 'Container port the application listens on'
     required: true
   server-ip:
-    description: 'Tailscale IP of the server running the service'
+    description: 'Tailscale IP of the Swarm manager (must be a manager node to run docker service commands)'
     required: true
   ssh-private-key:
     description: 'SSH private key for connecting to the server'

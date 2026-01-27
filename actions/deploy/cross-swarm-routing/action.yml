@@ -41,13 +41,13 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Publish port on worker
+    - name: Publish port on Swarm manager
       id: port
       uses: nextnodesolutions/github-actions/actions/deploy/publish-service-port@main
       with:
         app-name: ${{ inputs.app-name }}
         container-port: ${{ inputs.container-port }}
-        server-ip: ${{ inputs.worker-tailscale-ip }}
+        server-ip: ${{ inputs.admin-tailscale-ip }}
         ssh-private-key: ${{ inputs.ssh-private-key }}
         expected-image: ${{ inputs.expected-image }}
 
