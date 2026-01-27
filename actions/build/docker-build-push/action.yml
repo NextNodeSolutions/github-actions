@@ -35,7 +35,7 @@ runs:
       with:
         oauth-client-id: ${{ inputs.tailscale-oauth-client-id }}
         oauth-secret: ${{ inputs.tailscale-oauth-secret }}
-        tags: tag:github-actions
+        tags: tag:ci
 
     - name: Wait for MagicDNS
       shell: bash
