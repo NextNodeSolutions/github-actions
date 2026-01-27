@@ -194,7 +194,7 @@ runs:
           echo "Port $EXTERNAL_PORT:$CONTAINER_PORT already published" >&2
         else
           echo "Publishing port $EXTERNAL_PORT:$CONTAINER_PORT" >&2
-          docker service update --publish-add $EXTERNAL_PORT:$CONTAINER_PORT \$SERVICE_NAME || {
+          docker service update --publish-add $EXTERNAL_PORT:$CONTAINER_PORT \$SERVICE_NAME >&2 || {
             echo "::error::Failed to update service" >&2
             exit 1
           }
