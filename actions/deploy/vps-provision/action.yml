@@ -238,24 +238,36 @@ runs:
         echo "::group::Dokploy Registration"
 
         # Authenticate
-        AUTH_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
+        echo "Authenticating with Dokploy..."
+        AUTH_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
           -H "Content-Type: application/json" \
-          -d "$(jq -n --arg e "$DOKPLOY_ADMIN_EMAIL" --arg p "$DOKPLOY_ADMIN_PASSWORD" '{email:$e,password:$p}')" 2>&1) || {
-          echo "::error::Authentication failed"
-          echo "success=false" >> $GITHUB_OUTPUT
-          exit 1
-        }
+          -d "$(jq -n --arg e "$DOKPLOY_ADMIN_EMAIL" --arg p "$DOKPLOY_ADMIN_PASSWORD" '{email:$e,password:$p}')" 2>&1)
 
-        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token // empty')
-        if [[ -z "$TOKEN" ]]; then
-          echo "::error::No token in auth response"
+        if [[ -z "$AUTH_RESPONSE" ]]; then
+          echo "::error::Authentication failed - no response"
           echo "success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
 
+        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token // empty')
+        if [[ -z "$TOKEN" ]]; then
+          echo "::error::No token in auth response"
+          echo "Auth response: $AUTH_RESPONSE"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        echo "Authentication successful"
+
         # Check if server exists
-        EXISTING_SERVERS=$(curl -sf -X GET "${DOKPLOY_URL}/api/server.all" \
+        echo "Checking if server exists in Dokploy..."
+        EXISTING_SERVERS=$(curl -s -X GET "${DOKPLOY_URL}/api/server.all" \
+          -H "Content-Type: application/json" \
           -H "Authorization: Bearer ${TOKEN}")
+
+        if [[ -z "$EXISTING_SERVERS" || "$EXISTING_SERVERS" == "null" ]]; then
+          echo "::warning::Could not fetch servers list, trying to create anyway"
+          EXISTING_SERVERS="[]"
+        fi
 
         EXISTING_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"${VPS_NAME}\") | .serverId" 2>/dev/null || echo "")
 
@@ -266,25 +278,35 @@ runs:
         else
           echo "Registering server: ${VPS_NAME} (${TAILSCALE_IP})"
 
-          CREATE_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/server.create" \
+          CREATE_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/server.create" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${TOKEN}" \
             -d "$(jq -n --arg n "$VPS_NAME" --arg ip "$TAILSCALE_IP" '{name:$n,ipAddress:$ip,port:22,username:"root"}')")
 
+          echo "Create response: $CREATE_RESPONSE"
+
           SERVER_ID=$(echo "$CREATE_RESPONSE" | jq -r '.serverId // empty')
 
           if [[ -z "$SERVER_ID" ]]; then
-            echo "::error::Failed to register server"
-            echo "Response: $CREATE_RESPONSE"
-            echo "success=false" >> $GITHUB_OUTPUT
-            exit 1
+            # Try to get ID by querying again
+            sleep 2
+            SERVERS_AFTER=$(curl -s -X GET "${DOKPLOY_URL}/api/server.all" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${TOKEN}")
+            SERVER_ID=$(echo "$SERVERS_AFTER" | jq -r ".[] | select(.name == \"${VPS_NAME}\") | .serverId" 2>/dev/null || echo "")
+
+            if [[ -z "$SERVER_ID" ]]; then
+              echo "::error::Failed to register server"
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           fi
 
           echo "Server registered: $SERVER_ID"
 
           # Setup server (Docker + Swarm)
-          echo "Setting up server..."
-          curl -sf -X POST "${DOKPLOY_URL}/api/server.setup" \
+          echo "Setting up server (this may take a few minutes)..."
+          curl -s -X POST "${DOKPLOY_URL}/api/server.setup" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${TOKEN}" \
             -d "$(jq -n --arg id "$SERVER_ID" '{serverId:$id}')" || true
