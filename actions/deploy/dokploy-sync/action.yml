@@ -1061,7 +1061,8 @@ runs:
 
     - name: Publish service port (optional)
       id: port
-      if: ${{ steps.sync.outputs.worker-tailscale-ip != '' && steps.sync.outputs.success == 'true' }}
+      # Skip for compose deployments - they use Traefik labels for routing
+      if: ${{ steps.sync.outputs.deployment-type != 'compose' && steps.sync.outputs.worker-tailscale-ip != '' && steps.sync.outputs.success == 'true' }}
       uses: nextnodesolutions/github-actions/actions/deploy/publish-service-port@main
       with:
         app-name: ${{ steps.sync.outputs.application-name }}
