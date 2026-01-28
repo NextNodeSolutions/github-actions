@@ -49,6 +49,14 @@ inputs:
     description: 'Path to docker-compose.yml file (for compose deployments)'
     required: false
     default: ''
+  tailscale-auth-key:
+    description: 'Tailscale auth key for VPS provisioning (required when server = "custom")'
+    required: false
+    default: ''
+  tf-api-token:
+    description: 'Terraform Cloud API token (required when server = "custom")'
+    required: false
+    default: ''
 
 outputs:
   project-id:
@@ -103,6 +111,290 @@ runs:
       shell: bash
       run: pip install tomli requests
 
+    - name: Check VPS Provisioning Requirement
+      id: vps-check
+      shell: python
+      env:
+        CONFIG_FILE: ${{ inputs.config-file }}
+        DEFAULTS_FILE: ${{ inputs.defaults-file }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
+        HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import tomli
+        import requests
+        from pathlib import Path
+
+        def output(key, value):
+            github_output = os.environ.get('GITHUB_OUTPUT', '')
+            if github_output:
+                with open(github_output, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        def deep_merge(base, override):
+            result = base.copy()
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
+
+        CONFIG_FILE = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+        DEFAULTS_FILE = os.environ.get('DEFAULTS_FILE', '')
+        ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+        TAILSCALE_API_KEY = os.environ.get('TAILSCALE_API_KEY', '')
+        HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
+
+        # Load and merge config
+        defaults = {}
+        if DEFAULTS_FILE and Path(DEFAULTS_FILE).exists():
+            with open(DEFAULTS_FILE, 'rb') as f:
+                defaults = tomli.load(f)
+
+        project_config = {}
+        if Path(CONFIG_FILE).exists():
+            with open(CONFIG_FILE, 'rb') as f:
+                project_config = tomli.load(f)
+
+        config = deep_merge(defaults, project_config)
+
+        # Get environment config
+        env_config = config.get('environments', {}).get(ENVIRONMENT, {})
+        if ENVIRONMENT == 'preview':
+            env_config = config.get('environments', {}).get('preview', config.get('environments', {}).get('development', {}))
+
+        server_name = env_config.get('server', '')
+        vps_name = env_config.get('vps', '')
+        vps_type = env_config.get('vps_type', 'cx33')
+        project_name = config.get('project', {}).get('name', '')
+
+        if server_name == 'custom' and vps_name:
+            print(f"Custom VPS required: {vps_name} ({vps_type})")
+
+            # Check if VPS already exists in Hetzner
+            vps_exists_hetzner = False
+            if HCLOUD_TOKEN:
+                try:
+                    resp = requests.get(
+                        f"https://api.hetzner.cloud/v1/servers?name={vps_name}",
+                        headers={"Authorization": f"Bearer {HCLOUD_TOKEN}"},
+                        timeout=30
+                    )
+                    if resp.ok:
+                        servers = resp.json().get('servers', [])
+                        if len(servers) > 0:
+                            vps_exists_hetzner = True
+                            print(f"VPS {vps_name} already exists in Hetzner Cloud")
+                except Exception as e:
+                    print(f"::warning::Failed to check Hetzner: {e}")
+
+            # Check if VPS already exists in Tailscale
+            vps_exists_tailscale = False
+            if TAILSCALE_API_KEY:
+                try:
+                    resp = requests.get(
+                        "https://api.tailscale.com/api/v2/tailnet/-/devices",
+                        headers={"Authorization": f"Bearer {TAILSCALE_API_KEY}"},
+                        timeout=30
+                    )
+                    if resp.ok:
+                        devices = resp.json().get('devices', [])
+                        for device in devices:
+                            hostname = device.get('hostname', '').lower()
+                            if hostname == vps_name.lower() or hostname.startswith(f"{vps_name.lower()}-"):
+                                vps_exists_tailscale = True
+                                print(f"VPS {vps_name} already exists in Tailscale")
+                                break
+                except Exception as e:
+                    print(f"::warning::Failed to check Tailscale: {e}")
+
+            # Determine if we need to provision
+            needs_provision = not vps_exists_hetzner
+            needs_wait_tailscale = vps_exists_hetzner and not vps_exists_tailscale
+
+            output('needs-provision', 'true' if needs_provision else 'false')
+            output('needs-wait-tailscale', 'true' if needs_wait_tailscale else 'false')
+            output('vps-name', vps_name)
+            output('vps-type', vps_type)
+            output('project-name', project_name)
+            output('vps-ready', 'true' if vps_exists_tailscale else 'false')
+
+            if needs_provision:
+                print(f"VPS {vps_name} needs to be provisioned")
+            elif needs_wait_tailscale:
+                print(f"VPS {vps_name} exists but waiting for Tailscale")
+            else:
+                print(f"VPS {vps_name} is fully ready")
+        else:
+            print(f"No VPS provisioning required, using server: {server_name or 'default'}")
+            output('needs-provision', 'false')
+            output('needs-wait-tailscale', 'false')
+            output('vps-name', '')
+            output('vps-type', '')
+            output('project-name', project_name)
+            output('vps-ready', 'true')
+
+    - name: Checkout Infrastructure (for VPS provisioning)
+      if: steps.vps-check.outputs.needs-provision == 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: nextnodesolutions/infrastructure
+        path: .infrastructure
+
+    - name: Setup Terraform
+      if: steps.vps-check.outputs.needs-provision == 'true'
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.7'
+        cli_config_credentials_token: ${{ inputs.tf-api-token }}
+        terraform_wrapper: false
+
+    - name: Provision VPS
+      if: steps.vps-check.outputs.needs-provision == 'true'
+      id: provision-vps
+      shell: bash
+      working-directory: .infrastructure/terraform/app-vps
+      env:
+        TF_VAR_hetzner_token: ${{ inputs.hcloud-token }}
+        TF_VAR_vps_name: ${{ steps.vps-check.outputs.vps-name }}
+        TF_VAR_project_name: ${{ steps.vps-check.outputs.project-name }}
+        TF_VAR_server_type: ${{ steps.vps-check.outputs.vps-type }}
+        TF_VAR_tailscale_auth_key: ${{ inputs.tailscale-auth-key }}
+        TF_VAR_cloudflare_dns_token: ${{ inputs.cloudflare-api-token }}
+      run: |
+        echo "::group::VPS Provisioning"
+        echo "Provisioning VPS: $TF_VAR_vps_name ($TF_VAR_server_type)"
+
+        # Initialize Terraform
+        terraform init
+
+        # Apply Terraform
+        terraform apply -auto-approve
+
+        # Get outputs
+        SERVER_ID=$(terraform output -raw server_id)
+        IPV4=$(terraform output -raw ipv4_address)
+
+        echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+        echo "ipv4-address=$IPV4" >> $GITHUB_OUTPUT
+        echo "VPS provisioned: $TF_VAR_vps_name ($IPV4)"
+        echo "::endgroup::"
+
+    - name: Wait for Tailscale
+      if: steps.vps-check.outputs.needs-provision == 'true' || steps.vps-check.outputs.needs-wait-tailscale == 'true'
+      id: wait-tailscale
+      shell: bash
+      env:
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
+        VPS_NAME: ${{ steps.vps-check.outputs.vps-name }}
+      run: |
+        echo "::group::Waiting for Tailscale"
+        echo "Waiting for VPS $VPS_NAME to join Tailscale..."
+
+        # Convert to lowercase for comparison
+        VPS_NAME_LOWER=$(echo "$VPS_NAME" | tr '[:upper:]' '[:lower:]')
+
+        TAILSCALE_IP=""
+        for i in $(seq 1 30); do
+          TAILSCALE_IP=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+            "https://api.tailscale.com/api/v2/tailnet/-/devices" | \
+            jq -r --arg name "$VPS_NAME_LOWER" '.devices[] | select((.hostname | ascii_downcase) == $name or ((.hostname | ascii_downcase) | startswith($name))) | .addresses[0]' 2>/dev/null | head -1)
+
+          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "null" ]]; then
+            echo "VPS joined Tailscale: $TAILSCALE_IP"
+            echo "tailscale-ip=$TAILSCALE_IP" >> $GITHUB_OUTPUT
+            break
+          fi
+          echo "Attempt $i/30: waiting 10s..."
+          sleep 10
+        done
+
+        if [[ -z "$TAILSCALE_IP" || "$TAILSCALE_IP" == "null" ]]; then
+          echo "::error::VPS did not join Tailscale after 5 minutes"
+          exit 1
+        fi
+        echo "::endgroup::"
+
+    - name: Register VPS in Dokploy
+      if: steps.vps-check.outputs.needs-provision == 'true'
+      id: register-vps
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        VPS_NAME: ${{ steps.vps-check.outputs.vps-name }}
+        TAILSCALE_IP: ${{ steps.wait-tailscale.outputs.tailscale-ip }}
+      run: |
+        echo "::group::Dokploy Registration"
+
+        # Authenticate via Better Auth endpoint
+        echo "Authenticating with Dokploy..."
+        AUTH_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
+          -H "Content-Type: application/json" \
+          -d "$(jq -n \
+            --arg email "${DOKPLOY_ADMIN_EMAIL}" \
+            --arg password "${DOKPLOY_ADMIN_PASSWORD}" \
+            '{email: $email, password: $password}')" 2>&1) || {
+          echo "::error::Authentication failed"
+          exit 1
+        }
+
+        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token // empty')
+        if [[ -z "$TOKEN" ]]; then
+          echo "::error::No token in auth response"
+          exit 1
+        fi
+        echo "Authentication successful"
+
+        # Check if server already exists
+        EXISTING_SERVERS=$(curl -sf -X GET "${DOKPLOY_URL}/api/server.all" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${TOKEN}")
+
+        EXISTING_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"${VPS_NAME}\") | .serverId" 2>/dev/null || echo "")
+
+        if [[ -n "$EXISTING_ID" ]]; then
+          echo "Server already registered in Dokploy: $EXISTING_ID"
+          echo "server-id=$EXISTING_ID" >> $GITHUB_OUTPUT
+        else
+          echo "Registering server in Dokploy via Tailscale SSH..."
+
+          # Register server - Dokploy uses Tailscale SSH, no sshKeyId needed
+          CREATE_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/server.create" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -d "$(jq -n \
+              --arg name "${VPS_NAME}" \
+              --arg ip "${TAILSCALE_IP}" \
+              '{name: $name, ipAddress: $ip, port: 22, username: "root"}')")
+
+          SERVER_ID=$(echo "$CREATE_RESPONSE" | jq -r '.serverId // empty')
+
+          if [[ -z "$SERVER_ID" ]]; then
+            echo "::error::Failed to register server in Dokploy"
+            echo "Response: $CREATE_RESPONSE"
+            exit 1
+          fi
+
+          echo "Server registered: $SERVER_ID"
+
+          # Setup server (installs Docker + joins Swarm)
+          echo "Setting up server (this may take a few minutes)..."
+          curl -sf -X POST "${DOKPLOY_URL}/api/server.setup" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -d "$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')" || true
+
+          echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"
+
     - name: Sync to Dokploy
       id: sync
       shell: python
@@ -122,6 +414,8 @@ runs:
         COMPOSE_FILE_INPUT: ${{ inputs.compose-file }}
         GITHUB_OUTPUT: ${{ github.output }}
         GITHUB_REPOSITORY: ${{ github.repository }}
+        # VPS context (from vps-check step)
+        VPS_NAME: ${{ steps.vps-check.outputs.vps-name }}
       run: |
         import os
         import sys
@@ -149,6 +443,8 @@ runs:
         COMPOSE_FILE_INPUT = os.environ.get('COMPOSE_FILE_INPUT', '')
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
         GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
+        # VPS context (from vps-check step)
+        VPS_NAME = os.environ.get('VPS_NAME', '')
 
         def output(key, value):
             if GITHUB_OUTPUT:
@@ -532,6 +828,15 @@ runs:
         # Override from environment-specific config in project
         if ENVIRONMENT == 'production' and 'production' in config:
             server_name = config['production'].get('server', server_name)
+
+        # Handle custom VPS: if server = "custom", use the VPS name from config
+        if server_name == 'custom' and VPS_NAME:
+            print(f"Using custom VPS: {VPS_NAME}")
+            server_name = VPS_NAME
+        elif server_name == 'custom':
+            print("::error::server = 'custom' but no VPS name configured (set vps = 'name' in config)")
+            output('success', 'false')
+            sys.exit(1)
 
         print(f"Target server: {server_name}")
 
