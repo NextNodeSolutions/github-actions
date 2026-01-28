@@ -280,9 +280,9 @@ runs:
         # Apply Terraform
         terraform apply -auto-approve
 
-        # Get outputs
-        SERVER_ID=$(terraform output -raw server_id)
-        IPV4=$(terraform output -raw ipv4_address)
+        # Get outputs (redirect stderr to avoid Terraform Cloud warnings)
+        SERVER_ID=$(terraform output -raw server_id 2>/dev/null)
+        IPV4=$(terraform output -raw ipv4_address 2>/dev/null)
 
         echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
         echo "ipv4-address=$IPV4" >> $GITHUB_OUTPUT
