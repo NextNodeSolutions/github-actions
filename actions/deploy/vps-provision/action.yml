@@ -261,12 +261,29 @@ runs:
         fi
         echo "Authentication successful"
 
+        # Get SSH key ID (required for server registration)
+        echo "Getting SSH key ID..."
+        EXISTING_KEYS=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/sshKey.all" \
+          -H "Content-Type: application/json")
+
+        # Try to find the CI key first, otherwise use any available key
+        SSH_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r '.[] | select(.name == "nextnode-dokploy-ci") | .sshKeyId' 2>/dev/null || echo "")
+        if [[ -z "$SSH_KEY_ID" ]]; then
+          # Use first available key
+          SSH_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r '.[0].sshKeyId // empty' 2>/dev/null || echo "")
+        fi
+
+        if [[ -z "$SSH_KEY_ID" ]]; then
+          echo "::error::No SSH key found in Dokploy. Run dokploy-init-workers first."
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        echo "Using SSH key ID: $SSH_KEY_ID"
+
         # Check if server exists (GET uses REST format with session cookie)
         echo "Checking if server exists in Dokploy..."
         EXISTING_SERVERS=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/server.all" \
           -H "Content-Type: application/json")
-
-        echo "DEBUG: server.all response: $EXISTING_SERVERS"
 
         if [[ -z "$EXISTING_SERVERS" || "$EXISTING_SERVERS" == "null" ]]; then
           echo "::warning::Could not fetch servers list, trying to create anyway"
@@ -283,8 +300,8 @@ runs:
           echo "Registering server: ${VPS_NAME} (${TAILSCALE_IP})"
 
           # POST mutations use tRPC format with batch wrapper and session cookie
-          CREATE_DATA=$(jq -n --arg n "$VPS_NAME" --arg ip "$TAILSCALE_IP" \
-            '{name:$n,ipAddress:$ip,port:22,username:"root"}')
+          CREATE_DATA=$(jq -n --arg n "$VPS_NAME" --arg ip "$TAILSCALE_IP" --arg keyId "$SSH_KEY_ID" \
+            '{name:$n,ipAddress:$ip,port:22,username:"root",sshKeyId:$keyId}')
           WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
 
           CREATE_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.create?batch=1" \
