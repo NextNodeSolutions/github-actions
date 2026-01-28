@@ -41,6 +41,11 @@ on:
         required: false
         default: ''
         type: string
+      notify-slack:
+        description: 'Send Slack notification on deploy success/failure'
+        required: false
+        default: false
+        type: boolean
     secrets:
       DOKPLOY_ADMIN_EMAIL:
         description: 'Dokploy admin email'
@@ -75,6 +80,9 @@ on:
         required: false
       INFISICAL_CLIENT_SECRET:
         description: 'Infisical Machine Identity client secret'
+        required: false
+      SLACK_WEBHOOK_URL:
+        description: 'Slack webhook URL for notifications'
         required: false
     outputs:
       project-id:
@@ -558,3 +566,28 @@ jobs:
           echo "## Preview Cleanup Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "PR #${{ inputs.pr-number }} preview environment has been cleaned up." >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Slack Notification
+    needs: [deploy]
+    if: inputs.notify-slack && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "${{ needs.deploy.result == 'success' && 'Deployed' || 'Failed' }}: ${{ inputs.environment }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*${{ inputs.environment }} deployment ${{ needs.deploy.result }}*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"
+                  }
+                }
+              ]
+            }
