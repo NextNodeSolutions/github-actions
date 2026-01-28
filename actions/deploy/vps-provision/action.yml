@@ -237,11 +237,14 @@ runs:
       run: |
         echo "::group::Dokploy Registration"
 
-        # Authenticate
+        # Dokploy uses Better-Auth with session cookies
+        COOKIE_JAR="/tmp/dokploy_cookies_$$.txt"
+
+        # Authenticate and save session cookies
         echo "Authenticating with Dokploy..."
-        AUTH_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
+        AUTH_RESPONSE=$(curl -s -c "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
           -H "Content-Type: application/json" \
-          -d "$(jq -n --arg e "$DOKPLOY_ADMIN_EMAIL" --arg p "$DOKPLOY_ADMIN_PASSWORD" '{email:$e,password:$p}')" 2>&1)
+          -d "$(jq -n --arg e "$DOKPLOY_ADMIN_EMAIL" --arg p "$DOKPLOY_ADMIN_PASSWORD" '{email:$e,password:$p}')")
 
         if [[ -z "$AUTH_RESPONSE" ]]; then
           echo "::error::Authentication failed - no response"
@@ -249,20 +252,21 @@ runs:
           exit 1
         fi
 
-        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token // empty')
-        if [[ -z "$TOKEN" ]]; then
-          echo "::error::No token in auth response"
+        # Verify we got a token (indicates successful auth)
+        if ! echo "$AUTH_RESPONSE" | jq -e '.token' > /dev/null 2>&1; then
+          echo "::error::Authentication failed"
           echo "Auth response: $AUTH_RESPONSE"
           echo "success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
         echo "Authentication successful"
 
-        # Check if server exists
+        # Check if server exists (GET uses REST format with session cookie)
         echo "Checking if server exists in Dokploy..."
-        EXISTING_SERVERS=$(curl -s -X GET "${DOKPLOY_URL}/api/server.all" \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Bearer ${TOKEN}")
+        EXISTING_SERVERS=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/server.all" \
+          -H "Content-Type: application/json")
+
+        echo "DEBUG: server.all response: $EXISTING_SERVERS"
 
         if [[ -z "$EXISTING_SERVERS" || "$EXISTING_SERVERS" == "null" ]]; then
           echo "::warning::Could not fetch servers list, trying to create anyway"
@@ -278,21 +282,26 @@ runs:
         else
           echo "Registering server: ${VPS_NAME} (${TAILSCALE_IP})"
 
-          CREATE_RESPONSE=$(curl -s -X POST "${DOKPLOY_URL}/api/server.create" \
+          # POST mutations use tRPC format with batch wrapper and session cookie
+          CREATE_DATA=$(jq -n --arg n "$VPS_NAME" --arg ip "$TAILSCALE_IP" \
+            '{name:$n,ipAddress:$ip,port:22,username:"root"}')
+          WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
+
+          CREATE_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.create?batch=1" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -d "$(jq -n --arg n "$VPS_NAME" --arg ip "$TAILSCALE_IP" '{name:$n,ipAddress:$ip,port:22,username:"root"}')")
+            -d "$WRAPPED_DATA")
 
           echo "Create response: $CREATE_RESPONSE"
 
-          SERVER_ID=$(echo "$CREATE_RESPONSE" | jq -r '.serverId // empty')
+          # Extract serverId from tRPC batch response
+          SERVER_ID=$(echo "$CREATE_RESPONSE" | jq -r '.[0].result.data.json.serverId // .[0].result.data.serverId // empty')
 
           if [[ -z "$SERVER_ID" ]]; then
             # Try to get ID by querying again
             sleep 2
-            SERVERS_AFTER=$(curl -s -X GET "${DOKPLOY_URL}/api/server.all" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer ${TOKEN}")
+            SERVERS_AFTER=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/server.all" \
+              -H "Content-Type: application/json")
+            echo "DEBUG: server.all after create: $SERVERS_AFTER"
             SERVER_ID=$(echo "$SERVERS_AFTER" | jq -r ".[] | select(.name == \"${VPS_NAME}\") | .serverId" 2>/dev/null || echo "")
 
             if [[ -z "$SERVER_ID" ]]; then
@@ -304,15 +313,19 @@ runs:
 
           echo "Server registered: $SERVER_ID"
 
-          # Setup server (Docker + Swarm)
+          # Setup server (Docker + Swarm) - uses tRPC format
           echo "Setting up server (this may take a few minutes)..."
-          curl -s -X POST "${DOKPLOY_URL}/api/server.setup" \
+          SETUP_DATA=$(jq -n --arg id "$SERVER_ID" '{serverId:$id}')
+          WRAPPED_SETUP="{\"0\":{\"json\":${SETUP_DATA}}}"
+          curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.setup?batch=1" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -d "$(jq -n --arg id "$SERVER_ID" '{serverId:$id}')" || true
+            -d "$WRAPPED_SETUP" || true
 
           echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
           echo "success=true" >> $GITHUB_OUTPUT
         fi
+
+        # Cleanup
+        rm -f "$COOKIE_JAR"
 
         echo "::endgroup::"
