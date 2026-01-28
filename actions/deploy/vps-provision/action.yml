@@ -1,0 +1,296 @@
+name: 'VPS Provision'
+description: 'Provision and register a custom VPS for Dokploy deployments'
+author: 'NextNodeSolutions'
+
+inputs:
+  vps-name:
+    description: 'Name of the VPS to provision'
+    required: true
+  project-name:
+    description: 'Project name for tagging'
+    required: true
+  server-type:
+    description: 'Hetzner server type (e.g., cx33)'
+    required: false
+    default: 'cx33'
+  environment:
+    description: 'Environment name'
+    required: false
+    default: 'production'
+  hetzner-token:
+    description: 'Hetzner Cloud API token'
+    required: true
+  tailscale-auth-key:
+    description: 'Tailscale auth key for VPS to join network'
+    required: true
+  tailscale-api-token:
+    description: 'Tailscale API token for status checks'
+    required: true
+  cloudflare-api-token:
+    description: 'Cloudflare API token (for Terraform)'
+    required: true
+  tf-api-token:
+    description: 'Terraform Cloud API token'
+    required: true
+  github-token:
+    description: 'GitHub token with access to infrastructure repo'
+    required: true
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-admin-email:
+    description: 'Dokploy admin email'
+    required: true
+  dokploy-admin-password:
+    description: 'Dokploy admin password'
+    required: true
+
+outputs:
+  provisioned:
+    description: 'Whether a new VPS was provisioned'
+    value: ${{ steps.provision.outputs.provisioned }}
+  server-ip:
+    description: 'Public IP of the VPS'
+    value: ${{ steps.provision.outputs.server-ip }}
+  tailscale-ip:
+    description: 'Tailscale IP of the VPS'
+    value: ${{ steps.wait-tailscale.outputs.tailscale-ip }}
+  server-id:
+    description: 'Dokploy server ID'
+    value: ${{ steps.register.outputs.server-id }}
+  success:
+    description: 'Whether provisioning succeeded'
+    value: ${{ steps.register.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check VPS Status
+      id: check
+      shell: bash
+      env:
+        VPS_NAME: ${{ inputs.vps-name }}
+        HCLOUD_TOKEN: ${{ inputs.hetzner-token }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
+      run: |
+        echo "::group::Checking VPS status"
+
+        # Check Hetzner
+        HETZNER_EXISTS="false"
+        HETZNER_RESP=$(curl -sf -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+          "https://api.hetzner.cloud/v1/servers?name=${VPS_NAME}" 2>/dev/null || echo '{"servers":[]}')
+
+        if [[ $(echo "$HETZNER_RESP" | jq '.servers | length') -gt 0 ]]; then
+          HETZNER_EXISTS="true"
+          echo "VPS ${VPS_NAME} exists in Hetzner"
+        else
+          echo "VPS ${VPS_NAME} does not exist in Hetzner"
+        fi
+
+        # Check Tailscale
+        TAILSCALE_EXISTS="false"
+        VPS_NAME_LOWER=$(echo "$VPS_NAME" | tr '[:upper:]' '[:lower:]')
+
+        TAILSCALE_RESP=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+          "https://api.tailscale.com/api/v2/tailnet/-/devices" 2>/dev/null || echo '{"devices":[]}')
+
+        TAILSCALE_IP=$(echo "$TAILSCALE_RESP" | \
+          jq -r --arg name "$VPS_NAME_LOWER" '.devices[] | select((.hostname | ascii_downcase) == $name or ((.hostname | ascii_downcase) | startswith($name + "-"))) | .addresses[0]' 2>/dev/null | head -1)
+
+        if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "null" ]]; then
+          TAILSCALE_EXISTS="true"
+          echo "VPS ${VPS_NAME} exists in Tailscale: ${TAILSCALE_IP}"
+        else
+          echo "VPS ${VPS_NAME} not found in Tailscale"
+        fi
+
+        # Determine what needs to be done
+        NEEDS_PROVISION="false"
+        NEEDS_WAIT="false"
+
+        if [[ "$HETZNER_EXISTS" == "false" ]]; then
+          NEEDS_PROVISION="true"
+        elif [[ "$TAILSCALE_EXISTS" == "false" ]]; then
+          NEEDS_WAIT="true"
+        fi
+
+        echo "hetzner-exists=$HETZNER_EXISTS" >> $GITHUB_OUTPUT
+        echo "tailscale-exists=$TAILSCALE_EXISTS" >> $GITHUB_OUTPUT
+        echo "tailscale-ip=$TAILSCALE_IP" >> $GITHUB_OUTPUT
+        echo "needs-provision=$NEEDS_PROVISION" >> $GITHUB_OUTPUT
+        echo "needs-wait=$NEEDS_WAIT" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"
+
+    - name: Checkout Infrastructure
+      if: steps.check.outputs.needs-provision == 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: nextnodesolutions/infrastructure
+        path: .infrastructure
+        token: ${{ inputs.github-token }}
+
+    - name: Setup Terraform
+      if: steps.check.outputs.needs-provision == 'true'
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.7'
+        cli_config_credentials_token: ${{ inputs.tf-api-token }}
+        terraform_wrapper: false
+
+    - name: Provision VPS
+      id: provision
+      if: steps.check.outputs.needs-provision == 'true'
+      shell: bash
+      working-directory: .infrastructure/terraform/app-vps
+      env:
+        TF_VAR_hetzner_token: ${{ inputs.hetzner-token }}
+        TF_VAR_vps_name: ${{ inputs.vps-name }}
+        TF_VAR_project_name: ${{ inputs.project-name }}
+        TF_VAR_server_type: ${{ inputs.server-type }}
+        TF_VAR_tailscale_auth_key: ${{ inputs.tailscale-auth-key }}
+        TF_VAR_cloudflare_dns_token: ${{ inputs.cloudflare-api-token }}
+      run: |
+        echo "::group::Provisioning VPS"
+        echo "Creating VPS: $TF_VAR_vps_name ($TF_VAR_server_type)"
+
+        terraform init
+        terraform apply -auto-approve
+
+        # Get outputs (suppress Terraform Cloud warnings)
+        SERVER_ID=$(terraform output -raw server_id 2>/dev/null)
+        IPV4=$(terraform output -raw ipv4_address 2>/dev/null)
+
+        echo "provisioned=true" >> $GITHUB_OUTPUT
+        echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+        echo "server-ip=$IPV4" >> $GITHUB_OUTPUT
+
+        echo "VPS provisioned: $TF_VAR_vps_name ($IPV4)"
+        echo "::endgroup::"
+
+    - name: Get Existing Server IP
+      id: existing-ip
+      if: steps.check.outputs.needs-provision != 'true'
+      shell: bash
+      env:
+        VPS_NAME: ${{ inputs.vps-name }}
+        HCLOUD_TOKEN: ${{ inputs.hetzner-token }}
+      run: |
+        RESP=$(curl -sf -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+          "https://api.hetzner.cloud/v1/servers?name=${VPS_NAME}")
+
+        IPV4=$(echo "$RESP" | jq -r '.servers[0].public_net.ipv4.ip // empty')
+
+        echo "provisioned=false" >> $GITHUB_OUTPUT
+        echo "server-ip=$IPV4" >> $GITHUB_OUTPUT
+
+    - name: Wait for Tailscale
+      id: wait-tailscale
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-wait == 'true'
+      shell: bash
+      env:
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
+        VPS_NAME: ${{ inputs.vps-name }}
+      run: |
+        echo "::group::Waiting for Tailscale"
+
+        VPS_NAME_LOWER=$(echo "$VPS_NAME" | tr '[:upper:]' '[:lower:]')
+        TAILSCALE_IP=""
+
+        for i in $(seq 1 30); do
+          TAILSCALE_IP=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+            "https://api.tailscale.com/api/v2/tailnet/-/devices" | \
+            jq -r --arg name "$VPS_NAME_LOWER" '.devices[] | select((.hostname | ascii_downcase) == $name or ((.hostname | ascii_downcase) | startswith($name + "-"))) | .addresses[0]' 2>/dev/null | head -1)
+
+          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "null" ]]; then
+            echo "VPS joined Tailscale: $TAILSCALE_IP"
+            echo "tailscale-ip=$TAILSCALE_IP" >> $GITHUB_OUTPUT
+            break
+          fi
+          echo "Attempt $i/30: waiting 10s..."
+          sleep 10
+        done
+
+        if [[ -z "$TAILSCALE_IP" || "$TAILSCALE_IP" == "null" ]]; then
+          echo "::error::VPS did not join Tailscale after 5 minutes"
+          exit 1
+        fi
+
+        echo "::endgroup::"
+
+    - name: Use Existing Tailscale IP
+      id: existing-tailscale
+      if: steps.check.outputs.tailscale-exists == 'true'
+      shell: bash
+      run: |
+        echo "tailscale-ip=${{ steps.check.outputs.tailscale-ip }}" >> $GITHUB_OUTPUT
+
+    - name: Register VPS in Dokploy
+      id: register
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        VPS_NAME: ${{ inputs.vps-name }}
+        TAILSCALE_IP: ${{ steps.wait-tailscale.outputs.tailscale-ip || steps.existing-tailscale.outputs.tailscale-ip }}
+      run: |
+        echo "::group::Dokploy Registration"
+
+        # Authenticate
+        AUTH_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
+          -H "Content-Type: application/json" \
+          -d "$(jq -n --arg e "$DOKPLOY_ADMIN_EMAIL" --arg p "$DOKPLOY_ADMIN_PASSWORD" '{email:$e,password:$p}')" 2>&1) || {
+          echo "::error::Authentication failed"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        }
+
+        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.token // empty')
+        if [[ -z "$TOKEN" ]]; then
+          echo "::error::No token in auth response"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        # Check if server exists
+        EXISTING_SERVERS=$(curl -sf -X GET "${DOKPLOY_URL}/api/server.all" \
+          -H "Authorization: Bearer ${TOKEN}")
+
+        EXISTING_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"${VPS_NAME}\") | .serverId" 2>/dev/null || echo "")
+
+        if [[ -n "$EXISTING_ID" ]]; then
+          echo "Server already registered: $EXISTING_ID"
+          echo "server-id=$EXISTING_ID" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "Registering server: ${VPS_NAME} (${TAILSCALE_IP})"
+
+          CREATE_RESPONSE=$(curl -sf -X POST "${DOKPLOY_URL}/api/server.create" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -d "$(jq -n --arg n "$VPS_NAME" --arg ip "$TAILSCALE_IP" '{name:$n,ipAddress:$ip,port:22,username:"root"}')")
+
+          SERVER_ID=$(echo "$CREATE_RESPONSE" | jq -r '.serverId // empty')
+
+          if [[ -z "$SERVER_ID" ]]; then
+            echo "::error::Failed to register server"
+            echo "Response: $CREATE_RESPONSE"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "Server registered: $SERVER_ID"
+
+          # Setup server (Docker + Swarm)
+          echo "Setting up server..."
+          curl -sf -X POST "${DOKPLOY_URL}/api/server.setup" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -d "$(jq -n --arg id "$SERVER_ID" '{serverId:$id}')" || true
+
+          echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"
