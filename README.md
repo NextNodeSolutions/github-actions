@@ -2,6 +2,17 @@
 
 > Reusable GitHub Actions and workflows for NextNode projects - **pnpm only**
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Infrastructure Architecture](#infrastructure-architecture)
+- [Deployment Flow](#deployment-flow)
+- [dokploy.toml Configuration](#dokploytoml-configuration)
+- [Secrets Reference](#secrets-reference)
+- [Available Actions](#available-actions)
+- [Available Reusable Workflows](#available-reusable-workflows)
+- [Troubleshooting](#troubleshooting)
+
 ## Repository Structure
 
 ```
@@ -14,9 +25,10 @@ github-actions/
 │   ├── version-management.yml # Automated versioning with changesets
 │   └── [additional workflows] # Security, health checks, etc.
 ├── actions/                    # Domain-organized atomic actions
-│   ├── build/                 # Build & Setup domain
+│   ├── build/                 # Build & Setup domain (install, build-project, docker-build-push)
 │   ├── quality/               # Code Quality domain
-│   ├── deploy/                # Dokploy Deployment domain
+│   ├── deploy/                # Dokploy Deployment domain (dokploy-sync, cross-swarm-routing)
+│   ├── infrastructure/        # Infrastructure domain (cloudflare-dns, tailscale)
 │   ├── release/               # NPM Release Management domain
 │   ├── ssl/                   # SSL/TLS Configuration domain
 │   ├── monitoring/            # Monitoring domain
@@ -24,6 +36,8 @@ github-actions/
 │   ├── node-setup-complete/   # Global: Complete Node.js setup
 │   ├── test/                  # Global: Test execution
 │   └── health-check/          # Global: URL health monitoring
+├── config/
+│   └── dokploy-defaults.toml  # Default configuration values
 ```
 
 ## Quick Start
@@ -78,6 +92,119 @@ All workflows and actions automatically detect Node.js and pnpm versions from yo
 - **No version conflicts** - Local and CI environments always match
 - **Easy maintenance** - Update `package.json` and everywhere stays in sync
 - **Corepack compatible** - Works with modern Node.js toolchain
+
+## Infrastructure Architecture
+
+The github-actions repository is the CI/CD component of NextNode's self-hosted deployment platform. It works in conjunction with the [infrastructure](https://github.com/nextnodesolutions/infrastructure) repository.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     NEXTNODE CI/CD ARCHITECTURE                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌──────────────────┐         ┌──────────────────┐                 │
+│  │  Your App Repo   │         │  github-actions  │                 │
+│  │                  │  uses   │                  │                 │
+│  │  - Source code   │────────>│  - Workflows     │                 │
+│  │  - dokploy.toml  │         │  - Actions       │                 │
+│  │  - Dockerfile    │         │  - Defaults      │                 │
+│  └──────────────────┘         └────────┬─────────┘                 │
+│                                        │                            │
+│                    ┌───────────────────┼───────────────────┐       │
+│                    │                   ▼                    │       │
+│                    │          Docker Build & Push           │       │
+│                    │        (via Tailscale to Registry)     │       │
+│                    │                   │                    │       │
+│                    │                   ▼                    │       │
+│  ┌─────────────────┴───────────────────┴────────────────────┴──┐   │
+│  │                    HETZNER CLOUD CLUSTER                     │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐             │   │
+│  │  │   Admin    │  │    Dev     │  │    Prod    │             │   │
+│  │  │  Dokploy   │  │   Worker   │  │   Worker   │             │   │
+│  │  │  Traefik   │  │            │  │            │             │   │
+│  │  │  Registry  │  │  PR/Dev    │  │ Production │             │   │
+│  │  └────────────┘  └────────────┘  └────────────┘             │   │
+│  │       ▲              ▲                ▲                      │   │
+│  │       └──────────────┴────────────────┘                      │   │
+│  │                  Tailscale VPN                               │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  DNS: Cloudflare (auto-configured)                                  │
+│  SSL: Let's Encrypt via Traefik DNS-01                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Server Roles
+
+| Server | Role | Description |
+|--------|------|-------------|
+| `admin-dokploy` | Control Plane | Dokploy UI, Docker Registry (port 5000), Traefik ingress |
+| `dev-worker` | Development | PR preview deployments, development environment |
+| `prod-worker` | Production | Production applications |
+
+### Key Integration Points
+
+| Component | Repository | Purpose |
+|-----------|------------|---------|
+| VPS Provisioning | infrastructure | Terraform modules for Hetzner VPS |
+| NixOS Configuration | infrastructure | Server OS and services configuration |
+| Dokploy Sync | github-actions | API calls to configure Dokploy |
+| Docker Build | github-actions | Build and push to private registry |
+| DNS Management | github-actions | Cloudflare DNS record automation |
+
+### Network Topology
+
+- **Tailscale VPN**: All servers communicate via Tailscale mesh network
+- **Registry Access**: Private registry (`admin-dokploy:5000`) accessible only via Tailscale
+- **Traefik Routing**: All public traffic enters through Traefik on admin-dokploy
+- **Cross-Swarm**: Apps on worker nodes are proxied via Traefik TCP routing
+
+## Deployment Flow
+
+When you push code or trigger a deployment, this is what happens:
+
+```
+1. Push to Repository
+        │
+        ▼
+2. Quality Checks (lint, typecheck, test, build)
+        │
+        ▼
+3. Docker Build
+   ├── Connect to Tailscale VPN
+   ├── Build Docker image
+   └── Push to admin-dokploy:5000/repo-name:sha
+        │
+        ▼
+4. Dokploy Sync
+   ├── Create/update project in Dokploy
+   ├── Create/update application
+   ├── Configure environment variables
+   └── Set Docker image reference
+        │
+        ▼
+5. DNS Configuration
+   ├── Get target server IP (Traefik server)
+   └── Upsert Cloudflare A record
+        │
+        ▼
+6. Cross-Swarm Routing (if app on worker)
+   ├── Allocate external port on worker
+   ├── Expose container port via socat
+   └── Configure Traefik TCP route
+        │
+        ▼
+7. Health Check
+   └── Verify application responds at domain
+```
+
+### Environment-Based Deployment
+
+| Environment | Domain Pattern | Default Server | Auto-Deploy |
+|-------------|---------------|----------------|-------------|
+| `production` | `{domain}` | prod-worker | No (manual) |
+| `development` | `dev.{domain}` | dev-worker | Yes |
+| `preview` | `pr-{number}.dev.{domain}` | dev-worker | Yes |
 
 ### Using Reusable Workflows
 
@@ -141,11 +268,27 @@ jobs:
 | `quality/typecheck` | Run TypeScript type checking | `strict`, `tsconfig-path` |
 | `quality/security-audit` | Run security audit | `audit-level`, `fix` |
 
+#### Build Domain (Additional)
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `build/docker-build-push` | Build and push Docker image to registry | `dockerfile`, `context`, `build-args` |
+
 #### Deploy Domain
 | Action | Description | Key Inputs |
 |--------|-------------|------------|
-| `deploy/dokploy-sync` | Sync dokploy.toml to Dokploy API | `environment`, `config-path` |
-| `deploy/vps-provision` | Auto-provision Hetzner VPS | `vps-name`, `vps-type` |
+| `deploy/dokploy-sync` | Sync dokploy.toml to Dokploy API | `environment`, `config-file` |
+| `deploy/vps-provision` | Auto-provision Hetzner VPS | `vps-name`, `server-type` |
+| `deploy/cross-swarm-routing` | Configure Traefik routing for worker nodes | `domain`, `worker-tailscale-ip` |
+| `deploy/publish-service-port` | Expose container port via socat | `container-port`, `external-port` |
+
+#### Infrastructure Domain
+| Action | Description | Key Inputs |
+|--------|-------------|------------|
+| `infrastructure/cloudflare-dns-upsert` | Create/update Cloudflare DNS records | `domain`, `content`, `proxied` |
+| `infrastructure/tailscale-oauth` | Get Tailscale API token via OAuth | `oauth-client-id`, `oauth-secret` |
+| `infrastructure/tailscale-dokploy-url` | Get Dokploy URL via Tailscale | `tailscale-oauth-client-id` |
+| `infrastructure/tailscale-device-cleanup` | Clean up stale Tailscale devices | `tailscale-api-token` |
+| `infrastructure/dokploy-init-workers` | Initialize Dokploy workers | `dokploy-url` |
 
 #### Release Domain
 | Action | Description | Key Inputs |
@@ -212,18 +355,177 @@ jobs:
       DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
 ```
 
+## dokploy.toml Configuration
+
+Projects configure their deployment via a `dokploy.toml` file in the repository root. Values not specified use defaults from [`config/dokploy-defaults.toml`](config/dokploy-defaults.toml).
+
+### Minimal Configuration
+
+```toml
+[project]
+name = "my-app"
+domain = "myapp.com"
+```
+
+### Complete Reference
+
+```toml
+# =============================================================================
+# PROJECT CONFIGURATION (required)
+# =============================================================================
+[project]
+name = "my-app"               # Project name in Dokploy
+domain = "myapp.com"          # Base domain for all environments
+
+# =============================================================================
+# BUILD CONFIGURATION
+# =============================================================================
+[build]
+type = "dockerfile"           # dockerfile | nixpacks | buildpacks | static
+dockerfile = "Dockerfile"     # Default: Dockerfile
+context = "."                 # Docker build context
+target = ""                   # Multi-stage build target (optional)
+
+# =============================================================================
+# RESOURCE LIMITS
+# =============================================================================
+[resources]
+memory = "512Mi"              # Default memory request
+cpu = 0.5                     # Default CPU request
+memory_limit = "1Gi"          # Hard memory limit
+cpu_limit = 1                 # Hard CPU limit
+
+# =============================================================================
+# HEALTH CHECKS
+# =============================================================================
+[healthcheck]
+enabled = true
+path = "/health"              # Health check endpoint
+interval = 30                 # Seconds between checks
+timeout = 10                  # Seconds before timeout
+retries = 3                   # Failures before unhealthy
+start_period = 40             # Startup grace period
+rollback = true               # Auto-rollback on failure
+
+# =============================================================================
+# ENVIRONMENT OVERRIDES
+# =============================================================================
+[environments.development]
+enabled = true                # Enable dev environment
+server = "dev-worker"         # Target server
+replicas = 1
+auto_deploy = true
+
+[environments.preview]
+enabled = true                # Enable PR previews
+server = "dev-worker"
+cleanup_on_merge = true       # Delete preview on PR merge
+
+[environments.production]
+server = "prod-worker"        # Default production server
+replicas = 1
+auto_deploy = false           # Manual deploy for production
+
+# =============================================================================
+# CUSTOM VPS (dedicated server for this project)
+# =============================================================================
+[vps]
+enabled = true                # Request dedicated VPS
+type = "cpx21"                # Hetzner: cpx11, cpx21, cpx31, cpx41, cpx51
+location = "fsn1"             # fsn1, nbg1, hel1
+
+# When [vps] is enabled for production, set:
+[environments.production]
+server = "custom"             # Triggers VPS provisioning
+```
+
+### Common Scenarios
+
+**Simple App (dev + production)**:
+```toml
+[project]
+name = "my-api"
+domain = "api.example.com"
+```
+
+**Production Only (no dev/preview)**:
+```toml
+[project]
+name = "landing-page"
+domain = "example.com"
+
+[environments.development]
+enabled = false
+
+[environments.preview]
+enabled = false
+```
+
+**High-Traffic App (dedicated VPS)**:
+```toml
+[project]
+name = "main-app"
+domain = "app.example.com"
+
+[vps]
+enabled = true
+type = "cpx31"
+
+[environments.production]
+server = "custom"
+replicas = 2
+
+[resources]
+memory = "2Gi"
+cpu = 2
+```
+
+## Secrets Reference
+
+Secrets required for the deployment workflow:
+
+| Secret | Workflow | Description | Required |
+|--------|----------|-------------|----------|
+| `DOKPLOY_ADMIN_EMAIL` | dokploy-deploy | Dokploy admin email | Yes |
+| `DOKPLOY_ADMIN_PASSWORD` | dokploy-deploy | Dokploy admin password | Yes |
+| `TAILSCALE_OAUTH_CLIENT_ID` | dokploy-deploy | Tailscale OAuth client ID | Yes |
+| `TAILSCALE_OAUTH_SECRET` | dokploy-deploy | Tailscale OAuth secret | Yes |
+| `CLOUDFLARE_API_TOKEN` | dokploy-deploy | Cloudflare DNS API token | Yes |
+| `HETZNER_TOKEN` | dokploy-deploy | Hetzner Cloud API (for custom VPS) | For VPS |
+| `TF_API_TOKEN` | dokploy-deploy | Terraform Cloud token (for custom VPS) | For VPS |
+| `DOKPLOY_SSH_KEY_ID` | dokploy-deploy | SSH key ID for VPS registration | For VPS |
+| `INFISICAL_CLIENT_ID` | dokploy-deploy | Infisical secrets (optional) | Optional |
+| `INFISICAL_CLIENT_SECRET` | dokploy-deploy | Infisical secrets (optional) | Optional |
+| `NPM_TOKEN` | release | NPM publishing token | For libs |
+| `GITHUB_TOKEN` | release, version-management | GitHub API access | Yes |
+
+### How to Obtain Secrets
+
+- **DOKPLOY_***: Created during Dokploy setup on admin-dokploy
+- **TAILSCALE_***: [Tailscale Admin Console](https://login.tailscale.com/admin/settings/oauth) → OAuth clients
+- **CLOUDFLARE_API_TOKEN**: [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) → Zone:DNS Edit
+- **HETZNER_TOKEN**: [Hetzner Cloud Console](https://console.hetzner.cloud/) → API tokens
+- **TF_API_TOKEN**: [Terraform Cloud](https://app.terraform.io/app/settings/tokens) → User tokens
+- **NPM_TOKEN**: [npmjs.com](https://www.npmjs.com/) → Access Tokens → Automation
+
 ### VPS Auto-Provisioning
 
 Projects can request a dedicated VPS by configuring `dokploy.toml`:
 
 ```toml
-[production]
-server = "custom"          # Triggers VPS provisioning
-vps = "my-app-worker"      # VPS name
-vps_type = "cx33"          # Hetzner server type
+[vps]
+enabled = true
+type = "cpx21"
+
+[environments.production]
+server = "custom"
 ```
 
-When `server = "custom"` is set, the workflow automatically provisions a Hetzner VPS via Terraform before deployment.
+When `server = "custom"` is set, the workflow automatically provisions a Hetzner VPS via Terraform before deployment. The VPS is:
+- Named `{project-name}-worker`
+- Configured with NixOS and Docker
+- Joined to Tailscale network
+- Registered as a Dokploy worker
 
 ### NPM Release Workflow
 **File:** `.github/workflows/release.yml`
@@ -384,7 +686,59 @@ Update to use domain-organized actions and reusable workflows:
 - **Solution:** Adjust threshold or improve test coverage
 
 **Issue:** Deployment failing
-- **Solution:** Check Dokploy API token and project configuration
+- **Solution:** Check Dokploy credentials and configuration
+
+### Deployment-Specific Issues
+
+**Issue:** "Failed to connect to registry"
+- **Cause:** Tailscale connection failed
+- **Solution:** Verify `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_SECRET` are correct
+
+**Issue:** "Project not found in Dokploy"
+- **Cause:** Project doesn't exist or name mismatch
+- **Solution:** Check `[project].name` in `dokploy.toml` matches Dokploy
+
+**Issue:** "DNS record not updated"
+- **Cause:** Cloudflare token missing permissions
+- **Solution:** Ensure token has `Zone:DNS:Edit` permission for the domain's zone
+
+**Issue:** "Cross-swarm routing failed"
+- **Cause:** Worker not reachable via Tailscale
+- **Solution:** Verify worker is online in Tailscale admin, check `worker-tailscale-ip` output
+
+**Issue:** "Health check failed after deployment"
+- **Cause:** Application not responding on expected port/path
+- **Solution:** Verify `[healthcheck].path` matches your app's health endpoint
+
+**Issue:** "Sub-subdomain SSL not working"
+- **Cause:** Cloudflare free SSL only covers `*.domain.com`, not `*.subdomain.domain.com`
+- **Solution:** Sub-subdomains (e.g., `pr-5.dev.example.com`) use DNS-only mode, SSL handled by Traefik
+
+### Debug Mode
+
+Enable debug logging by setting repository secrets:
+- `ACTIONS_RUNNER_DEBUG: true`
+- `ACTIONS_STEP_DEBUG: true`
+
+### Logs and Diagnostics
+
+```bash
+# Check Dokploy logs
+ssh root@admin-dokploy
+docker logs dokploy -f
+
+# Check Traefik routing
+ssh root@admin-dokploy
+cat /var/lib/traefik/dynamic/*.yml
+
+# Check container on worker
+ssh root@dev-worker
+docker ps | grep <app-name>
+docker logs <container-id>
+
+# Check Tailscale connectivity
+tailscale ping admin-dokploy
+```
 
 ## License
 

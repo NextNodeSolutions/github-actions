@@ -73,14 +73,60 @@ github-actions/
 
 The actions are organized into logical domains to improve maintainability and discoverability:
 
-- **build/**: Everything related to project setup, dependency installation, and building
+- **build/**: Everything related to project setup, dependency installation, building, and Docker image creation
 - **quality/**: Code quality checks including linting, type checking, and security
-- **deploy/**: Dokploy platform deployment and VPS provisioning
+- **deploy/**: Dokploy platform deployment, VPS provisioning, and cross-swarm routing
+- **infrastructure/**: Tailscale VPN, Cloudflare DNS, and other infrastructure integrations
 - **release/**: NPM package release management with changesets and provenance
 - **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks and job result verification
 - **utilities/**: Generic helper actions used across domains
 - **Root level**: Only globally-used actions that external projects depend on
+
+## Infrastructure Integration
+
+### How github-actions Connects to Infrastructure
+
+This repository is the CI/CD component of NextNode's self-hosted platform. It works with the [infrastructure](https://github.com/nextnodesolutions/infrastructure) repository.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          DEPLOYMENT FLOW                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  github-actions                     infrastructure                  │
+│  ┌─────────────────────┐           ┌─────────────────────┐         │
+│  │ dokploy-deploy.yml  │           │ terraform/          │         │
+│  │   │                 │           │   ├── main.tf       │         │
+│  │   ├── build         │           │   └── modules/      │         │
+│  │   │   └── push ─────┼──────────>│       └── hetzner   │         │
+│  │   │       (registry)│           │                     │         │
+│  │   ├── sync          │           │ packer/             │         │
+│  │   │   └── Dokploy   │           │   └── files/        │         │
+│  │   ├── dns           │           │       └── NixOS     │         │
+│  │   └── routing       │           │                     │         │
+│  └─────────────────────┘           └─────────────────────┘         │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+| Integration Point | github-actions Component | infrastructure Component |
+|-------------------|--------------------------|--------------------------|
+| Docker Registry | `build/docker-build-push` | NixOS Docker module |
+| VPS Provisioning | `deploy/vps-provision` | Terraform hetzner-vps module |
+| Cross-Swarm Routing | `deploy/cross-swarm-routing` | Traefik NixOS module |
+| DNS Management | `infrastructure/cloudflare-dns-upsert` | Cloudflare Terraform provider |
+
+### Registry-Only Mode (INT-149)
+
+Dokploy v0.25+ uses Better Auth and no longer supports API-based builds. The deployment flow now:
+
+1. **Build locally** in GitHub Actions runner
+2. **Push to private registry** at `admin-dokploy:5000` via Tailscale
+3. **Sync configuration** to Dokploy API (project, app, env vars)
+4. **Set image reference** - Dokploy pulls from registry
+
+This is handled by the `build/docker-build-push` action and `deploy/dokploy-sync` action.
 
 ## Deployment Architecture
 
@@ -91,15 +137,27 @@ NextNode uses Dokploy (self-hosted PaaS) for application deployment:
 - **dokploy-sync**: Syncs `dokploy.toml` configuration to Dokploy API
 - **vps-provision**: Auto-provisions Hetzner VPS when project uses `server = "custom"`
 
+### Cross-Swarm Routing Pattern
+
+Apps deployed on worker nodes (dev-worker, prod-worker) need routing through Traefik on admin-dokploy:
+
+1. **Port Publishing**: Container port exposed on worker via `socat`
+2. **Traefik Config**: TCP route from admin-dokploy to worker:port
+3. **DNS**: A record points to admin-dokploy (Traefik server)
+
+This is handled automatically by `deploy/cross-swarm-routing` and `deploy/publish-service-port`.
+
 ### VPS Auto-Provisioning (INT-28)
 
 Projects can request a dedicated VPS by setting `server = "custom"` in `dokploy.toml`:
 
 ```toml
-[production]
+[vps]
+enabled = true
+type = "cpx21"
+
+[environments.production]
 server = "custom"          # Triggers VPS provisioning
-vps = "my-app-worker"      # VPS name
-vps_type = "cx33"          # Hetzner server type
 ```
 
 The `vps-provision` action calls the infrastructure repo's Terraform module to create the VPS.
@@ -199,9 +257,10 @@ touch actions/utilities/my-new-action/action.yml
 ```
 
 ### Domain Selection Guide
-- **build/**: Installation, building, caching (Node setup is now global)
+- **build/**: Installation, building, caching, Docker image creation
 - **quality/**: Linting, type checking, testing, security audits
-- **deploy/**: Dokploy deployment and VPS provisioning
+- **deploy/**: Dokploy deployment, VPS provisioning, cross-swarm routing
+- **infrastructure/**: Tailscale, Cloudflare DNS, worker initialization
 - **release/**: NPM package release management, changesets, provenance
 - **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks, job verification
