@@ -57,6 +57,10 @@ inputs:
     description: 'Terraform Cloud API token (required when server = "custom")'
     required: false
     default: ''
+  github-token:
+    description: 'GitHub token with access to infrastructure repo (required when server = "custom")'
+    required: false
+    default: ''
 
 outputs:
   project-id:
@@ -244,6 +248,7 @@ runs:
       with:
         repository: nextnodesolutions/infrastructure
         path: .infrastructure
+        token: ${{ inputs.github-token }}
 
     - name: Setup Terraform
       if: steps.vps-check.outputs.needs-provision == 'true'
