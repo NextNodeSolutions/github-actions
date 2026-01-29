@@ -79,7 +79,7 @@ class DokployClient:
     def _headers(self) -> dict[str, str]:
         """Standard headers for all requests."""
         return {
-            "Authorization": f"Bearer {self.token}",
+            "x-api-key": self.token,
             "Content-Type": "application/json",
         }
 
@@ -189,42 +189,6 @@ class DokployClient:
         except RequestException as e:
             raise DokployError(f"Request failed: {e}") from e
 
-    def authenticate(self, email: str, password: str) -> str:
-        """Authenticate with email/password and return token.
-
-        Args:
-            email: Admin email
-            password: Admin password
-
-        Returns:
-            Bearer token
-
-        Raises:
-            DokployAuthError: On authentication failure
-            DokployError: On other API errors
-        """
-        try:
-            response = requests.post(
-                f"{self.url}/api/auth/sign-in/email",
-                json={"email": email, "password": password},
-                timeout=self.timeout,
-            )
-
-            if response.status_code == 401:
-                raise DokployAuthError("Invalid email or password", status_code=401)
-
-            response.raise_for_status()
-            data = response.json()
-
-            token = data.get("token")
-            if not token:
-                raise DokployError("No token in authentication response")
-
-            return token
-
-        except RequestException as e:
-            raise DokployError(f"Authentication request failed: {e}") from e
-
     def verify_token(self) -> bool:
         """Verify the current token is valid.
 
@@ -236,3 +200,107 @@ class DokployClient:
         """
         self.get("/api/project.all")
         return True
+
+    # =========================================================================
+    # Server Management
+    # =========================================================================
+
+    def list_servers(self) -> list[dict[str, Any]]:
+        """Get all servers registered in Dokploy.
+
+        Returns:
+            List of server objects with serverId, name, ipAddress, etc.
+        """
+        result = self.get("/api/server.all")
+        return result if isinstance(result, list) else []
+
+    def get_server_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find a server by name.
+
+        Args:
+            name: Server name to find
+
+        Returns:
+            Server object if found, None otherwise
+        """
+        servers = self.list_servers()
+        for server in servers:
+            if server.get("name") == name:
+                return server
+        return None
+
+    def create_server(
+        self,
+        name: str,
+        ip_address: str,
+        ssh_key_id: str,
+        port: int = 22,
+        username: str = "root",
+        server_type: str = "deploy",
+    ) -> dict[str, Any]:
+        """Create a new server in Dokploy.
+
+        Args:
+            name: Server name
+            ip_address: Server IP address (Tailscale IP recommended)
+            ssh_key_id: Dokploy SSH key ID for server access
+            port: SSH port (default: 22)
+            username: SSH username (default: root)
+            server_type: Server type (default: deploy)
+
+        Returns:
+            Created server object with serverId
+        """
+        payload = {
+            "name": name,
+            "ipAddress": ip_address,
+            "port": port,
+            "username": username,
+            "sshKeyId": ssh_key_id,
+            "serverType": server_type,
+        }
+        wrapped = {"0": {"json": payload}}
+        result = self.post("/api/trpc/server.create?batch=1", json=wrapped)
+
+        if isinstance(result, list) and len(result) > 0:
+            data = result[0].get("result", {}).get("data", {})
+            return data.get("json", data)
+        return result if isinstance(result, dict) else {}
+
+    def setup_server(self, server_id: str) -> None:
+        """Setup a server (install Docker + Swarm).
+
+        Args:
+            server_id: Dokploy server ID
+        """
+        payload = {"serverId": server_id}
+        wrapped = {"0": {"json": payload}}
+        self.post("/api/trpc/server.setup?batch=1", json=wrapped)
+
+    # =========================================================================
+    # SSH Key Management
+    # =========================================================================
+
+    def list_ssh_keys(self) -> list[dict[str, Any]]:
+        """Get all SSH keys in Dokploy.
+
+        Returns:
+            List of SSH key objects with sshKeyId, name, etc.
+        """
+        result = self.get("/api/sshKey.all")
+        return result if isinstance(result, list) else []
+
+    def get_ssh_key_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find an SSH key by name.
+
+        Args:
+            name: SSH key name to find
+
+        Returns:
+            SSH key object if found, None otherwise
+        """
+        keys = self.list_ssh_keys()
+        for key in keys:
+            if key.get("name") == name:
+                return key
+        return None

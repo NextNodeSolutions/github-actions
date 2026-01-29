@@ -6,11 +6,8 @@ inputs:
   dokploy-url:
     description: 'Dokploy instance URL'
     required: true
-  dokploy-admin-email:
-    description: 'Dokploy admin email'
-    required: true
-  dokploy-admin-password:
-    description: 'Dokploy admin password'
+  dokploy-api-token:
+    description: 'Dokploy API token (from Settings > Profile > API/CLI)'
     required: true
   server-name:
     description: 'Name for the server in Dokploy'
@@ -41,132 +38,119 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Setup Python
+      uses: nextnodesolutions/github-actions/actions/utilities/python-setup@main
+      with:
+        packages: 'requests'
+
     - name: Register in Dokploy
       id: register
-      shell: bash
+      shell: python
       env:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
-        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-api-token }}
         SERVER_NAME: ${{ inputs.server-name }}
         SERVER_IP: ${{ inputs.server-ip }}
         SSH_KEY_ID: ${{ inputs.ssh-key-id }}
         SSH_KEY_NAME: ${{ inputs.ssh-key-name }}
       run: |
-        echo "::group::Dokploy Registration"
+        import os
+        import sys
+        import time
 
-        # Authenticate with Dokploy (Better-Auth session cookies)
-        COOKIE_JAR="/tmp/dokploy_cookies_$$.txt"
+        from lib.dokploy import DokployAuthError, DokployClient, DokployError, output
 
-        echo "Authenticating with Dokploy..."
-        AUTH_RESPONSE=$(curl -s -c "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
-          -H "Content-Type: application/json" \
-          -d "$(jq -n --arg e "$DOKPLOY_ADMIN_EMAIL" --arg p "$DOKPLOY_ADMIN_PASSWORD" '{email:$e,password:$p}')")
+        SERVER_NAME = os.environ['SERVER_NAME']
+        SERVER_IP = os.environ['SERVER_IP']
+        SSH_KEY_ID = os.environ.get('SSH_KEY_ID', '')
+        SSH_KEY_NAME = os.environ.get('SSH_KEY_NAME', 'nextnode-dokploy-ci')
 
-        if [[ -z "$AUTH_RESPONSE" ]]; then
-          echo "::error::Authentication failed - no response"
-          echo "success=false" >> $GITHUB_OUTPUT
-          rm -f "$COOKIE_JAR"
-          exit 1
-        fi
+        print("::group::Dokploy Registration")
 
-        if ! echo "$AUTH_RESPONSE" | jq -e '.token' > /dev/null 2>&1; then
-          echo "::error::Authentication failed"
-          echo "Auth response: $AUTH_RESPONSE"
-          echo "success=false" >> $GITHUB_OUTPUT
-          rm -f "$COOKIE_JAR"
-          exit 1
-        fi
-        echo "Authentication successful"
+        try:
+            client = DokployClient.from_env()
 
-        # Get SSH key ID if not provided
-        if [[ -z "$SSH_KEY_ID" ]]; then
-          echo "Getting SSH key ID..."
-          EXISTING_KEYS=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/sshKey.all" \
-            -H "Content-Type: application/json")
+            # Check if server already exists
+            print(f"Checking if server '{SERVER_NAME}' exists...")
+            existing = client.get_server_by_name(SERVER_NAME)
 
-          # Try to find the specified key first
-          SSH_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r --arg name "$SSH_KEY_NAME" '.[] | select(.name == $name) | .sshKeyId' 2>/dev/null | head -1)
+            if existing:
+                server_id = existing.get('serverId')
+                print(f"Server already registered: {server_id}")
+                output('server-id', server_id)
+                output('registered', 'false')
+                output('success', 'true')
+                print("::endgroup::")
+                sys.exit(0)
 
-          if [[ -z "$SSH_KEY_ID" ]]; then
-            # Use first available key
-            SSH_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r '.[0].sshKeyId // empty' 2>/dev/null)
-          fi
+            # Get SSH key ID if not provided
+            if not SSH_KEY_ID:
+                print(f"Looking for SSH key '{SSH_KEY_NAME}'...")
+                ssh_key = client.get_ssh_key_by_name(SSH_KEY_NAME)
 
-          if [[ -z "$SSH_KEY_ID" ]]; then
-            echo "::error::No SSH key found in Dokploy. Run dokploy-init-workers first."
-            echo "success=false" >> $GITHUB_OUTPUT
-            rm -f "$COOKIE_JAR"
-            exit 1
-          fi
-        fi
-        echo "Using SSH key ID: $SSH_KEY_ID"
+                if ssh_key:
+                    SSH_KEY_ID = ssh_key.get('sshKeyId')
+                    print(f"Found SSH key: {SSH_KEY_ID}")
+                else:
+                    # Use first available key
+                    keys = client.list_ssh_keys()
+                    if keys:
+                        SSH_KEY_ID = keys[0].get('sshKeyId')
+                        print(f"Using first available SSH key: {SSH_KEY_ID}")
 
-        # Check if server exists
-        echo "Checking if server exists in Dokploy..."
-        EXISTING_SERVERS=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/server.all" \
-          -H "Content-Type: application/json")
+            if not SSH_KEY_ID:
+                print("::error::No SSH key found in Dokploy. Run dokploy-init-workers first.")
+                output('success', 'false')
+                print("::endgroup::")
+                sys.exit(1)
 
-        if [[ -z "$EXISTING_SERVERS" || "$EXISTING_SERVERS" == "null" ]]; then
-          EXISTING_SERVERS="[]"
-        fi
+            # Create server
+            print(f"Registering server: {SERVER_NAME} ({SERVER_IP})")
+            result = client.create_server(
+                name=SERVER_NAME,
+                ip_address=SERVER_IP,
+                ssh_key_id=SSH_KEY_ID,
+            )
 
-        EXISTING_ID=$(echo "$EXISTING_SERVERS" | jq -r --arg name "$SERVER_NAME" '.[] | select(.name == $name) | .serverId' 2>/dev/null | head -1)
+            server_id = result.get('serverId')
 
-        if [[ -n "$EXISTING_ID" ]]; then
-          echo "Server already registered: $EXISTING_ID"
-          echo "server-id=$EXISTING_ID" >> $GITHUB_OUTPUT
-          echo "registered=false" >> $GITHUB_OUTPUT
-          echo "success=true" >> $GITHUB_OUTPUT
-          rm -f "$COOKIE_JAR"
-          echo "::endgroup::"
-          exit 0
-        fi
+            # If no serverId in response, query again
+            if not server_id:
+                print("Waiting for server to be created...")
+                time.sleep(2)
+                created = client.get_server_by_name(SERVER_NAME)
+                if created:
+                    server_id = created.get('serverId')
 
-        # Register new server
-        echo "Registering server: ${SERVER_NAME} (${SERVER_IP})"
+            if not server_id:
+                print("::error::Failed to register server - no serverId returned")
+                output('success', 'false')
+                print("::endgroup::")
+                sys.exit(1)
 
-        CREATE_DATA=$(jq -n --arg n "$SERVER_NAME" --arg ip "$SERVER_IP" --arg keyId "$SSH_KEY_ID" \
-          '{name:$n,ipAddress:$ip,port:22,username:"root",sshKeyId:$keyId}')
-        WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
+            print(f"Server registered: {server_id}")
 
-        CREATE_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.create?batch=1" \
-          -H "Content-Type: application/json" \
-          -d "$WRAPPED_DATA")
+            # Setup server (Docker + Swarm)
+            print("Setting up server (Docker + Swarm)...")
+            try:
+                client.setup_server(server_id)
+                print("Server setup initiated")
+            except DokployError as e:
+                # Setup may take time, don't fail on timeout
+                print(f"Setup request sent (may complete asynchronously): {e}")
 
-        echo "Create response: $CREATE_RESPONSE"
+            output('server-id', server_id)
+            output('registered', 'true')
+            output('success', 'true')
 
-        # Extract serverId from tRPC batch response
-        SERVER_ID=$(echo "$CREATE_RESPONSE" | jq -r '.[0].result.data.json.serverId // .[0].result.data.serverId // empty')
+        except DokployAuthError as e:
+            print("::error::Invalid API token")
+            output('success', 'false')
+            sys.exit(1)
 
-        if [[ -z "$SERVER_ID" ]]; then
-          # Try to get ID by querying again
-          sleep 2
-          SERVERS_AFTER=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/server.all" \
-            -H "Content-Type: application/json")
-          SERVER_ID=$(echo "$SERVERS_AFTER" | jq -r --arg name "$SERVER_NAME" '.[] | select(.name == $name) | .serverId' 2>/dev/null | head -1)
+        except DokployError as e:
+            print(f"::error::Dokploy API error: {e}")
+            output('success', 'false')
+            sys.exit(1)
 
-          if [[ -z "$SERVER_ID" ]]; then
-            echo "::error::Failed to register server"
-            echo "success=false" >> $GITHUB_OUTPUT
-            rm -f "$COOKIE_JAR"
-            exit 1
-          fi
-        fi
-
-        echo "Server registered: $SERVER_ID"
-
-        # Setup server (Docker + Swarm)
-        echo "Setting up server (Docker + Swarm)..."
-        SETUP_DATA=$(jq -n --arg id "$SERVER_ID" '{serverId:$id}')
-        WRAPPED_SETUP="{\"0\":{\"json\":${SETUP_DATA}}}"
-        curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.setup?batch=1" \
-          -H "Content-Type: application/json" \
-          -d "$WRAPPED_SETUP" > /dev/null 2>&1 || true
-
-        echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
-        echo "registered=true" >> $GITHUB_OUTPUT
-        echo "success=true" >> $GITHUB_OUTPUT
-
-        rm -f "$COOKIE_JAR"
-        echo "::endgroup::"
+        print("::endgroup::")

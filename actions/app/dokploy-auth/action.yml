@@ -1,21 +1,18 @@
 name: 'Dokploy Auth'
-description: 'Authenticate with Dokploy API and return bearer token'
+description: 'Validate Dokploy API token and pass through for downstream actions'
 author: 'NextNodeSolutions'
 
 inputs:
   dokploy-url:
     description: 'Dokploy instance URL'
     required: true
-  dokploy-admin-email:
-    description: 'Dokploy admin email'
-    required: true
-  dokploy-admin-password:
-    description: 'Dokploy admin password'
+  dokploy-api-token:
+    description: 'Dokploy API token (from Settings > Profile > API/CLI)'
     required: true
 
 outputs:
   token:
-    description: 'Bearer token for Dokploy API'
+    description: 'Validated API token for Dokploy API'
     value: ${{ steps.auth.outputs.token }}
   success:
     description: 'Whether authentication succeeded'
@@ -29,45 +26,36 @@ runs:
       with:
         packages: 'requests'
 
-    - name: Authenticate with Dokploy
+    - name: Validate Dokploy Token
       id: auth
       shell: python
       env:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
-        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-api-token }}
       run: |
         import os
         import sys
 
         from lib.dokploy import DokployAuthError, DokployClient, DokployError, output
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL']
-        DOKPLOY_ADMIN_EMAIL = os.environ['DOKPLOY_ADMIN_EMAIL']
-        DOKPLOY_ADMIN_PASSWORD = os.environ['DOKPLOY_ADMIN_PASSWORD']
-
-        print("::group::Authenticating with Dokploy")
+        print("::group::Validating Dokploy API Token")
 
         try:
-            client = DokployClient(url=DOKPLOY_URL, token="")
-            token = client.authenticate(DOKPLOY_ADMIN_EMAIL, DOKPLOY_ADMIN_PASSWORD)
-
-            # Verify token works
-            client = DokployClient(url=DOKPLOY_URL, token=token)
+            client = DokployClient.from_env()
             client.verify_token()
 
-            print("Authentication successful")
-            output('token', token)
+            print("API token validated successfully")
+            output('token', os.environ['DOKPLOY_TOKEN'])
             output('success', 'true')
 
         except DokployAuthError as e:
-            print(f"::error::Invalid email or password")
+            print("::error::Invalid API token - check Settings > Profile > API/CLI in Dokploy")
             output('success', 'false')
             output('token', '')
             sys.exit(1)
 
         except DokployError as e:
-            print(f"::error::Failed to authenticate: {e}")
+            print(f"::error::Failed to validate token: {e}")
             output('success', 'false')
             output('token', '')
             sys.exit(1)

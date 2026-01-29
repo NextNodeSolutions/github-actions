@@ -83,7 +83,7 @@ runs:
                     f.write(f"{key}={value}\n")
 
         headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "x-api-key": DOKPLOY_TOKEN,
             "Content-Type": "application/json"
         }
 

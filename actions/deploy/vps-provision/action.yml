@@ -38,11 +38,8 @@ inputs:
   dokploy-url:
     description: 'Dokploy instance URL'
     required: true
-  dokploy-admin-email:
-    description: 'Dokploy admin email'
-    required: true
-  dokploy-admin-password:
-    description: 'Dokploy admin password'
+  dokploy-api-token:
+    description: 'Dokploy API token (from Settings > Profile > API/CLI)'
     required: true
 
 outputs:
@@ -138,7 +135,6 @@ runs:
       uses: nextnodesolutions/github-actions/actions/deploy/vps-dokploy-register@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
-        dokploy-admin-email: ${{ inputs.dokploy-admin-email }}
-        dokploy-admin-password: ${{ inputs.dokploy-admin-password }}
+        dokploy-api-token: ${{ inputs.dokploy-api-token }}
         server-name: ${{ inputs.vps-name }}
         server-ip: ${{ steps.set-outputs.outputs.tailscale-ip }}

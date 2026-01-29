@@ -501,8 +501,9 @@ jobs:
 |--------|-------------------|---------|----------|
 | `TAILSCALE_OAUTH_CLIENT_ID` | app-deploy, infra-healthcheck, swarm-rollback, terraform-plan | Tailscale OAuth | Yes |
 | `TAILSCALE_OAUTH_SECRET` | app-deploy, infra-healthcheck, swarm-rollback, terraform-plan | Tailscale OAuth | Yes |
-| `DOKPLOY_ADMIN_EMAIL` | app-deploy | Dokploy API authentication | Yes (deploy) |
-| `DOKPLOY_ADMIN_PASSWORD` | app-deploy | Dokploy API authentication | Yes (deploy) |
+| `DOKPLOY_API_TOKEN` | app-deploy | Dokploy API authentication (Settings > Profile > API/CLI) | Yes (deploy) |
+| `DOKPLOY_ADMIN_EMAIL` | dokploy-init-workers | First-time Dokploy admin setup | Yes (init) |
+| `DOKPLOY_ADMIN_PASSWORD` | dokploy-init-workers | First-time Dokploy admin setup | Yes (init) |
 | `CLOUDFLARE_API_TOKEN` | dns, terraform-apply, app-deploy | DNS management | Yes (DNS) |
 | `CLOUDFLARE_ZONE_ID` | dns | Zone ID (auto-lookup if not provided) | No |
 | `HETZNER_TOKEN` | terraform-plan, terraform-apply, packer-build, app-deploy | Hetzner Cloud API | Yes (infra) |
@@ -524,13 +525,25 @@ TAILSCALE_OAUTH_CLIENT_ID + TAILSCALE_OAUTH_SECRET
     └── auth-key → Device registration (ephemeral)
 ```
 
-#### Dokploy Authentication Chain
+#### Dokploy API Token (Regular Deployments)
+```
+DOKPLOY_API_TOKEN (generated in Dokploy: Settings > Profile > API/CLI)
+    │
+    ▼ dokploy-auth action (validates token)
+    │
+    └── token → All Dokploy API calls (x-api-key header)
+```
+
+#### Dokploy Admin (First-Time Setup Only)
 ```
 DOKPLOY_ADMIN_EMAIL + DOKPLOY_ADMIN_PASSWORD
     │
-    ▼ dokploy-auth action
+    ▼ dokploy-init-workers action
     │
-    └── token → All Dokploy API calls
+    ├── dokploy-admin-setup → Creates admin account (first run only)
+    └── Session cookies → Registry/SSH key setup (legacy sub-actions)
+
+Note: After first-time setup, DOKPLOY_API_TOKEN is used for all operations.
 ```
 
 #### GitHub App Token Chain

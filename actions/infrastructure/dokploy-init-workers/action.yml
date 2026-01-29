@@ -7,10 +7,13 @@ inputs:
     description: 'Dokploy instance URL (e.g., https://admin.nextnode.fr)'
     required: true
   dokploy-admin-email:
-    description: 'Dokploy admin email (for auto-setup)'
+    description: 'Dokploy admin email (for first-time setup only)'
     required: true
   dokploy-admin-password:
-    description: 'Dokploy admin password (for auto-setup)'
+    description: 'Dokploy admin password (for first-time setup only)'
+    required: true
+  dokploy-api-token:
+    description: 'Dokploy API token (from Settings > Profile > API/CLI) - used for worker registration'
     required: true
   dokploy-ssh-private-key:
     description: 'SSH private key to import into Dokploy for worker access'
@@ -52,6 +55,7 @@ runs:
       run: |
         echo "::add-mask::${{ inputs.dokploy-admin-password }}"
         echo "::add-mask::${{ inputs.dokploy-ssh-private-key }}"
+        echo "::add-mask::${{ inputs.dokploy-api-token }}"
 
     # Step 1: Admin setup (waits for Dokploy, creates admin if first time)
     - name: Setup Dokploy Admin
@@ -62,8 +66,8 @@ runs:
         admin-email: ${{ inputs.dokploy-admin-email }}
         admin-password: ${{ inputs.dokploy-admin-password }}
 
-    # Step 2: Authenticate and get session cookie
-    - name: Authenticate with Dokploy
+    # Step 2: Authenticate with session cookies (for legacy sub-actions)
+    - name: Authenticate with Dokploy (Session)
       id: auth
       shell: bash
       env:
@@ -71,9 +75,9 @@ runs:
         ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
         ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
       run: |
-        echo "::group::Dokploy Authentication"
+        echo "::group::Dokploy Session Authentication"
 
-        # SEC-002: Ensure password is masked (belt and suspenders with parent mask)
+        # SEC-002: Ensure password is masked
         echo "::add-mask::${ADMIN_PASSWORD}"
 
         COOKIE_JAR="/tmp/dokploy_cookies_$$.txt"
@@ -159,13 +163,19 @@ runs:
         max-retries: ${{ inputs.max-retries }}
         retry-delay: ${{ inputs.retry-delay }}
 
-    # Step 7: Register workers with Dokploy
+    # Step 7: Setup Python for worker registration
+    - name: Setup Python
+      uses: nextnodesolutions/github-actions/actions/utilities/python-setup@main
+      with:
+        packages: 'requests'
+
+    # Step 8: Register workers with Dokploy using API token
     - name: Register Workers
       id: result
-      shell: bash
+      shell: python
       env:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        COOKIE_JAR: ${{ steps.auth.outputs.cookie-jar }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-api-token }}
         SSH_KEY_ID: ${{ steps.ssh-key.outputs.ssh-key-id }}
         TARGET: ${{ inputs.target }}
         DEV_WORKER_IP: ${{ steps.dev-worker-lookup.outputs.ip-address }}
@@ -173,86 +183,93 @@ runs:
         PROD_WORKER_IP: ${{ steps.prod-worker-lookup.outputs.ip-address }}
         PROD_WORKER_EXISTS: ${{ steps.prod-worker-lookup.outputs.exists }}
       run: |
-        echo "::group::Register Dokploy Workers"
+        import os
+        import sys
 
-        INITIALIZED=""
+        from lib.dokploy import DokployClient, DokployError, output
 
-        register_worker() {
-          local worker="$1"
-          local worker_ip="$2"
-          local worker_exists="$3"
+        TARGET = os.environ.get('TARGET', 'all')
+        SSH_KEY_ID = os.environ.get('SSH_KEY_ID', '')
+        DEV_WORKER_IP = os.environ.get('DEV_WORKER_IP', '')
+        DEV_WORKER_EXISTS = os.environ.get('DEV_WORKER_EXISTS', '') == 'true'
+        PROD_WORKER_IP = os.environ.get('PROD_WORKER_IP', '')
+        PROD_WORKER_EXISTS = os.environ.get('PROD_WORKER_EXISTS', '') == 'true'
 
-          echo ""
-          echo "=== Processing: $worker ==="
+        print("::group::Register Dokploy Workers")
 
-          if [[ "$worker_exists" != "true" || -z "$worker_ip" ]]; then
-            echo "::warning::$worker not found in Tailscale, skipping"
-            return
-          fi
+        try:
+            client = DokployClient.from_env()
+            initialized = []
 
-          echo "Found $worker at IP: $worker_ip"
+            def register_worker(name: str, ip: str, exists: bool) -> bool:
+                print(f"\n=== Processing: {name} ===")
 
-          # Check if server already exists
-          EXISTING_SERVERS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/server.all" -H "Content-Type: application/json")
-          EXISTING_SERVER_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"$worker\") | .serverId" 2>/dev/null || echo "")
+                if not exists or not ip:
+                    print(f"::warning::{name} not found in Tailscale, skipping")
+                    return False
 
-          if [[ -n "$EXISTING_SERVER_ID" ]]; then
-            echo "Server $worker already registered (ID: $EXISTING_SERVER_ID)"
-            INITIALIZED="$INITIALIZED $worker"
-            return
-          fi
+                print(f"Found {name} at IP: {ip}")
 
-          # Register server using tRPC format
-          echo "Registering server: $worker ($worker_ip)"
-          CREATE_DATA=$(jq -n \
-            --arg name "$worker" \
-            --arg ipAddress "$worker_ip" \
-            --arg sshKeyId "$SSH_KEY_ID" \
-            '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId, serverType: "deploy"}')
-          WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
+                # Check if server already exists
+                existing = client.get_server_by_name(name)
+                if existing:
+                    server_id = existing.get('serverId')
+                    print(f"Server {name} already registered (ID: {server_id})")
+                    return True
 
-          curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.create?batch=1" \
-            -H "Content-Type: application/json" \
-            -d "$WRAPPED_DATA" > /dev/null
+                # Register server
+                print(f"Registering server: {name} ({ip})")
+                result = client.create_server(
+                    name=name,
+                    ip_address=ip,
+                    ssh_key_id=SSH_KEY_ID,
+                    server_type='deploy',
+                )
 
-          sleep 1
-          CREATED_SERVERS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/server.all" -H "Content-Type: application/json")
-          SERVER_ID=$(echo "$CREATED_SERVERS" | jq -r ".[] | select(.name == \"$worker\") | .serverId" 2>/dev/null || echo "")
+                server_id = result.get('serverId')
+                if not server_id:
+                    # Try to get ID by querying again
+                    import time
+                    time.sleep(1)
+                    created = client.get_server_by_name(name)
+                    if created:
+                        server_id = created.get('serverId')
 
-          if [[ -z "$SERVER_ID" ]]; then
-            echo "::error::Failed to register $worker"
-            return
-          fi
+                if not server_id:
+                    print(f"::error::Failed to register {name}")
+                    return False
 
-          echo "Server registered: $SERVER_ID"
+                print(f"Server registered: {server_id}")
 
-          # Setup server
-          echo "Setting up server..."
-          SETUP_DATA=$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')
-          WRAPPED_SETUP="{\"0\":{\"json\":${SETUP_DATA}}}"
-          curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.setup?batch=1" \
-            -H "Content-Type: application/json" \
-            -d "$WRAPPED_SETUP" > /dev/null
+                # Setup server
+                print("Setting up server...")
+                try:
+                    client.setup_server(server_id)
+                except DokployError:
+                    pass  # Setup may take time
 
-          echo "$worker initialized successfully!"
-          INITIALIZED="$INITIALIZED $worker"
-        }
+                print(f"{name} initialized successfully!")
+                return True
 
-        # Register workers based on target
-        if [[ "$TARGET" == "all" || "$TARGET" == "dev-worker" ]]; then
-          register_worker "dev-worker" "$DEV_WORKER_IP" "$DEV_WORKER_EXISTS"
-        fi
+            # Register workers based on target
+            if TARGET in ('all', 'dev-worker'):
+                if register_worker('dev-worker', DEV_WORKER_IP, DEV_WORKER_EXISTS):
+                    initialized.append('dev-worker')
 
-        if [[ "$TARGET" == "all" || "$TARGET" == "prod-worker" ]]; then
-          register_worker "prod-worker" "$PROD_WORKER_IP" "$PROD_WORKER_EXISTS"
-        fi
+            if TARGET in ('all', 'prod-worker'):
+                if register_worker('prod-worker', PROD_WORKER_IP, PROD_WORKER_EXISTS):
+                    initialized.append('prod-worker')
 
-        INITIALIZED=$(echo "$INITIALIZED" | xargs | tr ' ' ',')
-        echo ""
-        echo "=== Initialization complete ==="
-        echo "Initialized workers: ${INITIALIZED:-none}"
+            print("\n=== Initialization complete ===")
+            print(f"Initialized workers: {', '.join(initialized) if initialized else 'none'}")
 
-        echo "success=true" >> $GITHUB_OUTPUT
-        echo "initialized-workers=$INITIALIZED" >> $GITHUB_OUTPUT
+            output('success', 'true')
+            output('initialized-workers', ','.join(initialized))
 
-        echo "::endgroup::"
+        except DokployError as e:
+            print(f"::error::Dokploy API error: {e}")
+            output('success', 'false')
+            output('initialized-workers', '')
+            sys.exit(1)
+
+        print("::endgroup::")
