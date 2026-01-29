@@ -71,8 +71,6 @@ runs:
   steps:
     - name: Setup Python
       uses: nextnodesolutions/github-actions/actions/utilities/python-setup@main
-      with:
-        packages: ''
 
     - name: Load configuration
       id: load
@@ -89,15 +87,10 @@ runs:
         import json
         from pathlib import Path
 
-        from lib.dokploy import (
-            output,
-            deep_merge,
-            load_toml,
-            get_port,
-            compute_domain,
-            compute_url,
-            compute_app_name,
-        )
+        from lib.dokploy.output import output
+        from lib.dokploy.config import deep_merge, load_toml
+        from lib.dokploy.port import get_port
+        from lib.dokploy.domain import compute_domain, compute_url, compute_app_name
 
         # Configuration from environment
         CONFIG_FILE = os.environ.get('CONFIG_FILE', 'dokploy.toml')
