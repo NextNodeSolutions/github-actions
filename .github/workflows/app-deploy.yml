@@ -46,10 +46,12 @@ on:
         required: false
         default: ''
         type: string
-    secrets:
       compose-env:
         description: 'Environment variables for compose deployments (newline-separated KEY=VALUE)'
         required: false
+        default: ''
+        type: string
+    secrets:
       TAILSCALE_OAUTH_CLIENT_ID:
         description: 'Tailscale OAuth client ID'
         required: true
@@ -248,6 +250,15 @@ jobs:
       domain: ${{ needs.config.outputs.domain }}
       success: ${{ steps.final.outputs.success }}
     steps:
+      - name: Mask compose environment values
+        if: inputs.compose-env != ''
+        run: |
+          while IFS='=' read -r key value; do
+            if [[ -n "$value" ]]; then
+              echo "::add-mask::$value"
+            fi
+          done <<< "${{ inputs.compose-env }}"
+
       - name: Checkout Shared Actions
         uses: actions/checkout@v4
         with:
@@ -358,7 +369,7 @@ jobs:
           app-name: ${{ needs.config.outputs.app-name }}
           server-id: ${{ steps.server.outputs.server-id }}
           compose-file: project/${{ inputs.compose-file || needs.config.outputs.compose-file }}
-          env: ${{ secrets.compose-env }}
+          env: ${{ inputs.compose-env }}
           mounts: ${{ needs.config.outputs.compose-mounts }}
 
       # DNS Configuration
