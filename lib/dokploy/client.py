@@ -277,6 +277,46 @@ class DokployClient:
         wrapped = {"0": {"json": payload}}
         self.post("/api/trpc/server.setup?batch=1", json=wrapped)
 
+    def update_server(
+        self,
+        server_id: str,
+        ip_address: str | None = None,
+        name: str | None = None,
+        port: int | None = None,
+        username: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing server in Dokploy.
+
+        Args:
+            server_id: Dokploy server ID
+            ip_address: New IP address (optional)
+            name: New server name (optional)
+            port: New SSH port (optional)
+            username: New SSH username (optional)
+
+        Returns:
+            Updated server object
+        """
+        from lib.dokploy.constants import Endpoints
+
+        payload: dict[str, Any] = {"serverId": server_id}
+        if ip_address is not None:
+            payload["ipAddress"] = ip_address
+        if name is not None:
+            payload["name"] = name
+        if port is not None:
+            payload["port"] = port
+        if username is not None:
+            payload["username"] = username
+
+        wrapped = {"0": {"json": payload}}
+        result = self.post(Endpoints.SERVER_UPDATE, json=wrapped)
+
+        if isinstance(result, list) and len(result) > 0:
+            data = result[0].get("result", {}).get("data", {})
+            return data.get("json", data)
+        return result if isinstance(result, dict) else {}
+
     # =========================================================================
     # SSH Key Management
     # =========================================================================

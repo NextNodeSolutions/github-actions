@@ -95,6 +95,9 @@ class Endpoints:
     # Domains
     DOMAIN_CREATE = "/api/domain.create"
 
+    # Servers
+    SERVER_UPDATE = "/api/trpc/server.update?batch=1"
+
 
 # Default values
 DEFAULT_TIMEOUT = 30

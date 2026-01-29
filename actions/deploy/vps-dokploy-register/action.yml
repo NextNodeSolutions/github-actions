@@ -31,6 +31,9 @@ outputs:
   registered:
     description: 'Whether server was newly registered (vs already existed)'
     value: ${{ steps.register.outputs.registered }}
+  ip-updated:
+    description: 'Whether server IP was updated (existing server had different IP)'
+    value: ${{ steps.register.outputs.ip-updated }}
   success:
     description: 'Whether registration succeeded'
     value: ${{ steps.register.outputs.success }}
@@ -76,10 +79,24 @@ runs:
 
             if existing:
                 server_id = existing.get('serverId')
-                print(f"Server already registered: {server_id}")
-                output('server-id', server_id)
-                output('registered', 'false')
-                output('success', 'true')
+                existing_ip = existing.get('ipAddress')
+
+                if existing_ip != SERVER_IP:
+                    print(f"Server IP changed: {existing_ip} -> {SERVER_IP}")
+                    print(f"Updating server {server_id}...")
+                    client.update_server(server_id, ip_address=SERVER_IP)
+                    print("Server IP updated successfully")
+                    output('server-id', server_id)
+                    output('registered', 'false')
+                    output('ip-updated', 'true')
+                    output('success', 'true')
+                else:
+                    print(f"Server already registered with correct IP: {server_id}")
+                    output('server-id', server_id)
+                    output('registered', 'false')
+                    output('ip-updated', 'false')
+                    output('success', 'true')
+
                 print("::endgroup::")
                 sys.exit(0)
 
