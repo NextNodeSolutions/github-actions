@@ -46,6 +46,11 @@ on:
         required: false
         default: ''
         type: string
+      compose-env:
+        description: 'Environment variables for compose deployments (newline-separated KEY=VALUE)'
+        required: false
+        default: ''
+        type: string
     outputs:
       project-id:
         description: 'Dokploy project ID'
@@ -322,6 +327,7 @@ jobs:
           app-name: ${{ needs.config.outputs.app-name }}
           server-id: ${{ steps.server.outputs.server-id }}
           compose-file: ${{ inputs.compose-file || needs.config.outputs.compose-file }}
+          env: ${{ inputs.compose-env }}
 
       # DNS Configuration
       - name: Configure DNS

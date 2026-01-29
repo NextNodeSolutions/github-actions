@@ -25,6 +25,10 @@ inputs:
   compose-file:
     description: 'Path to docker-compose.yml file'
     required: true
+  env:
+    description: 'Environment variables for compose (newline-separated KEY=VALUE)'
+    required: false
+    default: ''
 
 outputs:
   compose-id:
@@ -56,6 +60,7 @@ runs:
         APP_NAME: ${{ inputs.app-name }}
         SERVER_ID: ${{ inputs.server-id }}
         COMPOSE_FILE: ${{ inputs.compose-file }}
+        COMPOSE_ENV: ${{ inputs.env }}
       run: |
         import os
         import sys
@@ -68,6 +73,7 @@ runs:
         APP_NAME = os.environ['APP_NAME']
         SERVER_ID = os.environ.get('SERVER_ID', '')
         COMPOSE_FILE = os.environ['COMPOSE_FILE']
+        COMPOSE_ENV = os.environ.get('COMPOSE_ENV', '')
 
         print("::group::Syncing compose stack")
         print(f"Compose: {APP_NAME}")
@@ -123,16 +129,18 @@ runs:
                 created = True
                 print(f"Created compose: {APP_NAME} ({compose_id})")
 
-            # Update compose with file content
+            # Update compose with file content and environment
+            update_payload = {
+                "composeId": compose_id,
+                "sourceType": "raw",
+                "composeFile": compose_content,
+            }
+            if COMPOSE_ENV:
+                update_payload["env"] = COMPOSE_ENV
+                print(f"Including {len(COMPOSE_ENV.splitlines())} environment variables")
+
             try:
-                client.post(
-                    Endpoints.COMPOSE_UPDATE,
-                    json={
-                        "composeId": compose_id,
-                        "sourceType": "raw",
-                        "composeFile": compose_content,
-                    }
-                )
+                client.post(Endpoints.COMPOSE_UPDATE, json=update_payload)
                 print("Compose file updated")
             except DokployError as e:
                 print(f"::warning::Compose update failed: {e}")
