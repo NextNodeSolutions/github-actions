@@ -39,51 +39,33 @@ runs:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
         DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
         APP_ID: ${{ inputs.app-id }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import DEPLOY_TIMEOUT, DokployClient, DokployError, Endpoints, output
+
         APP_ID = os.environ['APP_ID']
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         print("::group::Triggering deployment")
         print(f"Application ID: {APP_ID}")
 
         try:
-            resp = requests.post(
-                f"{DOKPLOY_URL}/api/application.deploy",
-                headers=headers,
+            client = DokployClient.from_env()
+
+            result = client.post(
+                Endpoints.APPLICATION_DEPLOY,
                 json={"applicationId": APP_ID},
-                timeout=60
+                timeout=DEPLOY_TIMEOUT
             )
 
-            if resp.ok:
-                deployment_id = resp.json().get('deploymentId', '')
-                print("Deployment triggered successfully")
-                output('deployment-id', deployment_id)
-                output('triggered', 'true')
-                output('success', 'true')
-            else:
-                print(f"::warning::Deployment trigger failed: {resp.status_code} - {resp.text}")
-                output('deployment-id', '')
-                output('triggered', 'false')
-                output('success', 'false')
+            deployment_id = result.get('deploymentId', '')
+            print("Deployment triggered successfully")
+            output('deployment-id', deployment_id)
+            output('triggered', 'true')
+            output('success', 'true')
 
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to trigger deployment: {e}")
             output('deployment-id', '')
             output('triggered', 'false')

@@ -36,61 +36,37 @@ runs:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
         DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
         DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        from lib.dokploy import DokployAuthError, DokployClient, DokployError, output
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL']
         DOKPLOY_ADMIN_EMAIL = os.environ['DOKPLOY_ADMIN_EMAIL']
         DOKPLOY_ADMIN_PASSWORD = os.environ['DOKPLOY_ADMIN_PASSWORD']
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
 
         print("::group::Authenticating with Dokploy")
 
         try:
-            auth_resp = requests.post(
-                f"{DOKPLOY_URL}/api/auth/sign-in/email",
-                json={"email": DOKPLOY_ADMIN_EMAIL, "password": DOKPLOY_ADMIN_PASSWORD},
-                timeout=30
-            )
-
-            if auth_resp.status_code == 401:
-                print("::error::Invalid email or password")
-                output('success', 'false')
-                output('token', '')
-                sys.exit(1)
-
-            auth_resp.raise_for_status()
-
-            auth_data = auth_resp.json()
-            token = auth_data.get('token')
-
-            if not token:
-                print("::error::No token in auth response")
-                output('success', 'false')
-                output('token', '')
-                sys.exit(1)
+            client = DokployClient(url=DOKPLOY_URL, token="")
+            token = client.authenticate(DOKPLOY_ADMIN_EMAIL, DOKPLOY_ADMIN_PASSWORD)
 
             # Verify token works
-            verify_resp = requests.get(
-                f"{DOKPLOY_URL}/api/project.all",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=30
-            )
-            verify_resp.raise_for_status()
+            client = DokployClient(url=DOKPLOY_URL, token=token)
+            client.verify_token()
 
             print("Authentication successful")
             output('token', token)
             output('success', 'true')
 
-        except requests.exceptions.RequestException as e:
+        except DokployAuthError as e:
+            print(f"::error::Invalid email or password")
+            output('success', 'false')
+            output('token', '')
+            sys.exit(1)
+
+        except DokployError as e:
             print(f"::error::Failed to authenticate: {e}")
             output('success', 'false')
             output('token', '')

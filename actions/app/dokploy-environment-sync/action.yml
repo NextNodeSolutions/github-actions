@@ -51,28 +51,15 @@ runs:
         PROJECT_ID: ${{ inputs.project-id }}
         ENVIRONMENT: ${{ inputs.environment }}
         PR_NUMBER: ${{ inputs.pr-number }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import DokployClient, DokployError, Endpoints, output
+
         PROJECT_ID = os.environ['PROJECT_ID']
         ENVIRONMENT = os.environ['ENVIRONMENT']
         PR_NUMBER = os.environ.get('PR_NUMBER', '')
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         # Compute environment name
         if ENVIRONMENT == 'preview' and PR_NUMBER:
@@ -84,18 +71,19 @@ runs:
         print(f"Environment name: {env_name}")
 
         try:
+            client = DokployClient.from_env()
+
             # Get project details to find environments
-            project_resp = requests.get(
-                f"{DOKPLOY_URL}/api/project.one",
+            project_data = client.get(
+                Endpoints.PROJECT_ONE,
                 params={"projectId": PROJECT_ID},
-                headers=headers,
-                timeout=30
+                raise_for_status=False
             )
-            project_data = project_resp.json() if project_resp.ok else {}
+            if not isinstance(project_data, dict):
+                project_data = {}
             environments = project_data.get('environments', [])
 
             # Find existing environment
-            environment_id = None
             for env in environments:
                 if env.get('name') == env_name:
                     environment_id = env.get('environmentId')
@@ -108,40 +96,22 @@ runs:
                     sys.exit(0)
 
             # Create environment
-            create_resp = requests.post(
-                f"{DOKPLOY_URL}/api/environment.create",
-                headers=headers,
+            create_data = client.post(
+                Endpoints.ENVIRONMENT_CREATE,
                 json={
                     "projectId": PROJECT_ID,
                     "name": env_name,
                     "description": f"Environment for {env_name}"
-                },
-                timeout=30
+                }
             )
+            environment_id = create_data.get('environmentId')
+            print(f"Created environment: {env_name} ({environment_id})")
+            output('environment-id', environment_id)
+            output('environment-name', env_name)
+            output('created', 'true')
+            output('success', 'true')
 
-            if create_resp.ok:
-                environment_id = create_resp.json().get('environmentId')
-                print(f"Created environment: {env_name} ({environment_id})")
-                output('environment-id', environment_id)
-                output('environment-name', env_name)
-                output('created', 'true')
-                output('success', 'true')
-            else:
-                # Fallback: use first available environment
-                if environments:
-                    environment_id = environments[0].get('environmentId')
-                    env_name = environments[0].get('name', env_name)
-                    print(f"Using default environment: {env_name} ({environment_id})")
-                    output('environment-id', environment_id)
-                    output('environment-name', env_name)
-                    output('created', 'false')
-                    output('success', 'true')
-                else:
-                    print(f"::error::Failed to create environment: {create_resp.text}")
-                    output('success', 'false')
-                    sys.exit(1)
-
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to sync environment: {e}")
             output('success', 'false')
             sys.exit(1)

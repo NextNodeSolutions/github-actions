@@ -56,31 +56,18 @@ runs:
         APP_NAME: ${{ inputs.app-name }}
         SERVER_ID: ${{ inputs.server-id }}
         COMPOSE_FILE: ${{ inputs.compose-file }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
         from pathlib import Path
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import DEPLOY_TIMEOUT, DokployClient, DokployError, Endpoints, output
+
         PROJECT_ID = os.environ['PROJECT_ID']
         ENVIRONMENT_ID = os.environ['ENVIRONMENT_ID']
         APP_NAME = os.environ['APP_NAME']
         SERVER_ID = os.environ.get('SERVER_ID', '')
         COMPOSE_FILE = os.environ['COMPOSE_FILE']
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         print("::group::Syncing compose stack")
         print(f"Compose: {APP_NAME}")
@@ -96,17 +83,17 @@ runs:
         print(f"Compose file: {COMPOSE_FILE} ({len(compose_content)} bytes)")
 
         try:
+            client = DokployClient.from_env()
+
             # Get project details to find existing compose stacks
-            project_resp = requests.get(
-                f"{DOKPLOY_URL}/api/project.one",
+            project_detail = client.get(
+                Endpoints.PROJECT_ONE,
                 params={"projectId": PROJECT_ID},
-                headers=headers,
-                timeout=30
+                raise_for_status=False
             )
 
             composes = []
-            if project_resp.ok:
-                project_detail = project_resp.json()
+            if isinstance(project_detail, dict):
                 composes = project_detail.get('compose', [])
                 for env in project_detail.get('environments', []):
                     composes.extend(env.get('compose', []))
@@ -131,52 +118,41 @@ runs:
                 if SERVER_ID:
                     compose_data["serverId"] = SERVER_ID
 
-                create_resp = requests.post(
-                    f"{DOKPLOY_URL}/api/compose.create",
-                    headers=headers,
-                    json=compose_data,
-                    timeout=30
-                )
-                if not create_resp.ok:
-                    print(f"::warning::compose.create: {create_resp.status_code} - {create_resp.text[:500]}")
-                create_resp.raise_for_status()
-                compose_id = create_resp.json().get('composeId')
+                create_result = client.post(Endpoints.COMPOSE_CREATE, json=compose_data)
+                compose_id = create_result.get('composeId')
                 created = True
                 print(f"Created compose: {APP_NAME} ({compose_id})")
 
             # Update compose with file content
-            update_resp = requests.post(
-                f"{DOKPLOY_URL}/api/compose.update",
-                headers=headers,
-                json={
-                    "composeId": compose_id,
-                    "sourceType": "raw",
-                    "composeFile": compose_content,
-                },
-                timeout=30
-            )
-            if update_resp.ok:
+            try:
+                client.post(
+                    Endpoints.COMPOSE_UPDATE,
+                    json={
+                        "composeId": compose_id,
+                        "sourceType": "raw",
+                        "composeFile": compose_content,
+                    }
+                )
                 print("Compose file updated")
-            else:
-                print(f"::warning::Compose update: {update_resp.status_code}")
+            except DokployError as e:
+                print(f"::warning::Compose update failed: {e}")
 
             # Trigger deployment
-            deploy_resp = requests.post(
-                f"{DOKPLOY_URL}/api/compose.deploy",
-                headers=headers,
-                json={"composeId": compose_id},
-                timeout=60
-            )
-            if deploy_resp.ok:
+            try:
+                client.post(
+                    Endpoints.COMPOSE_DEPLOY,
+                    json={"composeId": compose_id},
+                    timeout=DEPLOY_TIMEOUT
+                )
                 print("Deployment triggered")
-            else:
-                print(f"::warning::Deployment trigger: {deploy_resp.status_code}")
+            except DokployError as e:
+                print(f"::warning::Deployment trigger failed: {e}")
 
             output('compose-id', compose_id)
             output('created', 'true' if created else 'false')
             output('success', 'true')
 
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to sync compose: {e}")
             output('success', 'false')
             sys.exit(1)

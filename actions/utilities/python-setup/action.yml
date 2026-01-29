@@ -42,8 +42,20 @@ runs:
     - name: Add shared lib to PYTHONPATH
       shell: bash
       run: |
-        # Add lib/dokploy to PYTHONPATH if available
-        if [[ -d "$GITHUB_WORKSPACE/.github-actions/lib" ]]; then
-          echo "PYTHONPATH=$GITHUB_WORKSPACE/.github-actions/lib:$PYTHONPATH" >> $GITHUB_ENV
-          echo "Added .github-actions/lib to PYTHONPATH"
+        # Add lib to PYTHONPATH for shared modules
+        # Check multiple possible locations based on how actions are used
+
+        # When used via checkout of github-actions repo directly
+        if [[ -d "$GITHUB_WORKSPACE/lib" ]]; then
+          echo "PYTHONPATH=$GITHUB_WORKSPACE:$PYTHONPATH" >> $GITHUB_ENV
+          echo "Added workspace root to PYTHONPATH (lib/ found)"
+        # When used via sparse checkout into .github-actions/
+        elif [[ -d "$GITHUB_WORKSPACE/.github-actions/lib" ]]; then
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/.github-actions:$PYTHONPATH" >> $GITHUB_ENV
+          echo "Added .github-actions to PYTHONPATH"
+        # When running from action's own directory (internal testing)
+        elif [[ -d "$GITHUB_ACTION_PATH/../../../lib" ]]; then
+          LIB_PATH=$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)
+          echo "PYTHONPATH=$LIB_PATH:$PYTHONPATH" >> $GITHUB_ENV
+          echo "Added action root to PYTHONPATH"
         fi

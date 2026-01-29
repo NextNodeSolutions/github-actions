@@ -60,36 +60,25 @@ runs:
         GITHUB_URL: ${{ inputs.github-url }}
         GITHUB_BRANCH: ${{ inputs.github-branch }}
         DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import DokployClient, DokployError, Endpoints, output
+
         APP_ID = os.environ['APP_ID']
         SOURCE_TYPE = os.environ['SOURCE_TYPE']
         DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE', '')
         GITHUB_URL = os.environ.get('GITHUB_URL', '')
         GITHUB_BRANCH = os.environ.get('GITHUB_BRANCH', 'main')
         DOCKERFILE_PATH = os.environ.get('DOCKERFILE_PATH', './Dockerfile')
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         print("::group::Configuring source")
         print(f"Source type: {SOURCE_TYPE}")
 
         try:
+            client = DokployClient.from_env()
+
             if SOURCE_TYPE == 'docker':
                 if not DOCKER_IMAGE:
                     print("::error::Docker image required for docker source type")
@@ -98,15 +87,13 @@ runs:
                     sys.exit(1)
 
                 print(f"Configuring Docker source: {DOCKER_IMAGE}")
-                resp = requests.post(
-                    f"{DOKPLOY_URL}/api/application.update",
-                    headers=headers,
+                client.post(
+                    Endpoints.APPLICATION_UPDATE,
                     json={
                         "applicationId": APP_ID,
                         "sourceType": "docker",
                         "dockerImage": DOCKER_IMAGE,
-                    },
-                    timeout=30
+                    }
                 )
 
             elif SOURCE_TYPE == 'github':
@@ -117,17 +104,15 @@ runs:
                     sys.exit(1)
 
                 print(f"Configuring GitHub source: {GITHUB_URL}")
-                resp = requests.post(
-                    f"{DOKPLOY_URL}/api/application.update",
-                    headers=headers,
+                client.post(
+                    Endpoints.APPLICATION_UPDATE,
                     json={
                         "applicationId": APP_ID,
                         "sourceType": "github",
                         "customGitUrl": GITHUB_URL,
                         "customGitBranch": GITHUB_BRANCH,
                         "dockerfilePath": DOCKERFILE_PATH,
-                    },
-                    timeout=30
+                    }
                 )
 
             else:
@@ -136,16 +121,11 @@ runs:
                 output('success', 'false')
                 sys.exit(1)
 
-            if resp.ok:
-                print("Source configured successfully")
-                output('configured', 'true')
-                output('success', 'true')
-            else:
-                print(f"::warning::Source config failed: {resp.status_code} - {resp.text}")
-                output('configured', 'false')
-                output('success', 'false')
+            print("Source configured successfully")
+            output('configured', 'true')
+            output('success', 'true')
 
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to configure source: {e}")
             output('configured', 'false')
             output('success', 'false')

@@ -71,75 +71,70 @@ runs:
         HEALTH_RETRIES: ${{ inputs.health-retries }}
         HEALTH_START_PERIOD: ${{ inputs.health-start-period }}
         ROLLBACK_ON_FAILURE: ${{ inputs.rollback-on-failure }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import (
+            DEFAULT_HEALTH_INTERVAL,
+            DEFAULT_HEALTH_PATH,
+            DEFAULT_HEALTH_RETRIES,
+            DEFAULT_HEALTH_START_PERIOD,
+            DEFAULT_HEALTH_TIMEOUT,
+            DEFAULT_PORT,
+            DokployClient,
+            DokployError,
+            Endpoints,
+            output,
+        )
+
         APP_ID = os.environ['APP_ID']
-        PORT = int(os.environ.get('PORT', '3000'))
-        HEALTH_PATH = os.environ.get('HEALTH_PATH', '/health')
-        HEALTH_INTERVAL = int(os.environ.get('HEALTH_INTERVAL', '30'))
-        HEALTH_TIMEOUT = int(os.environ.get('HEALTH_TIMEOUT', '10'))
-        HEALTH_RETRIES = int(os.environ.get('HEALTH_RETRIES', '3'))
-        HEALTH_START_PERIOD = int(os.environ.get('HEALTH_START_PERIOD', '40'))
+        PORT = int(os.environ.get('PORT', str(DEFAULT_PORT)))
+        HEALTH_PATH = os.environ.get('HEALTH_PATH', DEFAULT_HEALTH_PATH)
+        HEALTH_INTERVAL = int(os.environ.get('HEALTH_INTERVAL', str(DEFAULT_HEALTH_INTERVAL)))
+        HEALTH_TIMEOUT = int(os.environ.get('HEALTH_TIMEOUT', str(DEFAULT_HEALTH_TIMEOUT)))
+        HEALTH_RETRIES = int(os.environ.get('HEALTH_RETRIES', str(DEFAULT_HEALTH_RETRIES)))
+        HEALTH_START_PERIOD = int(os.environ.get('HEALTH_START_PERIOD', str(DEFAULT_HEALTH_START_PERIOD)))
         ROLLBACK = os.environ.get('ROLLBACK_ON_FAILURE', 'true').lower() == 'true'
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         print("::group::Configuring health check")
         print(f"Health path: {HEALTH_PATH}")
 
         try:
-            # Docker Swarm format for health check
+            client = DokployClient.from_env()
+
+            # Docker Swarm format for health check (nanoseconds)
+            NANOSECONDS = 1_000_000_000
+
             healthcheck_swarm = {
                 "Test": ["CMD", "curl", "-f", f"http://localhost:{PORT}{HEALTH_PATH}"],
-                "Interval": HEALTH_INTERVAL * 1_000_000_000,
-                "Timeout": HEALTH_TIMEOUT * 1_000_000_000,
-                "StartPeriod": HEALTH_START_PERIOD * 1_000_000_000,
+                "Interval": HEALTH_INTERVAL * NANOSECONDS,
+                "Timeout": HEALTH_TIMEOUT * NANOSECONDS,
+                "StartPeriod": HEALTH_START_PERIOD * NANOSECONDS,
                 "Retries": HEALTH_RETRIES
             }
 
             update_config_swarm = {
                 "Parallelism": 1,
-                "Delay": 10 * 1_000_000_000,
+                "Delay": 10 * NANOSECONDS,
                 "FailureAction": "rollback" if ROLLBACK else "pause",
                 "Order": "start-first"
             }
 
-            resp = requests.post(
-                f"{DOKPLOY_URL}/api/application.update",
-                headers=headers,
+            client.post(
+                Endpoints.APPLICATION_UPDATE,
                 json={
                     "applicationId": APP_ID,
                     "healthCheckSwarm": healthcheck_swarm,
                     "updateConfigSwarm": update_config_swarm,
-                },
-                timeout=30
+                }
             )
 
-            if resp.ok:
-                print(f"Health check configured: {HEALTH_PATH}")
-                output('configured', 'true')
-                output('success', 'true')
-            else:
-                print(f"::warning::Health check config failed: {resp.status_code} - {resp.text}")
-                output('configured', 'false')
-                output('success', 'false')
+            print(f"Health check configured: {HEALTH_PATH}")
+            output('configured', 'true')
+            output('success', 'true')
 
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to configure health check: {e}")
             output('configured', 'false')
             output('success', 'false')

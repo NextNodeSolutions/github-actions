@@ -58,61 +58,42 @@ runs:
         PORT: ${{ inputs.port }}
         HTTPS: ${{ inputs.https }}
         CERTIFICATE_TYPE: ${{ inputs.certificate-type }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import DEFAULT_PORT, DokployClient, DokployError, Endpoints, output
+
         APP_ID = os.environ['APP_ID']
         DOMAIN = os.environ['DOMAIN']
-        PORT = int(os.environ.get('PORT', '3000'))
+        PORT = int(os.environ.get('PORT', str(DEFAULT_PORT)))
         HTTPS = os.environ.get('HTTPS', 'true').lower() == 'true'
         CERTIFICATE_TYPE = os.environ.get('CERTIFICATE_TYPE', 'letsencrypt')
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         print("::group::Configuring domain")
         print(f"Domain: {DOMAIN} (port {PORT})")
 
         try:
-            resp = requests.post(
-                f"{DOKPLOY_URL}/api/domain.create",
-                headers=headers,
+            client = DokployClient.from_env()
+
+            result = client.post(
+                Endpoints.DOMAIN_CREATE,
                 json={
                     "applicationId": APP_ID,
                     "host": DOMAIN,
                     "port": PORT,
                     "https": HTTPS,
                     "certificateType": CERTIFICATE_TYPE if HTTPS else "none"
-                },
-                timeout=30
+                }
             )
 
-            if resp.ok:
-                domain_id = resp.json().get('domainId', '')
-                print(f"Domain configured: {DOMAIN}")
-                output('domain-id', domain_id)
-                output('configured', 'true')
-                output('success', 'true')
-            else:
-                print(f"::warning::Domain config failed: {resp.status_code} - {resp.text}")
-                output('domain-id', '')
-                output('configured', 'false')
-                output('success', 'false')
+            domain_id = result.get('domainId', '')
+            print(f"Domain configured: {DOMAIN}")
+            output('domain-id', domain_id)
+            output('configured', 'true')
+            output('success', 'true')
 
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to configure domain: {e}")
             output('domain-id', '')
             output('configured', 'false')

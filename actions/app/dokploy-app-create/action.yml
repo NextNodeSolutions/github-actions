@@ -62,52 +62,38 @@ runs:
         DESCRIPTION: ${{ inputs.description }}
         SERVER_ID: ${{ inputs.server-id }}
         BUILD_TYPE: ${{ inputs.build-type }}
-        GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
         import sys
-        import requests
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        from lib.dokploy import DokployClient, DokployError, Endpoints, output
+
         PROJECT_ID = os.environ['PROJECT_ID']
         ENVIRONMENT_ID = os.environ['ENVIRONMENT_ID']
         APP_NAME = os.environ['APP_NAME']
         DESCRIPTION = os.environ.get('DESCRIPTION', '')
         SERVER_ID = os.environ.get('SERVER_ID', '')
         BUILD_TYPE = os.environ.get('BUILD_TYPE', 'dockerfile')
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
-
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
 
         print("::group::Creating/finding Dokploy application")
         print(f"Application: {APP_NAME}")
 
         try:
+            client = DokployClient.from_env()
+
             # Get project details to find existing apps
-            project_resp = requests.get(
-                f"{DOKPLOY_URL}/api/project.one",
+            project_detail = client.get(
+                Endpoints.PROJECT_ONE,
                 params={"projectId": PROJECT_ID},
-                headers=headers,
-                timeout=30
+                raise_for_status=False
             )
 
             apps = []
-            if project_resp.ok:
-                project_detail = project_resp.json()
+            if isinstance(project_detail, dict):
                 for env in project_detail.get('environments', []):
                     apps.extend(env.get('applications', []))
 
             # Find existing app
-            app_id = None
             for a in apps:
                 if a.get('name') == APP_NAME:
                     app_id = a.get('applicationId')
@@ -130,21 +116,15 @@ runs:
             if SERVER_ID:
                 app_data["serverId"] = SERVER_ID
 
-            create_resp = requests.post(
-                f"{DOKPLOY_URL}/api/application.create",
-                headers=headers,
-                json=app_data,
-                timeout=30
-            )
-            create_resp.raise_for_status()
-            app_id = create_resp.json().get('applicationId')
+            create_data = client.post(Endpoints.APPLICATION_CREATE, json=app_data)
+            app_id = create_data.get('applicationId')
 
             print(f"Created application: {APP_NAME} ({app_id})")
             output('app-id', app_id)
             output('created', 'true')
             output('success', 'true')
 
-        except Exception as e:
+        except DokployError as e:
             print(f"::error::Failed to create application: {e}")
             output('success', 'false')
             sys.exit(1)
