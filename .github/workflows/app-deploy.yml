@@ -335,6 +335,11 @@ jobs:
           domain: ${{ needs.config.outputs.domain }}
           port: ${{ needs.config.outputs.port }}
 
+      # Checkout project repo for compose file (if compose mode)
+      - name: Checkout Project
+        if: inputs.action == 'deploy' && (needs.config.outputs.is-compose == 'true' || inputs.compose-file != '')
+        uses: actions/checkout@v4
+
       # Deploy compose (if compose mode)
       - name: Sync Compose
         id: compose
