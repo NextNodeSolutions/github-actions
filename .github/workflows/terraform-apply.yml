@@ -18,13 +18,6 @@ on:
         required: false
         default: true
         type: boolean
-    secrets:
-      HETZNER_TOKEN:
-        required: true
-      TF_API_TOKEN:
-        required: true
-      CLOUDFLARE_API_TOKEN:
-        required: false
     outputs:
       admin-ip:
         description: 'Admin server IP'

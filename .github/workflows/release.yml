@@ -60,14 +60,6 @@ on:
         default: false
         type: boolean
         
-    secrets:
-      NPM_TOKEN:
-        description: 'NPM authentication token'
-        required: true
-      CHANGESET_GITHUB_TOKEN:
-        description: 'GitHub token for changesets (fallback to GITHUB_TOKEN)'
-        required: false
-
     outputs:
       published:
         description: 'Whether packages were published'

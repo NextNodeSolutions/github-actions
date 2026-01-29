@@ -20,10 +20,6 @@ on:
         required: false
         default: true
         type: boolean
-    secrets:
-      TAILSCALE_AUTHKEY:
-        description: 'Tailscale auth key for VPN connection'
-        required: true
     outputs:
       success:
         description: 'Whether rollback succeeded'

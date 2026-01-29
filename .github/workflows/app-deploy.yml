@@ -46,27 +46,6 @@ on:
         required: false
         default: ''
         type: string
-    secrets:
-      DOKPLOY_ADMIN_EMAIL:
-        required: true
-      DOKPLOY_ADMIN_PASSWORD:
-        required: true
-      TAILSCALE_OAUTH_CLIENT_ID:
-        required: true
-      TAILSCALE_OAUTH_SECRET:
-        required: true
-      CLOUDFLARE_API_TOKEN:
-        required: true
-      HETZNER_TOKEN:
-        required: false
-      TF_API_TOKEN:
-        required: false
-      DOKPLOY_SSH_KEY_ID:
-        required: false
-      INFISICAL_CLIENT_ID:
-        required: false
-      INFISICAL_CLIENT_SECRET:
-        required: false
     outputs:
       project-id:
         description: 'Dokploy project ID'

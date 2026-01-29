@@ -21,10 +21,6 @@ on:
         required: false
         default: 'admin-dokploy'
         type: string
-    secrets:
-      TAILSCALE_AUTHKEY:
-        description: 'Tailscale auth key for VPN connection'
-        required: true
     outputs:
       swarm-healthy:
         description: 'Whether Swarm cluster is healthy'

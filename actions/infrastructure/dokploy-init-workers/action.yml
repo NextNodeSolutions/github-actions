@@ -1,5 +1,5 @@
 name: 'Dokploy Initialize Workers'
-description: 'Auto-setup Dokploy and register remote servers as workers'
+description: 'Auto-setup Dokploy and register remote servers as workers. Composes atomic actions: dokploy-admin-setup, dokploy-registry-setup, dokploy-ssh-key-import, dokploy-server-register'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -34,372 +34,207 @@ inputs:
 outputs:
   success:
     description: 'Whether initialization succeeded'
-    value: ${{ steps.init.outputs.success }}
+    value: ${{ steps.result.outputs.success }}
   initialized-workers:
     description: 'Comma-separated list of initialized workers'
-    value: ${{ steps.init.outputs.initialized-workers }}
+    value: ${{ steps.result.outputs.initialized-workers }}
   first-time-setup:
     description: 'Whether this was first-time Dokploy setup'
-    value: ${{ steps.init.outputs.first-time-setup }}
+    value: ${{ steps.admin-setup.outputs.setup-completed }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Initialize Dokploy and Workers
-      id: init
+    # Step 1: Admin setup (waits for Dokploy, creates admin if first time)
+    - name: Setup Dokploy Admin
+      id: admin-setup
+      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-admin-setup@main
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        admin-email: ${{ inputs.dokploy-admin-email }}
+        admin-password: ${{ inputs.dokploy-admin-password }}
+
+    # Step 2: Authenticate and get session cookie
+    - name: Authenticate with Dokploy
+      id: auth
       shell: bash
       env:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
-        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
-        DOKPLOY_SSH_PRIVATE_KEY: ${{ inputs.dokploy-ssh-private-key }}
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
-        TARGET: ${{ inputs.target }}
-        MAX_RETRIES: ${{ inputs.max-retries }}
-        RETRY_DELAY: ${{ inputs.retry-delay }}
+        ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
       run: |
-        echo "::group::Dokploy Worker Initialization"
-
-        FIRST_TIME_SETUP="false"
-
-        # =================================================================
-        # STEP 1: Wait for Dokploy to be ready
-        # GitHub Actions runners have unreliable Tailscale connectivity
-        # Wait up to 10 minutes for routes to establish and Dokploy to respond
-        # =================================================================
-        echo "Waiting for Dokploy to be ready at ${DOKPLOY_URL}..."
-        for i in $(seq 1 60); do
-          if curl -sf --connect-timeout 10 --max-time 15 "${DOKPLOY_URL}" > /dev/null 2>&1; then
-            echo "Dokploy is responding"
-            break
-          fi
-          if [[ $i -eq 60 ]]; then
-            echo "::error::Dokploy did not become ready after 10 minutes"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "::endgroup::"
-            exit 1
-          fi
-          echo "Attempt $i/60: waiting 10s..."
-          sleep 10
-        done
-
-        # =================================================================
-        # STEP 2: Auto-setup Dokploy admin (first time only)
-        # Dokploy uses Better-Auth at /api/auth/*
-        # =================================================================
-        echo ""
-        echo "=== Checking Dokploy setup status ==="
+        echo "::group::Dokploy Authentication"
 
         COOKIE_JAR="/tmp/dokploy_cookies_$$.txt"
-
-        # Try to create admin via sign-up - only works on first-time setup
-        CREATE_RESPONSE=$(curl -s -c "$COOKIE_JAR" -w "\n%{http_code}" -X POST "${DOKPLOY_URL}/api/auth/sign-up/email" \
-          -H "Content-Type: application/json" \
-          -d "{\"email\": \"${DOKPLOY_ADMIN_EMAIL}\", \"password\": \"${DOKPLOY_ADMIN_PASSWORD}\", \"name\": \"Admin\"}")
-
-        HTTP_CODE=$(echo "$CREATE_RESPONSE" | tail -1)
-        RESPONSE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')
-
-        if [[ "$HTTP_CODE" == "200" ]]; then
-          if echo "$RESPONSE_BODY" | jq -e '.token' > /dev/null 2>&1; then
-            echo "First-time setup: Admin user created"
-            FIRST_TIME_SETUP="true"
-          else
-            echo "Sign-up response unexpected: $RESPONSE_BODY"
-          fi
-        else
-          echo "Admin user already exists (expected on subsequent runs)"
-        fi
-
-        # =================================================================
-        # STEP 3: Login with session cookies (Better-Auth)
-        # =================================================================
-        echo ""
-        echo "=== Authenticating with Dokploy ==="
+        echo "cookie-jar=$COOKIE_JAR" >> $GITHUB_OUTPUT
 
         LOGIN_RESPONSE=$(curl -s -c "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
           -H "Content-Type: application/json" \
-          -d "{\"email\": \"${DOKPLOY_ADMIN_EMAIL}\", \"password\": \"${DOKPLOY_ADMIN_PASSWORD}\"}")
+          -d "{\"email\": \"${ADMIN_EMAIL}\", \"password\": \"${ADMIN_PASSWORD}\"}")
 
-        # Check if login succeeded
         if ! echo "$LOGIN_RESPONSE" | jq -e '.token' > /dev/null 2>&1; then
           echo "::error::Failed to authenticate with Dokploy"
-          echo "Response: $LOGIN_RESPONSE"
           echo "success=false" >> $GITHUB_OUTPUT
           echo "::endgroup::"
           exit 1
         fi
 
         echo "Authentication successful"
-        echo "DEBUG: Login response: $LOGIN_RESPONSE"
 
-        # =================================================================
-        # STEP 3.5: Get organization ID
-        # Session cookies stored in COOKIE_JAR are used for all API calls
-        # =================================================================
-
-        # Get organization ID from login response or user data
-        # Try multiple paths as Dokploy API structure may vary
+        # Get organization ID
         ORGANIZATION_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.user.activeOrganizationId // empty')
-
         if [[ -z "$ORGANIZATION_ID" ]]; then
-          # Try alternative path in login response
           ORGANIZATION_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.user.organizationId // empty')
         fi
-
         if [[ -z "$ORGANIZATION_ID" ]]; then
-          # Try getting from session/user endpoint
-          echo "Getting organization ID from session..."
-          SESSION_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/auth/get-session" \
-            -H "Content-Type: application/json")
-          echo "DEBUG: Session response: $SESSION_RESPONSE"
+          SESSION_RESPONSE=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/auth/get-session")
           ORGANIZATION_ID=$(echo "$SESSION_RESPONSE" | jq -r '.session.activeOrganizationId // .user.activeOrganizationId // empty')
         fi
-
         if [[ -z "$ORGANIZATION_ID" ]]; then
-          echo "Getting organization ID from organizations API..."
-          # Query organizations endpoint using session cookie
-          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X GET "${DOKPLOY_URL}/api/organization.all" \
-            -H "Content-Type: application/json")
-          echo "DEBUG: Organization response: $ORG_RESPONSE"
-          # REST format returns array directly, not tRPC batch wrapper
+          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/organization.all")
           ORGANIZATION_ID=$(echo "$ORG_RESPONSE" | jq -r '.[0].organizationId // .[0].id // empty')
         fi
 
         if [[ -z "$ORGANIZATION_ID" ]]; then
-          echo "::error::Could not get organization ID from any source"
+          echo "::error::Could not get organization ID"
           echo "success=false" >> $GITHUB_OUTPUT
           echo "::endgroup::"
           exit 1
         fi
+
         echo "Organization ID: $ORGANIZATION_ID"
+        echo "organization-id=$ORGANIZATION_ID" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
 
-        # API helper function for Dokploy tRPC API
-        # Uses session cookies for authentication (Better-Auth)
-        # GET: Uses REST format at /api/endpoint.method
-        # POST: Uses tRPC mutation format at /api/trpc/endpoint.method
-        # Usage: dokploy_api GET "sshKey.all"
-        # Usage: dokploy_api POST "sshKey.create" '{"name":"...","publicKey":"..."}'
-        dokploy_api() {
-          local method="$1"
-          local endpoint="$2"
-          local data="${3:-}"
+        echo "::endgroup::"
 
-          if [[ "$method" == "GET" ]]; then
-            # GET queries use REST format with session cookie
-            local response=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/${endpoint}" \
-              -H "Content-Type: application/json")
-            echo "DEBUG: GET ${endpoint} response: $response" >&2
-            echo "$response"
-          else
-            # POST mutations use tRPC format with batch wrapper and session cookie
-            local wrapped_data="{\"0\":{\"json\":${data}}}"
-            echo "DEBUG: POST tRPC ${endpoint} with data: $wrapped_data" >&2
-            local response=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/${endpoint}?batch=1" \
-              -H "Content-Type: application/json" \
-              -d "$wrapped_data")
-            echo "DEBUG: POST tRPC ${endpoint} response: $response" >&2
-            # Extract result from tRPC batch response
-            echo "$response" | jq -r '.[0].result.data.json // .[0].result.data // .[0].error // .'
-          fi
-        }
+    # Step 3: Configure internal Docker registry
+    - name: Configure Registry
+      id: registry
+      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-registry-setup@main
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
 
-        # =================================================================
-        # STEP 3.6: Configure internal Docker registry
-        # Required for Cluster tab visibility in Dokploy UI
-        # =================================================================
-        echo ""
-        echo "=== Configuring internal Docker registry ==="
+    # Step 4: Import SSH key
+    - name: Import SSH Key
+      id: ssh-key
+      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-ssh-key-import@main
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
+        ssh-private-key: ${{ inputs.dokploy-ssh-private-key }}
+        organization-id: ${{ steps.auth.outputs.organization-id }}
 
-        EXISTING_REGISTRIES=$(dokploy_api GET "registry.all")
-        INTERNAL_REGISTRY_ID=$(echo "$EXISTING_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
+    # Step 5: Lookup dev-worker in Tailscale
+    - name: Lookup dev-worker
+      id: dev-worker-lookup
+      if: inputs.target == 'all' || inputs.target == 'dev-worker'
+      uses: nextnodesolutions/github-actions/actions/utilities/tailscale-device-lookup@main
+      with:
+        hostname: 'dev-worker'
+        tailscale-api-key: ${{ inputs.tailscale-api-token }}
+        max-retries: ${{ inputs.max-retries }}
+        retry-delay: ${{ inputs.retry-delay }}
 
-        if [[ -z "$INTERNAL_REGISTRY_ID" ]]; then
-          echo "Adding internal registry: admin-dokploy:5000"
+    # Step 6: Lookup prod-worker in Tailscale
+    - name: Lookup prod-worker
+      id: prod-worker-lookup
+      if: inputs.target == 'all' || inputs.target == 'prod-worker'
+      uses: nextnodesolutions/github-actions/actions/utilities/tailscale-device-lookup@main
+      with:
+        hostname: 'prod-worker'
+        tailscale-api-key: ${{ inputs.tailscale-api-token }}
+        max-retries: ${{ inputs.max-retries }}
+        retry-delay: ${{ inputs.retry-delay }}
 
-          CREATE_REGISTRY_RESPONSE=$(dokploy_api POST "registry.create" "$(jq -n \
-            --arg registryName "Internal Registry" \
-            --arg registryUrl "http://admin-dokploy:5000" \
-            --arg registryType "cloud" \
-            --arg username "docker" \
-            --arg password "unused" \
-            --arg imagePrefix "dokploy" \
-            '{
-              registryName: $registryName,
-              registryUrl: $registryUrl,
-              registryType: $registryType,
-              username: $username,
-              password: $password,
-              imagePrefix: $imagePrefix
-            }')")
+    # Step 7: Register workers with Dokploy
+    - name: Register Workers
+      id: result
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        COOKIE_JAR: ${{ steps.auth.outputs.cookie-jar }}
+        SSH_KEY_ID: ${{ steps.ssh-key.outputs.ssh-key-id }}
+        TARGET: ${{ inputs.target }}
+        DEV_WORKER_IP: ${{ steps.dev-worker-lookup.outputs.ip-address }}
+        DEV_WORKER_EXISTS: ${{ steps.dev-worker-lookup.outputs.exists }}
+        PROD_WORKER_IP: ${{ steps.prod-worker-lookup.outputs.ip-address }}
+        PROD_WORKER_EXISTS: ${{ steps.prod-worker-lookup.outputs.exists }}
+      run: |
+        echo "::group::Register Dokploy Workers"
 
-          # Verify registry was created
-          sleep 1
-          VERIFY_REGISTRIES=$(dokploy_api GET "registry.all")
-          REGISTRY_ID=$(echo "$VERIFY_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
-
-          if [[ -n "$REGISTRY_ID" ]]; then
-            echo "Registry configured: $REGISTRY_ID"
-          else
-            echo "::warning::Failed to verify registry creation"
-            echo "Create response: $CREATE_REGISTRY_RESPONSE"
-          fi
-        else
-          echo "Registry already configured: $INTERNAL_REGISTRY_ID"
-        fi
-
-        # =================================================================
-        # STEP 4: Import SSH key into Dokploy
-        # =================================================================
-        echo ""
-        echo "=== Importing SSH key into Dokploy ==="
-
-        SSH_KEY_NAME="nextnode-dokploy-ci"
-
-        # Check if key already exists
-        EXISTING_KEYS=$(dokploy_api GET "sshKey.all")
-        EXISTING_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r ".[] | select(.name == \"$SSH_KEY_NAME\") | .sshKeyId" 2>/dev/null || echo "")
-
-        if [[ -z "$EXISTING_KEY_ID" ]]; then
-          echo "Importing SSH key: $SSH_KEY_NAME"
-
-          # Extract public key from private key
-          echo "$DOKPLOY_SSH_PRIVATE_KEY" > /tmp/dokploy_key
-          chmod 600 /tmp/dokploy_key
-          PUBLIC_KEY=$(ssh-keygen -y -f /tmp/dokploy_key 2>/dev/null)
-          rm -f /tmp/dokploy_key
-
-          if [[ -z "$PUBLIC_KEY" ]]; then
-            echo "::error::Failed to extract public key from private key"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "::endgroup::"
-            exit 1
-          fi
-
-          CREATE_KEY_RESPONSE=$(dokploy_api POST "sshKey.create" "$(jq -n \
-            --arg name "$SSH_KEY_NAME" \
-            --arg publicKey "$PUBLIC_KEY" \
-            --arg privateKey "$DOKPLOY_SSH_PRIVATE_KEY" \
-            --arg organizationId "$ORGANIZATION_ID" \
-            '{name: $name, publicKey: $publicKey, privateKey: $privateKey, organizationId: $organizationId}')")
-
-          # tRPC mutations may return void/null on success - query to get the key ID
-          echo "Verifying SSH key was created..."
-          sleep 1
-          CREATED_KEYS=$(dokploy_api GET "sshKey.all")
-          SSH_KEY_ID=$(echo "$CREATED_KEYS" | jq -r ".[] | select(.name == \"$SSH_KEY_NAME\") | .sshKeyId" 2>/dev/null || echo "")
-
-          if [[ -z "$SSH_KEY_ID" ]]; then
-            echo "::error::Failed to import SSH key - key not found after creation"
-            echo "Create response: $CREATE_KEY_RESPONSE"
-            echo "Keys after creation: $CREATED_KEYS"
-            echo "success=false" >> $GITHUB_OUTPUT
-            echo "::endgroup::"
-            exit 1
-          fi
-
-          echo "SSH key imported: $SSH_KEY_ID"
-        else
-          SSH_KEY_ID="$EXISTING_KEY_ID"
-          echo "SSH key already exists: $SSH_KEY_ID"
-        fi
-
-        # =================================================================
-        # STEP 5: Register and setup workers
-        # =================================================================
-        echo ""
-        echo "=== Registering workers ==="
-
-        ALL_WORKERS="dev-worker prod-worker"
-        WORKERS=""
-        for w in $ALL_WORKERS; do
-          if [[ "$TARGET" == "all" || "$TARGET" == "$w" ]]; then
-            WORKERS="$WORKERS $w"
-          fi
-        done
-        WORKERS=$(echo "$WORKERS" | xargs)
-
-        if [[ -z "$WORKERS" ]]; then
-          echo "No workers to initialize for target: $TARGET"
-          echo "success=true" >> $GITHUB_OUTPUT
-          echo "initialized-workers=" >> $GITHUB_OUTPUT
-          echo "first-time-setup=$FIRST_TIME_SETUP" >> $GITHUB_OUTPUT
-          echo "::endgroup::"
-          exit 0
-        fi
-
-        echo "Workers to initialize: $WORKERS"
         INITIALIZED=""
 
-        for worker in $WORKERS; do
+        register_worker() {
+          local worker="$1"
+          local worker_ip="$2"
+          local worker_exists="$3"
+
           echo ""
           echo "=== Processing: $worker ==="
 
-          # Get worker IP from Tailscale
-          WORKER_IP=""
-          for i in $(seq 1 "$MAX_RETRIES"); do
-            WORKER_IP=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
-              "https://api.tailscale.com/api/v2/tailnet/-/devices" | \
-              jq -r ".devices[] | select(.hostname | startswith(\"$worker\")) | .addresses[0]" 2>/dev/null | head -1)
-
-            if [[ -n "$WORKER_IP" && "$WORKER_IP" != "null" ]]; then
-              echo "Found $worker at IP: $WORKER_IP"
-              break
-            fi
-            echo "Attempt $i/$MAX_RETRIES: waiting ${RETRY_DELAY}s..."
-            sleep "$RETRY_DELAY"
-          done
-
-          if [[ -z "$WORKER_IP" || "$WORKER_IP" == "null" ]]; then
-            echo "::warning::$worker not found in Tailscale after $MAX_RETRIES attempts, skipping"
-            continue
+          if [[ "$worker_exists" != "true" || -z "$worker_ip" ]]; then
+            echo "::warning::$worker not found in Tailscale, skipping"
+            return
           fi
 
+          echo "Found $worker at IP: $worker_ip"
+
           # Check if server already exists
-          EXISTING_SERVERS=$(dokploy_api GET "server.all")
+          EXISTING_SERVERS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/server.all" -H "Content-Type: application/json")
           EXISTING_SERVER_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"$worker\") | .serverId" 2>/dev/null || echo "")
 
           if [[ -n "$EXISTING_SERVER_ID" ]]; then
             echo "Server $worker already registered (ID: $EXISTING_SERVER_ID)"
             INITIALIZED="$INITIALIZED $worker"
-            continue
+            return
           fi
 
-          # Register server
-          echo "Registering server: $worker ($WORKER_IP)"
-          CREATE_SERVER_RESPONSE=$(dokploy_api POST "server.create" "$(jq -n \
+          # Register server using tRPC format
+          echo "Registering server: $worker ($worker_ip)"
+          CREATE_DATA=$(jq -n \
             --arg name "$worker" \
-            --arg ipAddress "$WORKER_IP" \
+            --arg ipAddress "$worker_ip" \
             --arg sshKeyId "$SSH_KEY_ID" \
-            '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId, serverType: "deploy"}')")
+            '{name: $name, ipAddress: $ipAddress, port: 22, username: "root", sshKeyId: $sshKeyId, serverType: "deploy"}')
+          WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
 
-          # tRPC mutations may return void/null on success - query to get the server ID
-          echo "Verifying server was created..."
+          curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.create?batch=1" \
+            -H "Content-Type: application/json" \
+            -d "$WRAPPED_DATA" > /dev/null
+
           sleep 1
-          CREATED_SERVERS=$(dokploy_api GET "server.all")
+          CREATED_SERVERS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/server.all" -H "Content-Type: application/json")
           SERVER_ID=$(echo "$CREATED_SERVERS" | jq -r ".[] | select(.name == \"$worker\") | .serverId" 2>/dev/null || echo "")
 
           if [[ -z "$SERVER_ID" ]]; then
-            echo "::error::Failed to register $worker - server not found after creation"
-            echo "Create response: $CREATE_SERVER_RESPONSE"
-            echo "Servers after creation: $CREATED_SERVERS"
-            continue
+            echo "::error::Failed to register $worker"
+            return
           fi
 
           echo "Server registered: $SERVER_ID"
 
-          # Setup server (installs Docker + Traefik)
-          echo "Setting up server (this may take a few minutes)..."
-          SETUP_RESPONSE=$(dokploy_api POST "server.setup" "$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')")
+          # Setup server
+          echo "Setting up server..."
+          SETUP_DATA=$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')
+          WRAPPED_SETUP="{\"0\":{\"json\":${SETUP_DATA}}}"
+          curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.setup?batch=1" \
+            -H "Content-Type: application/json" \
+            -d "$WRAPPED_SETUP" > /dev/null
 
-          if [[ -n "$SETUP_RESPONSE" ]]; then
-            echo "$worker initialized successfully!"
-            INITIALIZED="$INITIALIZED $worker"
-          else
-            echo "::warning::Setup may have failed for $worker, check Dokploy UI"
-            INITIALIZED="$INITIALIZED $worker"
-          fi
-        done
+          echo "$worker initialized successfully!"
+          INITIALIZED="$INITIALIZED $worker"
+        }
+
+        # Register workers based on target
+        if [[ "$TARGET" == "all" || "$TARGET" == "dev-worker" ]]; then
+          register_worker "dev-worker" "$DEV_WORKER_IP" "$DEV_WORKER_EXISTS"
+        fi
+
+        if [[ "$TARGET" == "all" || "$TARGET" == "prod-worker" ]]; then
+          register_worker "prod-worker" "$PROD_WORKER_IP" "$PROD_WORKER_EXISTS"
+        fi
 
         INITIALIZED=$(echo "$INITIALIZED" | xargs | tr ' ' ',')
         echo ""
@@ -408,5 +243,5 @@ runs:
 
         echo "success=true" >> $GITHUB_OUTPUT
         echo "initialized-workers=$INITIALIZED" >> $GITHUB_OUTPUT
-        echo "first-time-setup=$FIRST_TIME_SETUP" >> $GITHUB_OUTPUT
+
         echo "::endgroup::"

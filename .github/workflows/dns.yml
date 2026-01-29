@@ -84,11 +84,6 @@ on:
         required: false
         default: 'full'
         type: string
-    secrets:
-      CLOUDFLARE_API_TOKEN:
-        required: true
-      CLOUDFLARE_ZONE_ID:
-        required: false
     outputs:
       dns-updated:
         description: 'Whether DNS was successfully updated'
@@ -154,304 +149,77 @@ jobs:
       needs.validate-tokens.result == 'success' &&
       (needs.ssl-setup.result == 'success' || needs.ssl-setup.result == 'skipped')
     outputs:
-      success: ${{ steps.cloudflare.outputs.success == 'true' }}
-      record-id: ${{ steps.cloudflare.outputs.record-id }}
+      success: ${{ steps.dns-upsert.outputs.success == 'true' }}
+      record-id: ${{ steps.dns-upsert.outputs.record-id }}
     steps:
-      - name: Update Cloudflare DNS
-        id: cloudflare
-        env:
-          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-        run: |
-          # Get zone ID if not provided
-          if [[ -z "$CF_ZONE_ID" ]]; then
-            # Extract root domain from full domain
-            ROOT_DOMAIN=$(echo "${{ inputs.domain }}" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
-            
-            ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ROOT_DOMAIN" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json")
-            
-            CF_ZONE_ID=$(echo "$ZONE_RESPONSE" | jq -r '.result[0].id')
-            
-            if [[ -z "$CF_ZONE_ID" || "$CF_ZONE_ID" == "null" ]]; then
-              echo "success=false" >> $GITHUB_OUTPUT
-              exit 1
-            fi
-          fi
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          token: ${{ github.token }}
+          path: .github-actions
 
-          # Detect sub-subdomain depth for Railway compatibility
-          # Railway + Cloudflare proxy: sub-subdomains (3+ levels) require proxied=false
-          # Example: pr-56.dev.nextnode.fr (3 levels) → proxied=false
-          # Example: dev.nextnode.fr (2 levels) → proxied=true (default)
-          DOMAIN="${{ inputs.domain }}"
-          DOT_COUNT=$(echo "$DOMAIN" | grep -o '\.' | wc -l | xargs)
+      # Step 1: Zone Lookup (reusable)
+      - name: Lookup Cloudflare Zone
+        id: zone-lookup
+        uses: ./.github-actions/actions/utilities/cloudflare-zone-lookup
+        with:
+          domain: ${{ inputs.domain }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
-          # Override proxied setting if sub-subdomain detected
-          PROXIED_OVERRIDE="${{ inputs.proxied }}"
-          if [[ $DOT_COUNT -ge 2 ]]; then
-            # This is a sub-subdomain (e.g., pr-56.dev.nextnode.fr)
-            echo "⚠️  Sub-subdomain detected ($DOMAIN)"
-            echo "   Railway requires DNS-only mode (proxied=false) for sub-subdomains"
-            echo "   Cloudflare proxy blocks Railway CNAME detection & SSL provisioning"
-            PROXIED_OVERRIDE="false"
-          else
-            echo "✅ First-level subdomain or apex ($DOMAIN)"
-            echo "   Using proxied=$PROXIED_OVERRIDE (Cloudflare proxy compatible)"
-          fi
+      # Step 2: Main DNS Record Upsert (includes sub-subdomain detection, CNAME cleaning)
+      - name: Upsert Main DNS Record
+        id: dns-upsert
+        uses: ./.github-actions/actions/infrastructure/cloudflare-dns-upsert
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID || steps.zone-lookup.outputs.zone-id }}
+          domain: ${{ inputs.domain }}
+          record-type: ${{ inputs.record-type }}
+          content: ${{ inputs.target }}
+          proxied: ${{ inputs.proxied }}
+          ttl: ${{ inputs.ttl }}
 
-          # Check if ANY record exists for this domain (A, AAAA, CNAME)
-          # First check for the exact type we want
-          EXISTING_EXACT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}&type=${{ inputs.record-type }}" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json")
-          
-          # Then check for any conflicting record types (A, AAAA, CNAME)
-          EXISTING_ANY=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=${{ inputs.domain }}" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            -H "Content-Type: application/json")
-          
-          echo "DEBUG: API Response for exact type (${{ inputs.record-type }}):"
-          echo "$EXISTING_EXACT" | jq '.'
-          
-          echo "DEBUG: API Response for any record type:"
-          echo "$EXISTING_ANY" | jq '.'
-          
-          # Filter for A, AAAA, CNAME records only
-          CONFLICTING_RECORDS=$(echo "$EXISTING_ANY" | jq '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")]')
-          RECORD_COUNT=$(echo "$CONFLICTING_RECORDS" | jq -r 'length')
-          echo "DEBUG: Found $RECORD_COUNT conflicting records (A/AAAA/CNAME)"
-          
-          # Use exact match if available, otherwise use first conflicting record
-          if [[ $(echo "$EXISTING_EXACT" | jq -r '.result | length') -gt 0 ]]; then
-            echo "DEBUG: Using exact type match"
-            RECORD_ID=$(echo "$EXISTING_EXACT" | jq -r '.result[0].id // empty')
-            CURRENT_CONTENT=$(echo "$EXISTING_EXACT" | jq -r '.result[0].content // empty')
-            CURRENT_PROXIED=$(echo "$EXISTING_EXACT" | jq -r '.result[0].proxied // empty')
-            CURRENT_TYPE=$(echo "$EXISTING_EXACT" | jq -r '.result[0].type // empty')
-          elif [[ $RECORD_COUNT -gt 0 ]]; then
-            echo "DEBUG: Using first conflicting record for replacement"
-            RECORD_ID=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].id // empty')
-            CURRENT_CONTENT=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].content // empty')
-            CURRENT_PROXIED=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].proxied // empty')
-            CURRENT_TYPE=$(echo "$CONFLICTING_RECORDS" | jq -r '.[0].type // empty')
-          else
-            RECORD_ID=""
-            CURRENT_CONTENT=""
-            CURRENT_PROXIED=""
-            CURRENT_TYPE=""
-          fi
-          
-          echo "DEBUG: Extracted values:"
-          echo "  • RECORD_ID: '$RECORD_ID'"
-          echo "  • CURRENT_TYPE: '$CURRENT_TYPE'"
-          echo "  • CURRENT_CONTENT: '$CURRENT_CONTENT'"
-          echo "  • CURRENT_PROXIED: '$CURRENT_PROXIED'"
-          
-          # Clean target URL for CNAME records (remove ALL protocol prefixes)
-          TARGET_VALUE="${{ inputs.target }}"
-          if [[ "${{ inputs.record-type }}" == "CNAME" ]]; then
-            # Remove ALL occurrences of http:// or https:// (not just first one)
-            TARGET_VALUE=$(echo "$TARGET_VALUE" | sed -E 's|https?://||g' | sed 's|/$||g')
-            echo "Original target: ${{ inputs.target }}"
-            echo "Cleaned CNAME target: $TARGET_VALUE"
-          fi
-          
-          # Check if record already has the correct values
-          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" && "$RECORD_ID" != "" ]]; then
-            echo "Existing record found:"
-            echo "  • Record ID: $RECORD_ID"
-            echo "  • Current type: $CURRENT_TYPE"
-            echo "  • Current content: $CURRENT_CONTENT"
-            echo "  • New type: ${{ inputs.record-type }}"
-            echo "  • New content: $TARGET_VALUE"
-            echo "  • Current proxied: $CURRENT_PROXIED"
-            echo "  • New proxied: $PROXIED_OVERRIDE"
+      # Step 3: Create Wildcard DNS for sub-subdomains (conditional)
+      - name: Create Wildcard DNS (for sub-subdomains)
+        id: wildcard
+        if: steps.zone-lookup.outputs.is-sub-subdomain == 'true'
+        uses: ./.github-actions/actions/infrastructure/cloudflare-wildcard-create
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID || steps.zone-lookup.outputs.zone-id }}
+          parent-domain: ${{ steps.zone-lookup.outputs.parent-subdomain }}
+          target: ${{ steps.dns-upsert.outputs.resolved-content }}
+          record-type: ${{ inputs.record-type }}
+          proxied: ${{ steps.dns-upsert.outputs.effective-proxied }}
+          ttl: ${{ inputs.ttl }}
 
-            # Convert boolean values for comparison
-            EXPECTED_PROXIED="$PROXIED_OVERRIDE"
-            EXPECTED_TYPE="${{ inputs.record-type }}"
-            
-            if [[ "$CURRENT_TYPE" == "$EXPECTED_TYPE" && "$CURRENT_CONTENT" == "$TARGET_VALUE" && "$CURRENT_PROXIED" == "$EXPECTED_PROXIED" ]]; then
-              echo "✅ DNS record already up to date - no changes needed"
-              echo "success=true" >> $GITHUB_OUTPUT
-              {
-              echo 'record-id<<EOF'
-              echo "$RECORD_ID"
-              echo 'EOF'
-            } >> $GITHUB_OUTPUT
-              exit 0
-            else
-              echo "📝 DNS record needs to be updated/replaced"
-              echo "  Differences:"
-              [[ "$CURRENT_TYPE" != "$EXPECTED_TYPE" ]] && echo "    - Type: '$CURRENT_TYPE' → '$EXPECTED_TYPE'"
-              [[ "$CURRENT_CONTENT" != "$TARGET_VALUE" ]] && echo "    - Content: '$CURRENT_CONTENT' → '$TARGET_VALUE'"
-              [[ "$CURRENT_PROXIED" != "$EXPECTED_PROXIED" ]] && echo "    - Proxied: '$CURRENT_PROXIED' → '$EXPECTED_PROXIED'"
-            fi
-          else
-            echo "No existing record found - will create new record"
-          fi
+      # Step 4: Create ACME Challenge Record for Railway SSL (conditional)
+      - name: Create ACME Challenge Record (for Railway SSL)
+        id: acme
+        if: inputs.record-type == 'CNAME' && steps.dns-upsert.outputs.effective-proxied == 'false'
+        uses: ./.github-actions/actions/infrastructure/cloudflare-acme-record-create
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID || steps.zone-lookup.outputs.zone-id }}
+          domain: ${{ inputs.domain }}
+          target: ${{ steps.dns-upsert.outputs.resolved-content }}
+          ttl: '1'
 
-          # Detect and create wildcard for sub-subdomains (e.g., pr-56.dev.nextnode.fr)
-          DOMAIN="${{ inputs.domain }}"
-          # Extract TLD (last 2 parts: domain.tld)
-          ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
-          # Remove TLD to get subdomain parts
-          SUBDOMAIN_PARTS=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
-          # Count dots in subdomain parts (0 = direct subdomain, 1+ = sub-subdomain)
-          DOT_COUNT=$(echo "$SUBDOMAIN_PARTS" | grep -o '\.' | wc -l | xargs)
-
-          echo "DEBUG: Wildcard detection:"
-          echo "  • Full domain: $DOMAIN"
-          echo "  • Root domain: $ROOT_DOMAIN"
-          echo "  • Subdomain parts: $SUBDOMAIN_PARTS"
-          echo "  • Dot count in subdomain: $DOT_COUNT"
-
-          if [[ $DOT_COUNT -ge 1 ]]; then
-            # This is a sub-subdomain (e.g., pr-56.dev.nextnode.fr → *.dev.nextnode.fr)
-            PARENT_SUBDOMAIN=$(echo "$SUBDOMAIN_PARTS" | cut -d'.' -f2-)
-            WILDCARD_DOMAIN="*.${PARENT_SUBDOMAIN}.${ROOT_DOMAIN}"
-
-            echo "🔍 Detected sub-subdomain pattern"
-            echo "  • Creating wildcard: $WILDCARD_DOMAIN"
-
-            # Check if wildcard already exists
-            WILDCARD_CHECK=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$WILDCARD_DOMAIN" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json")
-
-            WILDCARD_EXISTS=$(echo "$WILDCARD_CHECK" | jq -r '.result | length')
-
-            if [[ $WILDCARD_EXISTS -eq 0 ]]; then
-              echo "✨ Creating wildcard DNS record: $WILDCARD_DOMAIN"
-
-              WILDCARD_DATA=$(jq -n \
-                --arg type "${{ inputs.record-type }}" \
-                --arg name "$WILDCARD_DOMAIN" \
-                --arg content "$TARGET_VALUE" \
-                --argjson proxied "$PROXIED_OVERRIDE" \
-                --argjson ttl "${{ inputs.ttl }}" \
-                '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
-
-              WILDCARD_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data "$WILDCARD_DATA")
-
-              WILDCARD_SUCCESS=$(echo "$WILDCARD_RESPONSE" | jq -r '.success')
-
-              if [[ "$WILDCARD_SUCCESS" == "true" ]]; then
-                echo "✅ Wildcard record created successfully"
-              else
-                echo "⚠️ Wildcard creation failed (non-blocking):"
-                echo "$WILDCARD_RESPONSE" | jq '.errors'
-              fi
-            else
-              echo "✅ Wildcard record already exists: $WILDCARD_DOMAIN"
-            fi
-          else
-            echo "ℹ️  Direct subdomain - no wildcard needed"
-          fi
-
-          # Prepare record data
-          RECORD_DATA=$(jq -n \
-            --arg type "${{ inputs.record-type }}" \
-            --arg name "${{ inputs.domain }}" \
-            --arg content "$TARGET_VALUE" \
-            --argjson proxied "$PROXIED_OVERRIDE" \
-            --argjson ttl "${{ inputs.ttl }}" \
-            '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
-          
-          # Create or update record
-          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" ]]; then
-            RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "$RECORD_DATA")
-          else
-            RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "$RECORD_DATA")
-            RECORD_ID=$(echo "$RESPONSE" | jq -r '.result.id')
-          fi
-          
-          # Check success
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
-          echo "success=$SUCCESS" >> $GITHUB_OUTPUT
-          {
-              echo 'record-id<<EOF'
-              echo "$RECORD_ID"
-              echo 'EOF'
-            } >> $GITHUB_OUTPUT
-          
-          if [[ "$SUCCESS" != "true" ]]; then
-            echo "$RESPONSE" | jq '.errors'
-            exit 1
-          fi
-
-          # Create _acme-challenge record for Railway SSL validation (DNS-only)
-          # Required for Railway to issue Let's Encrypt certificates for custom domains
-          # Must be DNS-only (proxied=false) to allow Railway ACME validation
-          if [[ "${{ inputs.record-type }}" == "CNAME" && "$PROXIED_OVERRIDE" == "false" ]]; then
-            ACME_DOMAIN="_acme-challenge.${{ inputs.domain }}"
-            echo ""
-            echo "🔐 Creating ACME challenge record for Railway SSL validation"
-            echo "  • Record: $ACME_DOMAIN"
-            echo "  • Target: $TARGET_VALUE"
-            echo "  • Proxied: false (required for ACME validation)"
-
-            # Check if ACME record already exists
-            ACME_CHECK=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?name=$ACME_DOMAIN&type=CNAME" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json")
-
-            ACME_EXISTS=$(echo "$ACME_CHECK" | jq -r '.result | length')
-
-            if [[ $ACME_EXISTS -eq 0 ]]; then
-              ACME_DATA=$(jq -n \
-                --arg type "CNAME" \
-                --arg name "$ACME_DOMAIN" \
-                --arg content "$TARGET_VALUE" \
-                --argjson proxied false \
-                --argjson ttl 1 \
-                '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
-
-              ACME_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
-                -H "Authorization: Bearer $CF_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data "$ACME_DATA")
-
-              ACME_SUCCESS=$(echo "$ACME_RESPONSE" | jq -r '.success')
-
-              if [[ "$ACME_SUCCESS" == "true" ]]; then
-                echo "✅ ACME challenge record created successfully"
-              else
-                echo "⚠️  ACME challenge creation failed (non-blocking):"
-                echo "$ACME_RESPONSE" | jq '.errors'
-              fi
-            else
-              echo "✅ ACME challenge record already exists"
-            fi
-          fi
-
-          # Add www subdomain (CNAME to same Railway target)
-          if [[ "${{ inputs.domain }}" != www.* ]]; then
-            echo "Adding www.${{ inputs.domain }} CNAME to same target..."
-            
-            WWW_DATA=$(jq -n \
-              --arg type "CNAME" \
-              --arg name "www.${{ inputs.domain }}" \
-              --arg content "$TARGET_VALUE" \
-              --argjson proxied true \
-              --argjson ttl 1 \
-              '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
-            
-            curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "$WWW_DATA" || echo "www subdomain might already exist"
-          fi
+      # Step 5: Create www subdomain (conditional)
+      - name: Create www Subdomain
+        id: www
+        if: ${{ !startsWith(inputs.domain, 'www.') }}
+        uses: ./.github-actions/actions/infrastructure/cloudflare-dns-upsert
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-zone-id: ${{ secrets.CLOUDFLARE_ZONE_ID || steps.zone-lookup.outputs.zone-id }}
+          domain: www.${{ inputs.domain }}
+          record-type: CNAME
+          content: ${{ steps.dns-upsert.outputs.resolved-content }}
+          proxied: 'true'
+          ttl: '1'
+        continue-on-error: true
 
   seo-setup:
     name: Configure SEO

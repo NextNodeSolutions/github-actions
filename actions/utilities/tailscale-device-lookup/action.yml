@@ -1,0 +1,80 @@
+name: 'Tailscale Device Lookup'
+description: 'Find a Tailscale device by hostname and return its ID, IP address, and online status'
+author: 'NextNodeSolutions'
+
+inputs:
+  hostname:
+    description: 'Hostname to lookup in Tailscale'
+    required: true
+  tailscale-api-key:
+    description: 'Tailscale API key with device read permissions'
+    required: true
+  max-retries:
+    description: 'Max retry attempts (1 = no retry)'
+    required: false
+    default: '1'
+  retry-delay:
+    description: 'Delay between retries in seconds'
+    required: false
+    default: '5'
+
+outputs:
+  device-id:
+    description: 'Tailscale device ID'
+    value: ${{ steps.lookup.outputs.device-id }}
+  ip-address:
+    description: 'Tailscale IP address (100.x.x.x)'
+    value: ${{ steps.lookup.outputs.ip-address }}
+  online:
+    description: 'Whether the device is online (true/false)'
+    value: ${{ steps.lookup.outputs.online }}
+  exists:
+    description: 'Whether the device exists (true/false)'
+    value: ${{ steps.lookup.outputs.exists }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Tailscale Device
+      id: lookup
+      shell: bash
+      env:
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        HOSTNAME: ${{ inputs.hostname }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
+      run: |
+        echo "::group::Tailscale Device Lookup"
+        echo "Looking up device: $HOSTNAME (max $MAX_RETRIES attempts)"
+
+        for attempt in $(seq 1 "$MAX_RETRIES"); do
+          DEVICES=$(curl -s -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+            "https://api.tailscale.com/api/v2/tailnet/-/devices")
+
+          if ! echo "$DEVICES" | jq -e '.devices' > /dev/null 2>&1; then
+            echo "::error::Failed to fetch devices from Tailscale API"
+            exit 1
+          fi
+
+          DEVICE=$(echo "$DEVICES" | jq -r ".devices[] | select(.hostname | ascii_downcase == (\"$HOSTNAME\" | ascii_downcase))")
+
+          if [ -n "$DEVICE" ] && [ "$DEVICE" != "null" ]; then
+            DEVICE_ID=$(echo "$DEVICE" | jq -r '.id')
+            IP_ADDRESS=$(echo "$DEVICE" | jq -r '.addresses[] | select(startswith("100."))' | head -1)
+            IS_ONLINE=$(echo "$DEVICE" | jq -r 'if .online then "true" else "false" end')
+            echo "Found: ID=$DEVICE_ID IP=$IP_ADDRESS Online=$IS_ONLINE"
+
+            { echo "device-id=$DEVICE_ID"; echo "ip-address=$IP_ADDRESS"; echo "online=$IS_ONLINE"; echo "exists=true"; } >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+            echo "Attempt $attempt/$MAX_RETRIES: Device not found, waiting ${RETRY_DELAY}s..."
+            sleep "$RETRY_DELAY"
+          fi
+        done
+
+        echo "Device not found after $MAX_RETRIES attempts: $HOSTNAME"
+        { echo "device-id="; echo "ip-address="; echo "online=false"; echo "exists=false"; } >> $GITHUB_OUTPUT
+        echo "::endgroup::"

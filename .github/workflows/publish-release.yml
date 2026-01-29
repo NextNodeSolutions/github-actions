@@ -45,11 +45,6 @@ on:
         required: false
         type: string
         
-    secrets:
-      NPM_TOKEN:
-        description: 'NPM authentication token'
-        required: true
-        
     outputs:
       published:
         description: 'Whether packages were published'
