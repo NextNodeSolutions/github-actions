@@ -78,7 +78,8 @@ runs:
 
         if [[ -z "$ACCESS_TOKEN" ]]; then
           echo "::error::No access token in OAuth response"
-          echo "Response: $RESPONSE"
+          # SECURITY: Only log error fields, not the full response which may contain tokens
+          echo "Error details: $(echo "$RESPONSE" | jq -r '{error: .error, error_description: .error_description} // "parse error"')"
           echo "success=false" >> $GITHUB_OUTPUT
           echo "::endgroup::"
           exit 1
@@ -146,7 +147,8 @@ runs:
 
         if [[ -z "$AUTH_KEY" ]]; then
           echo "::error::No key in auth key response"
-          echo "Response: $RESPONSE"
+          # SECURITY: Only log error fields, not the full response which may contain keys
+          echo "Error details: $(echo "$RESPONSE" | jq -r '{message: .message, error: .error} // "parse error"')"
           echo "::endgroup::"
           exit 1
         fi

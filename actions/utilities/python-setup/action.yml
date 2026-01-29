@@ -38,3 +38,12 @@ runs:
         fi
 
         echo "::endgroup::"
+
+    - name: Add shared lib to PYTHONPATH
+      shell: bash
+      run: |
+        # Add lib/dokploy to PYTHONPATH if available
+        if [[ -d "$GITHUB_WORKSPACE/.github-actions/lib" ]]; then
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/.github-actions/lib:$PYTHONPATH" >> $GITHUB_ENV
+          echo "Added .github-actions/lib to PYTHONPATH"
+        fi

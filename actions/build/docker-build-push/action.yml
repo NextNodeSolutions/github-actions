@@ -9,6 +9,9 @@ inputs:
   tailscale-oauth-secret:
     description: 'Tailscale OAuth secret for connecting to private network'
     required: true
+  registry-host:
+    description: 'Docker registry hostname (via Tailscale)'
+    default: 'admin.nextnode.fr'
   dockerfile:
     description: 'Path to Dockerfile'
     default: 'Dockerfile'
@@ -57,16 +60,20 @@ runs:
 
     - name: Test Registry Connection
       shell: bash
+      env:
+        REGISTRY_HOST: ${{ inputs.registry-host }}
       run: |
         echo "::group::Testing registry connection"
-        if curl -sf https://admin.nextnode.fr/v2/; then
+        if curl -sf "https://${REGISTRY_HOST}/v2/"; then
           echo "Registry connection successful"
         else
-          echo "::error::Cannot connect to registry at admin.nextnode.fr"
+          echo "::error::Cannot connect to registry at ${REGISTRY_HOST}"
           exit 1
         fi
         echo "::endgroup::"
 
+    # SECURITY: network=host is required for Tailscale connectivity to private registry.
+    # The registry (admin-dokploy:5000) is only accessible via Tailscale network.
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       with:
@@ -77,6 +84,7 @@ runs:
       shell: bash
       env:
         CUSTOM_TAGS: ${{ inputs.tags }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
       run: |
         echo "::group::Generating image tag"
         REPO_NAME="${GITHUB_REPOSITORY#*/}"
@@ -85,9 +93,9 @@ runs:
         if [ -n "$CUSTOM_TAGS" ]; then
           # Use first custom tag
           FIRST_TAG="${CUSTOM_TAGS%%,*}"
-          IMAGE="admin.nextnode.fr/${REPO_NAME}:${FIRST_TAG}"
+          IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
         else
-          IMAGE="admin.nextnode.fr/${REPO_NAME}:${SHA_SHORT}"
+          IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${SHA_SHORT}"
         fi
 
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT

@@ -124,6 +124,8 @@ jobs:
       ssl-mode: ${{ steps.ssl.outputs.new-mode }}
       zone-id: ${{ steps.ssl.outputs.zone-id }}
     steps:
+      # SECURITY: Checkouts internal NextNode repo using the calling workflow's token.
+      # This is safe because github-actions is owned by the same organization.
       - name: Checkout Actions Repository
         uses: actions/checkout@v4
         with:
