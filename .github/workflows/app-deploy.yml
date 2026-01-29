@@ -178,6 +178,15 @@ jobs:
           auth-key-tags: 'tag:server'
           auth-key-expiry: '3600'
 
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.NEXTNODE_APP_ID }}
+          private-key: ${{ secrets.NEXTNODE_APP_PRIVATE_KEY }}
+          owner: nextnodesolutions
+          repositories: infrastructure
+
       - name: Provision Custom VPS
         uses: ./.github-actions/actions/deploy/vps-provision
         with:
@@ -190,10 +199,10 @@ jobs:
           tailscale-api-token: ${{ steps.tailscale.outputs.api-token }}
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           tf-api-token: ${{ secrets.TF_API_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-admin-email: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
           dokploy-admin-password: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
-          dokploy-ssh-key-id: ${{ secrets.DOKPLOY_SSH_KEY_ID }}
 
   # ==========================================================================
   # DEPLOY

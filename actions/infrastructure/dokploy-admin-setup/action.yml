@@ -39,6 +39,9 @@ runs:
       run: |
         echo "::group::Dokploy Admin Setup"
 
+        # SEC-002: Mask admin password to prevent exposure in logs
+        echo "::add-mask::${ADMIN_PASSWORD}"
+
         # Wait for Dokploy to be ready
         echo "Waiting for Dokploy at ${DOKPLOY_URL}..."
         MAX_ATTEMPTS=$((WAIT_TIMEOUT / 10))
