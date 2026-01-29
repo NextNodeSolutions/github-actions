@@ -59,10 +59,10 @@ runs:
       shell: bash
       run: |
         echo "::group::Testing registry connection"
-        if curl -sf http://admin-dokploy:5000/v2/; then
+        if curl -sf http://admin-dokploy/v2/; then
           echo "Registry connection successful"
         else
-          echo "::error::Cannot connect to registry at admin-dokploy:5000"
+          echo "::error::Cannot connect to registry at admin-dokploy"
           exit 1
         fi
         echo "::endgroup::"
@@ -72,7 +72,7 @@ runs:
       run: |
         echo "::group::Configuring Docker for private registry"
         sudo mkdir -p /etc/docker
-        echo '{"insecure-registries": ["admin-dokploy:5000"]}' | sudo tee /etc/docker/daemon.json
+        echo '{"insecure-registries": ["admin-dokploy"]}' | sudo tee /etc/docker/daemon.json
         sudo systemctl restart docker
         echo "Docker configured for insecure registry (HTTP over Tailscale)"
         echo "::endgroup::"
@@ -82,7 +82,7 @@ runs:
       with:
         driver-opts: network=host
         buildkitd-config-inline: |
-          [registry."admin-dokploy:5000"]
+          [registry."admin-dokploy"]
             http = true
             insecure = true
 
@@ -99,9 +99,9 @@ runs:
         if [ -n "$CUSTOM_TAGS" ]; then
           # Use first custom tag
           FIRST_TAG="${CUSTOM_TAGS%%,*}"
-          IMAGE="admin-dokploy:5000/${REPO_NAME}:${FIRST_TAG}"
+          IMAGE="admin-dokploy/${REPO_NAME}:${FIRST_TAG}"
         else
-          IMAGE="admin-dokploy:5000/${REPO_NAME}:${SHA_SHORT}"
+          IMAGE="admin-dokploy/${REPO_NAME}:${SHA_SHORT}"
         fi
 
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
