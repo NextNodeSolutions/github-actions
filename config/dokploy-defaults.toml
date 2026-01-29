@@ -50,13 +50,19 @@ restart_policy = "unless-stopped"
 rollback_on_failure = true
 
 # =============================================================================
+# COMPOSE DEPLOYMENT MODE
+# =============================================================================
+# Deploy using docker-compose.yml instead of building a Docker image
+# When enabled, the [build] section is ignored
+[compose]
+enabled = false
+# file defaults to "docker-compose.yml" in code when enabled = true
+
+# =============================================================================
 # VPS DEFAULTS (for custom dedicated servers)
 # =============================================================================
 [vps]
 enabled = false
-type = "cpx21"                # Hetzner: cpx11, cpx21, cpx31, cpx41, cpx51
-location = "fsn1"             # fsn1 (Falkenstein), nbg1 (Nuremberg), hel1 (Helsinki)
-# When enabled, worker name is auto-generated as {project-name}-worker
 
 # =============================================================================
 # SERVICES DEFAULTS (future - not yet implemented)

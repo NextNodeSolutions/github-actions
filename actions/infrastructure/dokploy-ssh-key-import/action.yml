@@ -1,0 +1,112 @@
+name: 'Dokploy SSH Key Import'
+description: 'Import SSH key to Dokploy for server access'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  cookie-jar:
+    description: 'Path to cookie jar file for session auth'
+    required: true
+  ssh-private-key:
+    description: 'SSH private key to import'
+    required: true
+  key-name:
+    description: 'Name for the SSH key in Dokploy'
+    required: false
+    default: 'nextnode-dokploy-ci'
+  organization-id:
+    description: 'Dokploy organization ID'
+    required: true
+
+outputs:
+  ssh-key-id:
+    description: 'The SSH key ID in Dokploy'
+    value: ${{ steps.import.outputs.ssh-key-id }}
+  created:
+    description: 'Whether a new key was created (false if already existed)'
+    value: ${{ steps.import.outputs.created }}
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.import.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Import SSH Key
+      id: import
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        COOKIE_JAR: ${{ inputs.cookie-jar }}
+        SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+        KEY_NAME: ${{ inputs.key-name }}
+        ORGANIZATION_ID: ${{ inputs.organization-id }}
+      run: |
+        echo "::group::Dokploy SSH Key Import"
+
+        # Check if key already exists
+        EXISTING_KEYS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/sshKey.all" \
+          -H "Content-Type: application/json")
+
+        EXISTING_KEY_ID=$(echo "$EXISTING_KEYS" | jq -r ".[] | select(.name == \"$KEY_NAME\") | .sshKeyId" 2>/dev/null || echo "")
+
+        if [[ -n "$EXISTING_KEY_ID" ]]; then
+          echo "SSH key already exists: $EXISTING_KEY_ID"
+          echo "ssh-key-id=$EXISTING_KEY_ID" >> $GITHUB_OUTPUT
+          echo "created=false" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        echo "Importing SSH key: $KEY_NAME"
+
+        # Extract public key from private key
+        echo "$SSH_PRIVATE_KEY" > /tmp/dokploy_key
+        chmod 600 /tmp/dokploy_key
+        PUBLIC_KEY=$(ssh-keygen -y -f /tmp/dokploy_key 2>/dev/null)
+        rm -f /tmp/dokploy_key
+
+        if [[ -z "$PUBLIC_KEY" ]]; then
+          echo "::error::Failed to extract public key from private key"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        # Create SSH key using tRPC format
+        CREATE_DATA=$(jq -n \
+          --arg name "$KEY_NAME" \
+          --arg publicKey "$PUBLIC_KEY" \
+          --arg privateKey "$SSH_PRIVATE_KEY" \
+          --arg organizationId "$ORGANIZATION_ID" \
+          '{name: $name, publicKey: $publicKey, privateKey: $privateKey, organizationId: $organizationId}')
+
+        WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
+
+        curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/sshKey.create?batch=1" \
+          -H "Content-Type: application/json" \
+          -d "$WRAPPED_DATA" > /dev/null
+
+        # Verify key was created
+        sleep 1
+        CREATED_KEYS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/sshKey.all" \
+          -H "Content-Type: application/json")
+
+        SSH_KEY_ID=$(echo "$CREATED_KEYS" | jq -r ".[] | select(.name == \"$KEY_NAME\") | .sshKeyId" 2>/dev/null || echo "")
+
+        if [[ -z "$SSH_KEY_ID" ]]; then
+          echo "::error::Failed to import SSH key - key not found after creation"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "SSH key imported: $SSH_KEY_ID"
+        echo "ssh-key-id=$SSH_KEY_ID" >> $GITHUB_OUTPUT
+        echo "created=true" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"

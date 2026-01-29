@@ -1,0 +1,97 @@
+name: 'Dokploy Deploy Trigger'
+description: 'Trigger deployment on Dokploy application'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  app-id:
+    description: 'Dokploy application ID'
+    required: true
+
+outputs:
+  deployment-id:
+    description: 'Dokploy deployment ID'
+    value: ${{ steps.deploy.outputs.deployment-id }}
+  triggered:
+    description: 'Whether deployment was triggered successfully'
+    value: ${{ steps.deploy.outputs.triggered }}
+  success:
+    description: 'Whether operation succeeded'
+    value: ${{ steps.deploy.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Trigger deployment
+      id: deploy
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        APP_ID: ${{ inputs.app-id }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        APP_ID = os.environ['APP_ID']
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        print("::group::Triggering deployment")
+        print(f"Application ID: {APP_ID}")
+
+        try:
+            resp = requests.post(
+                f"{DOKPLOY_URL}/api/application.deploy",
+                headers=headers,
+                json={"applicationId": APP_ID},
+                timeout=60
+            )
+
+            if resp.ok:
+                deployment_id = resp.json().get('deploymentId', '')
+                print("Deployment triggered successfully")
+                output('deployment-id', deployment_id)
+                output('triggered', 'true')
+                output('success', 'true')
+            else:
+                print(f"::warning::Deployment trigger failed: {resp.status_code} - {resp.text}")
+                output('deployment-id', '')
+                output('triggered', 'false')
+                output('success', 'false')
+
+        except Exception as e:
+            print(f"::error::Failed to trigger deployment: {e}")
+            output('deployment-id', '')
+            output('triggered', 'false')
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")

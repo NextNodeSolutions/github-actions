@@ -1,0 +1,40 @@
+name: 'Python Setup'
+description: 'Setup Python with specified version and install pip packages'
+author: 'NextNodeSolutions'
+
+inputs:
+  python-version:
+    description: 'Python version to install'
+    required: false
+    default: '3.11'
+  packages:
+    description: 'Comma-separated list of pip packages to install'
+    required: false
+    default: 'requests,tomli'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install pip packages
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        echo "::group::Python Setup"
+        echo "Python version: $(python --version)"
+
+        if [ -n "$PACKAGES" ]; then
+          PACKAGE_LIST=$(echo "$PACKAGES" | tr ',' ' ')
+          echo "Installing packages: $PACKAGE_LIST"
+          pip install --quiet $PACKAGE_LIST
+          echo "Packages installed successfully"
+        else
+          echo "No packages to install"
+        fi
+
+        echo "::endgroup::"

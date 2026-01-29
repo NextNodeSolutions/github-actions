@@ -1,0 +1,138 @@
+name: 'Dokploy Server Register'
+description: 'Register a single server in Dokploy'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  cookie-jar:
+    description: 'Path to cookie jar file for session auth'
+    required: true
+  server-name:
+    description: 'Name for the server in Dokploy'
+    required: true
+  server-ip:
+    description: 'Server IP address'
+    required: true
+  ssh-key-id:
+    description: 'Dokploy SSH key ID for server access'
+    required: true
+  ssh-port:
+    description: 'SSH port'
+    required: false
+    default: '22'
+  ssh-username:
+    description: 'SSH username'
+    required: false
+    default: 'root'
+  server-type:
+    description: 'Server type (deploy/build)'
+    required: false
+    default: 'deploy'
+  run-setup:
+    description: 'Run server setup after registration (installs Docker + Traefik)'
+    required: false
+    default: 'true'
+
+outputs:
+  server-id:
+    description: 'The server ID in Dokploy'
+    value: ${{ steps.register.outputs.server-id }}
+  registered:
+    description: 'Whether the server was newly registered'
+    value: ${{ steps.register.outputs.registered }}
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.register.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Register Server
+      id: register
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        COOKIE_JAR: ${{ inputs.cookie-jar }}
+        SERVER_NAME: ${{ inputs.server-name }}
+        SERVER_IP: ${{ inputs.server-ip }}
+        SSH_KEY_ID: ${{ inputs.ssh-key-id }}
+        SSH_PORT: ${{ inputs.ssh-port }}
+        SSH_USERNAME: ${{ inputs.ssh-username }}
+        SERVER_TYPE: ${{ inputs.server-type }}
+        RUN_SETUP: ${{ inputs.run-setup }}
+      run: |
+        echo "::group::Dokploy Server Register: $SERVER_NAME"
+
+        # Check if server already exists
+        EXISTING_SERVERS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/server.all" \
+          -H "Content-Type: application/json")
+
+        EXISTING_SERVER_ID=$(echo "$EXISTING_SERVERS" | jq -r ".[] | select(.name == \"$SERVER_NAME\") | .serverId" 2>/dev/null || echo "")
+
+        if [[ -n "$EXISTING_SERVER_ID" ]]; then
+          echo "Server $SERVER_NAME already registered (ID: $EXISTING_SERVER_ID)"
+          echo "server-id=$EXISTING_SERVER_ID" >> $GITHUB_OUTPUT
+          echo "registered=false" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        echo "Registering server: $SERVER_NAME ($SERVER_IP)"
+
+        # Create server using tRPC format
+        CREATE_DATA=$(jq -n \
+          --arg name "$SERVER_NAME" \
+          --arg ipAddress "$SERVER_IP" \
+          --arg sshKeyId "$SSH_KEY_ID" \
+          --argjson port "$SSH_PORT" \
+          --arg username "$SSH_USERNAME" \
+          --arg serverType "$SERVER_TYPE" \
+          '{name: $name, ipAddress: $ipAddress, port: $port, username: $username, sshKeyId: $sshKeyId, serverType: $serverType}')
+
+        WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
+
+        curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.create?batch=1" \
+          -H "Content-Type: application/json" \
+          -d "$WRAPPED_DATA" > /dev/null
+
+        # Verify server was created
+        sleep 1
+        CREATED_SERVERS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/server.all" \
+          -H "Content-Type: application/json")
+
+        SERVER_ID=$(echo "$CREATED_SERVERS" | jq -r ".[] | select(.name == \"$SERVER_NAME\") | .serverId" 2>/dev/null || echo "")
+
+        if [[ -z "$SERVER_ID" ]]; then
+          echo "::error::Failed to register server - server not found after creation"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "Server registered: $SERVER_ID"
+
+        # Run setup if requested
+        if [[ "$RUN_SETUP" == "true" ]]; then
+          echo "Setting up server (this may take a few minutes)..."
+          SETUP_DATA=$(jq -n --arg serverId "$SERVER_ID" '{serverId: $serverId}')
+          WRAPPED_SETUP_DATA="{\"0\":{\"json\":${SETUP_DATA}}}"
+
+          SETUP_RESPONSE=$(curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/server.setup?batch=1" \
+            -H "Content-Type: application/json" \
+            -d "$WRAPPED_SETUP_DATA")
+
+          if [[ -n "$SETUP_RESPONSE" ]]; then
+            echo "$SERVER_NAME initialized successfully!"
+          else
+            echo "::warning::Setup may have failed for $SERVER_NAME, check Dokploy UI"
+          fi
+        fi
+
+        echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+        echo "registered=true" >> $GITHUB_OUTPUT
+        echo "success=true" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"

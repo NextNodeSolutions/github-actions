@@ -26,6 +26,9 @@ outputs:
   dot-count:
     description: 'Number of dots in domain'
     value: ${{ steps.lookup.outputs.dot_count }}
+  parent-subdomain:
+    description: 'Parent subdomain for wildcard (e.g., dev.nextnode.fr from pr-56.dev.nextnode.fr)'
+    value: ${{ steps.lookup.outputs.parent_subdomain }}
 
 runs:
   using: 'composite'
@@ -53,8 +56,17 @@ runs:
         if [[ $DOT_COUNT -ge 2 ]]; then
           echo "is_sub_subdomain=true" >> $GITHUB_OUTPUT
           echo "Sub-subdomain detected (${DOT_COUNT} dots)"
+
+          # Extract parent subdomain for wildcard creation
+          # e.g., pr-56.dev.nextnode.fr -> dev.nextnode.fr
+          SUBDOMAIN_PARTS=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
+          PARENT_SUBDOMAIN=$(echo "$SUBDOMAIN_PARTS" | cut -d'.' -f2-)
+          PARENT_SUBDOMAIN="${PARENT_SUBDOMAIN}.${ROOT_DOMAIN}"
+          echo "parent_subdomain=$PARENT_SUBDOMAIN" >> $GITHUB_OUTPUT
+          echo "Parent subdomain: $PARENT_SUBDOMAIN"
         else
           echo "is_sub_subdomain=false" >> $GITHUB_OUTPUT
+          echo "parent_subdomain=" >> $GITHUB_OUTPUT
           echo "Standard domain (${DOT_COUNT} dots)"
         fi
 

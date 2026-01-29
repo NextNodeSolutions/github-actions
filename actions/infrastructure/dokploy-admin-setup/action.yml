@@ -1,0 +1,86 @@
+name: 'Dokploy Admin Setup'
+description: 'First-time admin account creation for Dokploy'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL (e.g., https://admin.nextnode.fr)'
+    required: true
+  admin-email:
+    description: 'Dokploy admin email'
+    required: true
+  admin-password:
+    description: 'Dokploy admin password'
+    required: true
+  wait-timeout:
+    description: 'Max wait time for Dokploy readiness in seconds'
+    required: false
+    default: '600'
+
+outputs:
+  setup-completed:
+    description: 'Whether first-time setup was completed (true if new admin created)'
+    value: ${{ steps.setup.outputs.setup-completed }}
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.setup.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Dokploy Admin
+      id: setup
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        ADMIN_EMAIL: ${{ inputs.admin-email }}
+        ADMIN_PASSWORD: ${{ inputs.admin-password }}
+        WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+      run: |
+        echo "::group::Dokploy Admin Setup"
+
+        # Wait for Dokploy to be ready
+        echo "Waiting for Dokploy at ${DOKPLOY_URL}..."
+        MAX_ATTEMPTS=$((WAIT_TIMEOUT / 10))
+
+        for i in $(seq 1 "$MAX_ATTEMPTS"); do
+          if curl -sf --connect-timeout 10 --max-time 15 "${DOKPLOY_URL}" > /dev/null 2>&1; then
+            echo "Dokploy is responding"
+            break
+          fi
+          if [[ $i -eq $MAX_ATTEMPTS ]]; then
+            echo "::error::Dokploy did not become ready after ${WAIT_TIMEOUT}s"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "setup-completed=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "Attempt $i/$MAX_ATTEMPTS: waiting 10s..."
+          sleep 10
+        done
+
+        # Try to create admin via sign-up (only works on first-time setup)
+        CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${DOKPLOY_URL}/api/auth/sign-up/email" \
+          -H "Content-Type: application/json" \
+          -d "{\"email\": \"${ADMIN_EMAIL}\", \"password\": \"${ADMIN_PASSWORD}\", \"name\": \"Admin\"}")
+
+        HTTP_CODE=$(echo "$CREATE_RESPONSE" | tail -1)
+        RESPONSE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')
+
+        if [[ "$HTTP_CODE" == "200" ]]; then
+          if echo "$RESPONSE_BODY" | jq -e '.token' > /dev/null 2>&1; then
+            echo "First-time setup: Admin user created"
+            echo "setup-completed=true" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "Sign-up response unexpected: $RESPONSE_BODY"
+            echo "setup-completed=false" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Admin user already exists (expected on subsequent runs)"
+          echo "setup-completed=false" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"

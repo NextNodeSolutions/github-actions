@@ -1,0 +1,82 @@
+name: 'VPS Status Check'
+description: 'Check if VPS exists in Hetzner and Tailscale, determine if provisioning is needed'
+author: 'NextNodeSolutions'
+
+inputs:
+  vps-name:
+    description: 'Name of the VPS to check'
+    required: true
+  hcloud-token:
+    description: 'Hetzner Cloud API token'
+    required: true
+  tailscale-api-key:
+    description: 'Tailscale API key for status checks'
+    required: true
+
+outputs:
+  hetzner-exists:
+    description: 'Whether the VPS exists in Hetzner'
+    value: ${{ steps.hetzner.outputs.exists }}
+  tailscale-exists:
+    description: 'Whether the VPS exists in Tailscale'
+    value: ${{ steps.tailscale.outputs.exists }}
+  hetzner-ip:
+    description: 'Hetzner public IPv4 address'
+    value: ${{ steps.hetzner.outputs.ipv4-address }}
+  tailscale-ip:
+    description: 'Tailscale IP address'
+    value: ${{ steps.tailscale.outputs.ip-address }}
+  needs-provision:
+    description: 'Whether VPS needs to be provisioned (not in Hetzner)'
+    value: ${{ steps.decide.outputs.needs-provision }}
+  needs-wait:
+    description: 'Whether we need to wait for Tailscale (in Hetzner but not in Tailscale)'
+    value: ${{ steps.decide.outputs.needs-wait }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check Hetzner Status
+      id: hetzner
+      uses: nextnodesolutions/github-actions/actions/utilities/hetzner-server-lookup@main
+      with:
+        hcloud-token: ${{ inputs.hcloud-token }}
+        server-name: ${{ inputs.vps-name }}
+
+    - name: Check Tailscale Status
+      id: tailscale
+      uses: nextnodesolutions/github-actions/actions/utilities/tailscale-device-lookup@main
+      with:
+        tailscale-api-key: ${{ inputs.tailscale-api-key }}
+        hostname: ${{ inputs.vps-name }}
+
+    - name: Decide Action Needed
+      id: decide
+      shell: bash
+      env:
+        HETZNER_EXISTS: ${{ steps.hetzner.outputs.exists }}
+        TAILSCALE_EXISTS: ${{ steps.tailscale.outputs.exists }}
+        VPS_NAME: ${{ inputs.vps-name }}
+      run: |
+        echo "::group::VPS Status Summary"
+        echo "VPS: $VPS_NAME"
+        echo "  Hetzner: $HETZNER_EXISTS"
+        echo "  Tailscale: $TAILSCALE_EXISTS"
+
+        NEEDS_PROVISION="false"
+        NEEDS_WAIT="false"
+
+        if [[ "$HETZNER_EXISTS" == "false" ]]; then
+          NEEDS_PROVISION="true"
+          echo "  Action: Needs provisioning"
+        elif [[ "$TAILSCALE_EXISTS" == "false" ]]; then
+          NEEDS_WAIT="true"
+          echo "  Action: Wait for Tailscale"
+        else
+          echo "  Action: Ready"
+        fi
+
+        echo "needs-provision=$NEEDS_PROVISION" >> $GITHUB_OUTPUT
+        echo "needs-wait=$NEEDS_WAIT" >> $GITHUB_OUTPUT
+
+        echo "::endgroup::"

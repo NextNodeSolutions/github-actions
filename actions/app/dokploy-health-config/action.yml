@@ -1,0 +1,152 @@
+name: 'Dokploy Health Config'
+description: 'Configure health check on Dokploy application'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  app-id:
+    description: 'Dokploy application ID'
+    required: true
+  port:
+    description: 'Application port'
+    required: false
+    default: '3000'
+  health-path:
+    description: 'Health check endpoint path'
+    required: false
+    default: '/health'
+  health-interval:
+    description: 'Health check interval in seconds'
+    required: false
+    default: '30'
+  health-timeout:
+    description: 'Health check timeout in seconds'
+    required: false
+    default: '10'
+  health-retries:
+    description: 'Health check retries'
+    required: false
+    default: '3'
+  health-start-period:
+    description: 'Health check start period in seconds'
+    required: false
+    default: '40'
+  rollback-on-failure:
+    description: 'Auto-rollback on deployment failure'
+    required: false
+    default: 'true'
+
+outputs:
+  configured:
+    description: 'Whether health check was configured successfully'
+    value: ${{ steps.config.outputs.configured }}
+  success:
+    description: 'Whether operation succeeded'
+    value: ${{ steps.config.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Configure health check
+      id: config
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        APP_ID: ${{ inputs.app-id }}
+        PORT: ${{ inputs.port }}
+        HEALTH_PATH: ${{ inputs.health-path }}
+        HEALTH_INTERVAL: ${{ inputs.health-interval }}
+        HEALTH_TIMEOUT: ${{ inputs.health-timeout }}
+        HEALTH_RETRIES: ${{ inputs.health-retries }}
+        HEALTH_START_PERIOD: ${{ inputs.health-start-period }}
+        ROLLBACK_ON_FAILURE: ${{ inputs.rollback-on-failure }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        APP_ID = os.environ['APP_ID']
+        PORT = int(os.environ.get('PORT', '3000'))
+        HEALTH_PATH = os.environ.get('HEALTH_PATH', '/health')
+        HEALTH_INTERVAL = int(os.environ.get('HEALTH_INTERVAL', '30'))
+        HEALTH_TIMEOUT = int(os.environ.get('HEALTH_TIMEOUT', '10'))
+        HEALTH_RETRIES = int(os.environ.get('HEALTH_RETRIES', '3'))
+        HEALTH_START_PERIOD = int(os.environ.get('HEALTH_START_PERIOD', '40'))
+        ROLLBACK = os.environ.get('ROLLBACK_ON_FAILURE', 'true').lower() == 'true'
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        print("::group::Configuring health check")
+        print(f"Health path: {HEALTH_PATH}")
+
+        try:
+            # Docker Swarm format for health check
+            healthcheck_swarm = {
+                "Test": ["CMD", "curl", "-f", f"http://localhost:{PORT}{HEALTH_PATH}"],
+                "Interval": HEALTH_INTERVAL * 1_000_000_000,
+                "Timeout": HEALTH_TIMEOUT * 1_000_000_000,
+                "StartPeriod": HEALTH_START_PERIOD * 1_000_000_000,
+                "Retries": HEALTH_RETRIES
+            }
+
+            update_config_swarm = {
+                "Parallelism": 1,
+                "Delay": 10 * 1_000_000_000,
+                "FailureAction": "rollback" if ROLLBACK else "pause",
+                "Order": "start-first"
+            }
+
+            resp = requests.post(
+                f"{DOKPLOY_URL}/api/application.update",
+                headers=headers,
+                json={
+                    "applicationId": APP_ID,
+                    "healthCheckSwarm": healthcheck_swarm,
+                    "updateConfigSwarm": update_config_swarm,
+                },
+                timeout=30
+            )
+
+            if resp.ok:
+                print(f"Health check configured: {HEALTH_PATH}")
+                output('configured', 'true')
+                output('success', 'true')
+            else:
+                print(f"::warning::Health check config failed: {resp.status_code} - {resp.text}")
+                output('configured', 'false')
+                output('success', 'false')
+
+        except Exception as e:
+            print(f"::error::Failed to configure health check: {e}")
+            output('configured', 'false')
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")

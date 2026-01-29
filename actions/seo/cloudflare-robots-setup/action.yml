@@ -1,0 +1,228 @@
+name: 'Cloudflare Robots Setup'
+description: 'Configure X-Robots-Tag headers via Cloudflare Transform Rules to block dev subdomains from search engines'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected if not provided)'
+    required: false
+  domain:
+    description: 'Primary domain (e.g., pr-56.dev.nextnode.fr)'
+    required: true
+  blocked-subdomains:
+    description: 'Comma-separated list of subdomains to block from search engines'
+    required: false
+    default: 'dev,staging,test,preview'
+  allowed-subdomains:
+    description: 'Comma-separated list of subdomains to ALWAYS allow (whitelist)'
+    required: false
+    default: ''
+  dry-run:
+    description: 'Show what would be configured without making changes'
+    required: false
+    default: 'false'
+
+outputs:
+  configured:
+    description: 'Whether the robots configuration was successful'
+    value: ${{ steps.robots-setup.outputs.configured }}
+  rule-id:
+    description: 'The Transform Rules ruleset ID'
+    value: ${{ steps.robots-setup.outputs.rule-id }}
+  rules-created:
+    description: 'Number of new rules created'
+    value: ${{ steps.robots-setup.outputs.rules-created }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: nextnodesolutions/github-actions/actions/utilities/cloudflare-zone-lookup@main
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+
+    - name: Configure Robots via Transform Rules
+      id: robots-setup
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        BLOCKED_SUBDOMAINS: ${{ inputs.blocked-subdomains }}
+        ALLOWED_SUBDOMAINS: ${{ inputs.allowed-subdomains }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        echo "::group::Cloudflare Robots Setup via Transform Rules"
+
+        # Validate inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "::error::Cloudflare API token is required"
+          exit 1
+        fi
+
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "::error::Could not determine Zone ID"
+          exit 1
+        fi
+
+        echo "Configuration:"
+        echo "  Domain: $DOMAIN"
+        echo "  Zone ID: $CF_ZONE_ID"
+        echo "  Blocked subdomains: $BLOCKED_SUBDOMAINS"
+        echo "  Allowed subdomains: $ALLOWED_SUBDOMAINS"
+        echo "  Dry run: $DRY_RUN"
+        echo ""
+
+        # Extract root domain
+        ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+
+        # Extract current subdomain
+        SUBDOMAIN_PARTS=$(echo "$DOMAIN" | sed "s/\.$ROOT_DOMAIN$//")
+        CURRENT_SUBDOMAIN=$(echo "$SUBDOMAIN_PARTS" | awk -F. '{print $NF}')
+
+        echo "  Root domain: $ROOT_DOMAIN"
+        echo "  Current subdomain: $CURRENT_SUBDOMAIN"
+        echo ""
+
+        # Get or create Transform Rules ruleset
+        RULESET_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        API_SUCCESS=$(echo "$RULESET_RESPONSE" | jq -r '.success // false')
+        if [[ "$API_SUCCESS" != "true" ]]; then
+          echo "::error::Failed to get rulesets from Cloudflare API"
+          echo "$RULESET_RESPONSE" | jq '.errors[]?' 2>/dev/null
+          echo "configured=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        RULESET_ID=$(echo "$RULESET_RESPONSE" | jq -r '.result // [] | .[] | select(.phase == "http_response_headers_transform") | .id // empty')
+
+        if [[ -z "$RULESET_ID" ]]; then
+          echo "Creating new http_response_headers_transform ruleset..."
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "  [DRY RUN] Would create ruleset"
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "rules-created=0" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          CREATE_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{
+              "name": "Generated ruleset",
+              "description": "Cloudflare SEO Setup - Generated ruleset",
+              "kind": "zone",
+              "phase": "http_response_headers_transform"
+            }')
+
+          RULESET_ID=$(echo "$CREATE_RESPONSE" | jq -r '.result.id // empty')
+
+          if [[ -z "$RULESET_ID" ]]; then
+            echo "::error::Failed to create ruleset"
+            echo "$CREATE_RESPONSE" | jq '.errors[]?' 2>/dev/null
+            echo "configured=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "Created ruleset: $RULESET_ID"
+        else
+          echo "Found existing ruleset: $RULESET_ID"
+        fi
+
+        echo "rule-id=$RULESET_ID" >> $GITHUB_OUTPUT
+
+        # Check if current subdomain should be blocked
+        SHOULD_BLOCK=false
+
+        # Check whitelist first
+        if [[ -n "$ALLOWED_SUBDOMAINS" && ",$ALLOWED_SUBDOMAINS," == *",$CURRENT_SUBDOMAIN,"* ]]; then
+          echo "Current subdomain '$CURRENT_SUBDOMAIN' is whitelisted - skipping"
+        elif [[ ",$BLOCKED_SUBDOMAINS," == *",$CURRENT_SUBDOMAIN,"* ]]; then
+          SHOULD_BLOCK=true
+        else
+          echo "Current subdomain '$CURRENT_SUBDOMAIN' not in blocked list - skipping"
+        fi
+
+        if [[ "$SHOULD_BLOCK" != "true" ]]; then
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "rules-created=0" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Get existing rules
+        EXISTING_RULESET=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/$RULESET_ID" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        EXISTING_RULES=$(echo "$EXISTING_RULESET" | jq -r '.result.rules // []')
+        WILDCARD_DOMAIN=".${CURRENT_SUBDOMAIN}.${ROOT_DOMAIN}"
+
+        # Check if rule already exists
+        RULE_EXISTS=$(echo "$EXISTING_RULES" | jq --arg domain "$WILDCARD_DOMAIN" '[.[] | select(.expression | contains($domain))] | length')
+
+        if [[ "$RULE_EXISTS" -gt 0 ]]; then
+          echo "Rule already exists for *${WILDCARD_DOMAIN}"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "rules-created=0" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+          echo "[DRY RUN] Would create rule for *${WILDCARD_DOMAIN}"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "rules-created=1" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Create new rule
+        NEW_RULE=$(jq -n \
+          --arg expression "http.host ends_with \".${CURRENT_SUBDOMAIN}.${ROOT_DOMAIN}\"" \
+          --arg description "Block *.${CURRENT_SUBDOMAIN}.${ROOT_DOMAIN} from search engines (SEO protection)" \
+          '{
+            action: "rewrite",
+            expression: $expression,
+            description: $description,
+            action_parameters: {
+              headers: {
+                "X-Robots-Tag": {
+                  operation: "set",
+                  value: "noindex, nofollow"
+                }
+              }
+            }
+          }')
+
+        RULES_JSON=$(echo "$EXISTING_RULES" | jq --argjson rule "$NEW_RULE" '. + [$rule]')
+
+        # Update ruleset
+        UPDATE_RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/rulesets/$RULESET_ID" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data "$(jq -n --argjson rules "$RULES_JSON" '{rules: $rules}')")
+
+        UPDATE_SUCCESS=$(echo "$UPDATE_RESPONSE" | jq -r '.success // false')
+
+        if [[ "$UPDATE_SUCCESS" == "true" ]]; then
+          echo "Created X-Robots-Tag rule for *${WILDCARD_DOMAIN}"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "rules-created=1" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Failed to update Transform Rules"
+          echo "$UPDATE_RESPONSE" | jq '.errors[]?' 2>/dev/null
+          echo "configured=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "::endgroup::"

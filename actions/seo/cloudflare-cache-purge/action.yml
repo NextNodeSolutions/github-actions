@@ -1,0 +1,99 @@
+name: 'Cloudflare Cache Purge'
+description: 'Purge Cloudflare cache for a zone'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected if not provided)'
+    required: false
+  domain:
+    description: 'Domain for zone lookup if zone-id not provided'
+    required: true
+  purge-everything:
+    description: 'Purge all cached content'
+    required: false
+    default: 'true'
+  purge-urls:
+    description: 'JSON array of specific URLs to purge (ignored if purge-everything is true)'
+    required: false
+    default: ''
+
+outputs:
+  purged:
+    description: 'Whether the cache was successfully purged'
+    value: ${{ steps.cache-purge.outputs.purged }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: nextnodesolutions/github-actions/actions/utilities/cloudflare-zone-lookup@main
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+
+    - name: Purge Cloudflare Cache
+      id: cache-purge
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        PURGE_EVERYTHING: ${{ inputs.purge-everything }}
+        PURGE_URLS: ${{ inputs.purge-urls }}
+      run: |
+        echo "::group::Cloudflare Cache Purge"
+
+        # Validate inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "::error::Cloudflare API token is required"
+          exit 1
+        fi
+
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "::error::Could not determine Zone ID"
+          exit 1
+        fi
+
+        echo "Configuration:"
+        echo "  Domain: $DOMAIN"
+        echo "  Zone ID: $CF_ZONE_ID"
+        echo "  Purge everything: $PURGE_EVERYTHING"
+        echo ""
+
+        if [[ "$PURGE_EVERYTHING" == "true" ]]; then
+          echo "Purging all cached content..."
+          PURGE_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}')
+        elif [[ -n "$PURGE_URLS" ]]; then
+          echo "Purging specific URLs..."
+          PURGE_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"files\":$PURGE_URLS}")
+        else
+          echo "Nothing to purge (purge-everything is false and no URLs provided)"
+          echo "purged=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        PURGE_SUCCESS=$(echo "$PURGE_RESPONSE" | jq -r '.success // false')
+
+        if [[ "$PURGE_SUCCESS" == "true" ]]; then
+          echo "Cache purged successfully"
+          echo "purged=true" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Failed to purge cache"
+          echo "$PURGE_RESPONSE" | jq '.errors[]?' 2>/dev/null
+          echo "purged=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "::endgroup::"

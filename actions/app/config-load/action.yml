@@ -220,13 +220,23 @@ runs:
 
         # Handle custom VPS
         vps_config = config.get('vps', {})
-        vps_enabled = vps_config.get('enabled', False) or server_name == 'custom'
+        vps_enabled = vps_config.get('enabled', False)
+        vps_type = vps_config.get('type', 'cx23')
         vps_name = ''
-        vps_type = vps_config.get('type', 'cpx21')
 
-        if server_name == 'custom':
-            vps_name = env_config.get('vps', f"{project_name}-worker")
+        # Scenario 1: Global [vps] -> PROVISION new VPS, all envs deploy on it
+        if vps_enabled:
+            vps_name = vps_config.get('name', f"{project_name}-worker")
             server_name = vps_name
+        # Scenario 2: Deploy on EXISTING VPS (no provisioning)
+        elif server_name == 'custom':
+            server_name = env_config.get('vps')
+            if not server_name:
+                print(f"::error::server='custom' requires 'vps' to be set in [environments.{ENVIRONMENT}]")
+                output('success', 'false')
+                sys.exit(1)
+            # vps_enabled stays False - no provisioning needed
+        # Scenario 3: Default behavior (dev-worker, prod-worker) - no changes needed
 
         # Detect port
         config_port = config.get('project', {}).get('port')

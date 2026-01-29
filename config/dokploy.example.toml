@@ -50,15 +50,26 @@ domain = "my-project.com"
 # start_period = 40             # Grace period on startup (seconds)
 
 # =============================================================================
-# CUSTOM VPS (optional)
+# DEDICATED VPS (optional)
 # =============================================================================
-# Enable to provision a dedicated Hetzner VPS for this project
-# Worker name will be auto-generated as: {name}-worker
+# Provision a dedicated Hetzner VPS for this project
+# When enabled, ALL environments deploy on this VPS
 
 # [vps]
-# enabled = true                # Set to true to provision dedicated VPS
-# type = "cpx21"                # Hetzner: cpx11, cpx21, cpx31, cpx41, cpx51
-# location = "fsn1"             # fsn1 (Falkenstein), nbg1 (Nuremberg), hel1 (Helsinki)
+# enabled = true                # Provision dedicated VPS
+# name = "my-project-worker"    # VPS name (default: {project-name}-worker)
+# type = "cx23"                 # Hetzner: cx23, cx33, cx43, cx53, cax11, cax21...
+# location = "fsn1"             # fsn1, nbg1, hel1, ash, hil, sin
+
+# =============================================================================
+# COMPOSE DEPLOYMENT (optional)
+# =============================================================================
+# Deploy using docker-compose.yml instead of building a Docker image
+# When enabled, the [build] section is ignored
+
+# [compose]
+# enabled = true                # Enable compose deployment mode
+# file = "docker-compose.yml"   # Path to compose file
 
 # =============================================================================
 # SERVICES (optional - future implementation)
@@ -82,11 +93,10 @@ domain = "my-project.com"
 # =============================================================================
 # ENVIRONMENT OVERRIDES (optional)
 # =============================================================================
-# Override specific environment settings
 
 # [environments.production]
-# replicas = 2                  # Scale production horizontally
-# auto_deploy = false           # Require manual deployment
+# replicas = 2
+# auto_deploy = false
 
 # [environments.development]
 # replicas = 1
@@ -94,3 +104,14 @@ domain = "my-project.com"
 # [environments.preview]
 # replicas = 1
 # cleanup_on_merge = true       # Auto-cleanup when PR is merged
+
+# --- Deploy on an EXISTING VPS (no provisioning) ---
+# Use when you want to deploy on a VPS that already exists
+
+# [environments.development]
+# server = "custom"             # Required: use custom server
+# vps = "existing-vps-name"     # Required: name of existing VPS
+
+# [environments.production]
+# server = "custom"             # Required: use custom server
+# vps = "existing-vps-name"     # Required: name of existing VPS

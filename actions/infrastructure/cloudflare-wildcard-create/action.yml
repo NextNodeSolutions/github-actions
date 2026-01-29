@@ -1,0 +1,111 @@
+name: 'Cloudflare Wildcard DNS Create'
+description: 'Create wildcard DNS record for sub-subdomains (e.g., *.dev.nextnode.fr)'
+author: 'NextNodeSolutions'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  zone-id:
+    description: 'Cloudflare Zone ID'
+    required: true
+  parent-domain:
+    description: 'Parent domain for wildcard (e.g., dev.nextnode.fr creates *.dev.nextnode.fr)'
+    required: true
+  target:
+    description: 'Target content for the wildcard record'
+    required: true
+  record-type:
+    description: 'DNS record type (CNAME, A, AAAA)'
+    required: false
+    default: 'CNAME'
+  proxied:
+    description: 'Enable Cloudflare proxy'
+    required: false
+    default: 'false'
+  ttl:
+    description: 'TTL in seconds (1 = auto)'
+    required: false
+    default: '1'
+
+outputs:
+  created:
+    description: 'Whether the wildcard record was created (true/false/exists)'
+    value: ${{ steps.wildcard.outputs.created }}
+  wildcard-domain:
+    description: 'The full wildcard domain created'
+    value: ${{ steps.wildcard.outputs.wildcard-domain }}
+  record-id:
+    description: 'The DNS record ID'
+    value: ${{ steps.wildcard.outputs.record-id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create Wildcard DNS Record
+      id: wildcard
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.zone-id }}
+        PARENT_DOMAIN: ${{ inputs.parent-domain }}
+        TARGET: ${{ inputs.target }}
+        RECORD_TYPE: ${{ inputs.record-type }}
+        PROXIED: ${{ inputs.proxied }}
+        TTL: ${{ inputs.ttl }}
+      run: |
+        echo "::group::Cloudflare Wildcard DNS Create"
+
+        WILDCARD_DOMAIN="*.${PARENT_DOMAIN}"
+        echo "wildcard-domain=$WILDCARD_DOMAIN" >> $GITHUB_OUTPUT
+
+        echo "Creating wildcard DNS record:"
+        echo "  Wildcard: $WILDCARD_DOMAIN"
+        echo "  Target: $TARGET"
+        echo "  Type: $RECORD_TYPE"
+        echo "  Proxied: $PROXIED"
+
+        # Check if wildcard already exists
+        EXISTING=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?name=${WILDCARD_DOMAIN}&type=${RECORD_TYPE}" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        EXISTING_COUNT=$(echo "$EXISTING" | jq -r '.result | length')
+        EXISTING_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+
+        if [[ $EXISTING_COUNT -gt 0 && -n "$EXISTING_ID" ]]; then
+          echo "Wildcard record already exists: $WILDCARD_DOMAIN"
+          echo "created=exists" >> $GITHUB_OUTPUT
+          echo "record-id=$EXISTING_ID" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Create wildcard record
+        RECORD_DATA=$(jq -n \
+          --arg type "$RECORD_TYPE" \
+          --arg name "$WILDCARD_DOMAIN" \
+          --arg content "$TARGET" \
+          --argjson proxied "$PROXIED" \
+          --argjson ttl "$TTL" \
+          '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: $ttl}')
+
+        RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data "$RECORD_DATA")
+
+        SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+        RECORD_ID=$(echo "$RESPONSE" | jq -r '.result.id // empty')
+
+        if [[ "$SUCCESS" == "true" ]]; then
+          echo "Wildcard record created successfully"
+          echo "created=true" >> $GITHUB_OUTPUT
+          echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::Wildcard creation failed (non-blocking)"
+          echo "$RESPONSE" | jq '.errors'
+          echo "created=false" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"

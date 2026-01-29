@@ -1,0 +1,172 @@
+name: 'Cloudflare Optimizations Setup'
+description: 'Enable Cloudflare performance optimizations (minify, brotli, HTTPS, security level)'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected if not provided)'
+    required: false
+  domain:
+    description: 'Domain for zone lookup if zone-id not provided'
+    required: true
+  enable-minify:
+    description: 'Enable auto minification for CSS, JS, HTML'
+    required: false
+    default: 'true'
+  enable-brotli:
+    description: 'Enable Brotli compression'
+    required: false
+    default: 'true'
+  enable-https:
+    description: 'Enable Always Use HTTPS'
+    required: false
+    default: 'true'
+  security-level:
+    description: 'Security level: off, essentially_off, low, medium, high, under_attack'
+    required: false
+    default: 'medium'
+  dry-run:
+    description: 'Show what would be configured without making changes'
+    required: false
+    default: 'false'
+
+outputs:
+  configured:
+    description: 'Whether the optimizations were successfully configured'
+    value: ${{ steps.optimizations-setup.outputs.configured }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: nextnodesolutions/github-actions/actions/utilities/cloudflare-zone-lookup@main
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+
+    - name: Configure Cloudflare Optimizations
+      id: optimizations-setup
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        ENABLE_MINIFY: ${{ inputs.enable-minify }}
+        ENABLE_BROTLI: ${{ inputs.enable-brotli }}
+        ENABLE_HTTPS: ${{ inputs.enable-https }}
+        SECURITY_LEVEL: ${{ inputs.security-level }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        echo "::group::Cloudflare Optimizations Setup"
+
+        # Validate inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "::error::Cloudflare API token is required"
+          exit 1
+        fi
+
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "::error::Could not determine Zone ID"
+          exit 1
+        fi
+
+        echo "Configuration:"
+        echo "  Domain: $DOMAIN"
+        echo "  Zone ID: $CF_ZONE_ID"
+        echo "  Minify: $ENABLE_MINIFY"
+        echo "  Brotli: $ENABLE_BROTLI"
+        echo "  Always HTTPS: $ENABLE_HTTPS"
+        echo "  Security Level: $SECURITY_LEVEL"
+        echo "  Dry run: $DRY_RUN"
+        echo ""
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+          echo "[DRY RUN] Would enable:"
+          [[ "$ENABLE_MINIFY" == "true" ]] && echo "  - Auto Minify (CSS, JS, HTML)"
+          [[ "$ENABLE_BROTLI" == "true" ]] && echo "  - Brotli compression"
+          [[ "$ENABLE_HTTPS" == "true" ]] && echo "  - Always Use HTTPS"
+          echo "  - Security Level: $SECURITY_LEVEL"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        SUCCESS=true
+
+        # Enable Auto Minify
+        if [[ "$ENABLE_MINIFY" == "true" ]]; then
+          echo "Enabling Auto Minify..."
+          RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/minify" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"value":{"css":"on","html":"on","js":"on"}}')
+
+          if [[ $(echo "$RESPONSE" | jq -r '.success // false') == "true" ]]; then
+            echo "  Auto Minify enabled"
+          else
+            echo "  ::warning::Failed to enable Auto Minify"
+            SUCCESS=false
+          fi
+        fi
+
+        # Enable Brotli
+        if [[ "$ENABLE_BROTLI" == "true" ]]; then
+          echo "Enabling Brotli compression..."
+          RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/brotli" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"value":"on"}')
+
+          if [[ $(echo "$RESPONSE" | jq -r '.success // false') == "true" ]]; then
+            echo "  Brotli enabled"
+          else
+            echo "  ::warning::Failed to enable Brotli"
+            SUCCESS=false
+          fi
+        fi
+
+        # Enable Always Use HTTPS
+        if [[ "$ENABLE_HTTPS" == "true" ]]; then
+          echo "Enabling Always Use HTTPS..."
+          RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/always_use_https" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"value":"on"}')
+
+          if [[ $(echo "$RESPONSE" | jq -r '.success // false') == "true" ]]; then
+            echo "  Always Use HTTPS enabled"
+          else
+            echo "  ::warning::Failed to enable Always Use HTTPS"
+            SUCCESS=false
+          fi
+        fi
+
+        # Set Security Level
+        echo "Setting Security Level to $SECURITY_LEVEL..."
+        RESPONSE=$(curl -s -X PATCH "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/settings/security_level" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data "{\"value\":\"$SECURITY_LEVEL\"}")
+
+        if [[ $(echo "$RESPONSE" | jq -r '.success // false') == "true" ]]; then
+          echo "  Security Level set to $SECURITY_LEVEL"
+        else
+          echo "  ::warning::Failed to set Security Level"
+          SUCCESS=false
+        fi
+
+        if [[ "$SUCCESS" == "true" ]]; then
+          echo ""
+          echo "Cloudflare optimizations configured successfully"
+          echo "configured=true" >> $GITHUB_OUTPUT
+        else
+          echo ""
+          echo "Some optimizations failed to configure"
+          echo "configured=false" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"

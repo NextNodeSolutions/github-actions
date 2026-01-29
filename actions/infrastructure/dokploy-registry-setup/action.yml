@@ -1,0 +1,94 @@
+name: 'Dokploy Registry Setup'
+description: 'Configure internal Docker registry in Dokploy'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  cookie-jar:
+    description: 'Path to cookie jar file for session auth'
+    required: true
+
+outputs:
+  registry-configured:
+    description: 'Whether registry was configured or already exists'
+    value: ${{ steps.registry.outputs.registry-configured }}
+  registry-id:
+    description: 'The registry ID'
+    value: ${{ steps.registry.outputs.registry-id }}
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.registry.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure Internal Registry
+      id: registry
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        COOKIE_JAR: ${{ inputs.cookie-jar }}
+      run: |
+        echo "::group::Dokploy Registry Setup"
+
+        # Check for existing internal registry
+        EXISTING_REGISTRIES=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/registry.all" \
+          -H "Content-Type: application/json")
+
+        INTERNAL_REGISTRY_ID=$(echo "$EXISTING_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
+
+        if [[ -n "$INTERNAL_REGISTRY_ID" ]]; then
+          echo "Registry already configured: $INTERNAL_REGISTRY_ID"
+          echo "registry-configured=true" >> $GITHUB_OUTPUT
+          echo "registry-id=$INTERNAL_REGISTRY_ID" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        echo "Adding internal registry: admin-dokploy:5000"
+
+        # Create registry using tRPC format
+        CREATE_DATA=$(jq -n \
+          --arg registryName "Internal Registry" \
+          --arg registryUrl "http://admin-dokploy:5000" \
+          --arg registryType "cloud" \
+          --arg username "docker" \
+          --arg password "unused" \
+          --arg imagePrefix "dokploy" \
+          '{
+            registryName: $registryName,
+            registryUrl: $registryUrl,
+            registryType: $registryType,
+            username: $username,
+            password: $password,
+            imagePrefix: $imagePrefix
+          }')
+
+        WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"
+
+        curl -s -b "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/trpc/registry.create?batch=1" \
+          -H "Content-Type: application/json" \
+          -d "$WRAPPED_DATA" > /dev/null
+
+        # Verify registry was created
+        sleep 1
+        VERIFY_REGISTRIES=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/registry.all" \
+          -H "Content-Type: application/json")
+
+        REGISTRY_ID=$(echo "$VERIFY_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
+
+        if [[ -n "$REGISTRY_ID" ]]; then
+          echo "Registry configured: $REGISTRY_ID"
+          echo "registry-configured=true" >> $GITHUB_OUTPUT
+          echo "registry-id=$REGISTRY_ID" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::Failed to verify registry creation"
+          echo "registry-configured=false" >> $GITHUB_OUTPUT
+          echo "success=false" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"

@@ -1,0 +1,65 @@
+name: 'Hetzner Server Lookup'
+description: 'Find a Hetzner Cloud server by name and return its ID, IP addresses, and status'
+author: 'NextNodeSolutions'
+
+inputs:
+  server-name:
+    description: 'Server name to lookup in Hetzner Cloud'
+    required: true
+  hcloud-token:
+    description: 'Hetzner Cloud API token'
+    required: true
+
+outputs:
+  server-id:
+    description: 'Hetzner server ID'
+    value: ${{ steps.lookup.outputs.server-id }}
+  ipv4-address:
+    description: 'Server public IPv4 address'
+    value: ${{ steps.lookup.outputs.ipv4-address }}
+  ipv6-address:
+    description: 'Server public IPv6 address'
+    value: ${{ steps.lookup.outputs.ipv6-address }}
+  status:
+    description: 'Server status (running, starting, stopping, off, etc.)'
+    value: ${{ steps.lookup.outputs.status }}
+  exists:
+    description: 'Whether the server exists (true/false)'
+    value: ${{ steps.lookup.outputs.exists }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Hetzner Server
+      id: lookup
+      shell: bash
+      env:
+        HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
+        SERVER_NAME: ${{ inputs.server-name }}
+      run: |
+        echo "::group::Hetzner Server Lookup"
+        echo "Looking up server: $SERVER_NAME"
+
+        RESPONSE=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+          "https://api.hetzner.cloud/v1/servers?name=${SERVER_NAME}")
+
+        if ! echo "$RESPONSE" | jq -e '.servers' > /dev/null 2>&1; then
+          echo "::error::Failed to fetch servers from Hetzner API" && exit 1
+        fi
+
+        SERVER=$(echo "$RESPONSE" | jq -r '.servers[0]')
+
+        if [ -z "$SERVER" ] || [ "$SERVER" = "null" ]; then
+          echo "Server not found: $SERVER_NAME"
+          { echo "server-id="; echo "ipv4-address="; echo "ipv6-address="; echo "status="; echo "exists=false"; } >> $GITHUB_OUTPUT
+          echo "::endgroup::" && exit 0
+        fi
+
+        SERVER_ID=$(echo "$SERVER" | jq -r '.id')
+        IPV4=$(echo "$SERVER" | jq -r '.public_net.ipv4.ip // ""')
+        IPV6=$(echo "$SERVER" | jq -r '.public_net.ipv6.ip // ""')
+        STATUS=$(echo "$SERVER" | jq -r '.status')
+        echo "Found: ID=$SERVER_ID IPv4=$IPV4 IPv6=$IPV6 Status=$STATUS"
+
+        { echo "server-id=$SERVER_ID"; echo "ipv4-address=$IPV4"; echo "ipv6-address=$IPV6"; echo "status=$STATUS"; echo "exists=true"; } >> $GITHUB_OUTPUT
+        echo "::endgroup::"

@@ -1,0 +1,75 @@
+name: 'VPS Tailscale Wait'
+description: 'Wait for VPS to join Tailscale network'
+author: 'NextNodeSolutions'
+
+inputs:
+  vps-name:
+    description: 'Name of the VPS to wait for'
+    required: true
+  tailscale-api-key:
+    description: 'Tailscale API key for status checks'
+    required: true
+  timeout-seconds:
+    description: 'Maximum time to wait in seconds'
+    required: false
+    default: '300'
+  poll-interval:
+    description: 'Seconds between checks'
+    required: false
+    default: '10'
+
+outputs:
+  tailscale-ip:
+    description: 'Tailscale IP address once connected'
+    value: ${{ steps.wait.outputs.tailscale-ip }}
+  online:
+    description: 'Whether the VPS is online in Tailscale'
+    value: ${{ steps.wait.outputs.online }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Wait for Tailscale Connection
+      id: wait
+      shell: bash
+      env:
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-key }}
+        VPS_NAME: ${{ inputs.vps-name }}
+        TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        POLL_INTERVAL: ${{ inputs.poll-interval }}
+      run: |
+        echo "::group::Waiting for Tailscale"
+        echo "VPS: $VPS_NAME"
+        echo "Timeout: ${TIMEOUT_SECONDS}s"
+
+        VPS_NAME_LOWER=$(echo "$VPS_NAME" | tr '[:upper:]' '[:lower:]')
+        TAILSCALE_IP=""
+        ELAPSED=0
+        MAX_ATTEMPTS=$((TIMEOUT_SECONDS / POLL_INTERVAL))
+
+        for i in $(seq 1 $MAX_ATTEMPTS); do
+          RESPONSE=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+            "https://api.tailscale.com/api/v2/tailnet/-/devices" 2>/dev/null || echo '{"devices":[]}')
+
+          TAILSCALE_IP=$(echo "$RESPONSE" | \
+            jq -r --arg name "$VPS_NAME_LOWER" \
+            '.devices[] | select((.hostname | ascii_downcase) == $name or ((.hostname | ascii_downcase) | startswith($name + "-"))) | .addresses[0]' 2>/dev/null | head -1)
+
+          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "null" ]]; then
+            echo "VPS joined Tailscale: $TAILSCALE_IP"
+            echo "tailscale-ip=$TAILSCALE_IP" >> $GITHUB_OUTPUT
+            echo "online=true" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          ELAPSED=$((i * POLL_INTERVAL))
+          echo "Attempt $i/$MAX_ATTEMPTS: waiting ${POLL_INTERVAL}s... (${ELAPSED}s elapsed)"
+          sleep $POLL_INTERVAL
+        done
+
+        echo "::error::VPS did not join Tailscale after ${TIMEOUT_SECONDS} seconds"
+        echo "tailscale-ip=" >> $GITHUB_OUTPUT
+        echo "online=false" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 1

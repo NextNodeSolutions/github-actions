@@ -1,0 +1,126 @@
+name: 'Dokploy Domain Config'
+description: 'Configure domain on Dokploy application'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  app-id:
+    description: 'Dokploy application ID'
+    required: true
+  domain:
+    description: 'Domain hostname'
+    required: true
+  port:
+    description: 'Application port'
+    required: false
+    default: '3000'
+  https:
+    description: 'Enable HTTPS'
+    required: false
+    default: 'true'
+  certificate-type:
+    description: 'Certificate type (letsencrypt, none)'
+    required: false
+    default: 'letsencrypt'
+
+outputs:
+  domain-id:
+    description: 'Dokploy domain ID'
+    value: ${{ steps.config.outputs.domain-id }}
+  configured:
+    description: 'Whether domain was configured successfully'
+    value: ${{ steps.config.outputs.configured }}
+  success:
+    description: 'Whether operation succeeded'
+    value: ${{ steps.config.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Configure domain
+      id: config
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        APP_ID: ${{ inputs.app-id }}
+        DOMAIN: ${{ inputs.domain }}
+        PORT: ${{ inputs.port }}
+        HTTPS: ${{ inputs.https }}
+        CERTIFICATE_TYPE: ${{ inputs.certificate-type }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        APP_ID = os.environ['APP_ID']
+        DOMAIN = os.environ['DOMAIN']
+        PORT = int(os.environ.get('PORT', '3000'))
+        HTTPS = os.environ.get('HTTPS', 'true').lower() == 'true'
+        CERTIFICATE_TYPE = os.environ.get('CERTIFICATE_TYPE', 'letsencrypt')
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        print("::group::Configuring domain")
+        print(f"Domain: {DOMAIN} (port {PORT})")
+
+        try:
+            resp = requests.post(
+                f"{DOKPLOY_URL}/api/domain.create",
+                headers=headers,
+                json={
+                    "applicationId": APP_ID,
+                    "host": DOMAIN,
+                    "port": PORT,
+                    "https": HTTPS,
+                    "certificateType": CERTIFICATE_TYPE if HTTPS else "none"
+                },
+                timeout=30
+            )
+
+            if resp.ok:
+                domain_id = resp.json().get('domainId', '')
+                print(f"Domain configured: {DOMAIN}")
+                output('domain-id', domain_id)
+                output('configured', 'true')
+                output('success', 'true')
+            else:
+                print(f"::warning::Domain config failed: {resp.status_code} - {resp.text}")
+                output('domain-id', '')
+                output('configured', 'false')
+                output('success', 'false')
+
+        except Exception as e:
+            print(f"::error::Failed to configure domain: {e}")
+            output('domain-id', '')
+            output('configured', 'false')
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")

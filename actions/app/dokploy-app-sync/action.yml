@@ -1,5 +1,5 @@
 name: 'Dokploy App Sync'
-description: 'Create or update Dokploy application'
+description: 'Create or update Dokploy application (composes atomic actions)'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -24,6 +24,10 @@ inputs:
     default: ''
   docker-image:
     description: 'Docker image to deploy'
+    required: false
+    default: ''
+  github-url:
+    description: 'GitHub repository URL (alternative to docker-image)'
     required: false
     default: ''
   domain:
@@ -62,237 +66,94 @@ inputs:
     description: 'Auto-rollback on failure'
     required: false
     default: 'true'
+  skip-deploy:
+    description: 'Skip deployment trigger'
+    required: false
+    default: 'false'
 
 outputs:
   application-id:
     description: 'Dokploy application ID'
-    value: ${{ steps.sync.outputs.application-id }}
+    value: ${{ steps.app-create.outputs.app-id }}
   created:
     description: 'Whether application was created'
-    value: ${{ steps.sync.outputs.created }}
+    value: ${{ steps.app-create.outputs.created }}
+  deployment-id:
+    description: 'Deployment ID (if triggered)'
+    value: ${{ steps.deploy.outputs.deployment-id }}
   success:
     description: 'Whether operation succeeded'
-    value: ${{ steps.sync.outputs.success }}
+    value: ${{ steps.app-create.outputs.success }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Setup Python
-      uses: actions/setup-python@v5
+    # Step 1: Create or find application
+    - name: Create or find application
+      id: app-create
+      uses: ./actions/app/dokploy-app-create
       with:
-        python-version: '3.11'
+        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-token: ${{ inputs.dokploy-token }}
+        project-id: ${{ inputs.project-id }}
+        environment-id: ${{ inputs.environment-id }}
+        app-name: ${{ inputs.app-name }}
+        server-id: ${{ inputs.server-id }}
+        build-type: ${{ inputs.build-type }}
 
-    - name: Install dependencies
-      shell: bash
-      run: pip install requests
+    # Step 2: Configure source (Docker or GitHub)
+    - name: Configure Docker source
+      if: inputs.docker-image != ''
+      uses: ./actions/app/dokploy-source-config
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-token: ${{ inputs.dokploy-token }}
+        app-id: ${{ steps.app-create.outputs.app-id }}
+        source-type: docker
+        docker-image: ${{ inputs.docker-image }}
 
-    - name: Sync application
-      id: sync
-      shell: python
-      env:
-        DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
-        PROJECT_ID: ${{ inputs.project-id }}
-        ENVIRONMENT_ID: ${{ inputs.environment-id }}
-        APP_NAME: ${{ inputs.app-name }}
-        SERVER_ID: ${{ inputs.server-id }}
-        DOCKER_IMAGE: ${{ inputs.docker-image }}
-        DOMAIN: ${{ inputs.domain }}
-        PORT: ${{ inputs.port }}
-        BUILD_TYPE: ${{ inputs.build-type }}
-        HC_PATH: ${{ inputs.healthcheck-path }}
-        HC_INTERVAL: ${{ inputs.healthcheck-interval }}
-        HC_TIMEOUT: ${{ inputs.healthcheck-timeout }}
-        HC_RETRIES: ${{ inputs.healthcheck-retries }}
-        HC_START_PERIOD: ${{ inputs.healthcheck-start-period }}
-        ROLLBACK_ON_FAILURE: ${{ inputs.rollback-on-failure }}
-        GITHUB_OUTPUT: ${{ github.output }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-      run: |
-        import os
-        import sys
-        import requests
+    - name: Configure GitHub source
+      if: inputs.docker-image == '' && inputs.github-url != ''
+      uses: ./actions/app/dokploy-source-config
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-token: ${{ inputs.dokploy-token }}
+        app-id: ${{ steps.app-create.outputs.app-id }}
+        source-type: github
+        github-url: ${{ inputs.github-url }}
 
-        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
-        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
-        PROJECT_ID = os.environ['PROJECT_ID']
-        ENVIRONMENT_ID = os.environ['ENVIRONMENT_ID']
-        APP_NAME = os.environ['APP_NAME']
-        SERVER_ID = os.environ.get('SERVER_ID', '')
-        DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE', '')
-        DOMAIN = os.environ.get('DOMAIN', '')
-        PORT = int(os.environ.get('PORT', '3000'))
-        BUILD_TYPE = os.environ.get('BUILD_TYPE', 'dockerfile')
-        HC_PATH = os.environ.get('HC_PATH', '/health')
-        HC_INTERVAL = int(os.environ.get('HC_INTERVAL', '30'))
-        HC_TIMEOUT = int(os.environ.get('HC_TIMEOUT', '10'))
-        HC_RETRIES = int(os.environ.get('HC_RETRIES', '3'))
-        HC_START_PERIOD = int(os.environ.get('HC_START_PERIOD', '40'))
-        ROLLBACK = os.environ.get('ROLLBACK_ON_FAILURE', 'true') == 'true'
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
-        GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
+    # Step 3: Configure domain (if provided)
+    - name: Configure domain
+      if: inputs.domain != ''
+      uses: ./actions/app/dokploy-domain-config
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-token: ${{ inputs.dokploy-token }}
+        app-id: ${{ steps.app-create.outputs.app-id }}
+        domain: ${{ inputs.domain }}
+        port: ${{ inputs.port }}
 
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    f.write(f"{key}={value}\n")
+    # Step 4: Configure health check
+    - name: Configure health check
+      uses: ./actions/app/dokploy-health-config
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-token: ${{ inputs.dokploy-token }}
+        app-id: ${{ steps.app-create.outputs.app-id }}
+        port: ${{ inputs.port }}
+        health-path: ${{ inputs.healthcheck-path }}
+        health-interval: ${{ inputs.healthcheck-interval }}
+        health-timeout: ${{ inputs.healthcheck-timeout }}
+        health-retries: ${{ inputs.healthcheck-retries }}
+        health-start-period: ${{ inputs.healthcheck-start-period }}
+        rollback-on-failure: ${{ inputs.rollback-on-failure }}
 
-        headers = {
-            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
-            "Content-Type": "application/json"
-        }
-
-        print("::group::Syncing application")
-        print(f"Application: {APP_NAME}")
-
-        try:
-            # Get project details to find existing apps
-            project_resp = requests.get(
-                f"{DOKPLOY_URL}/api/project.one",
-                params={"projectId": PROJECT_ID},
-                headers=headers,
-                timeout=30
-            )
-
-            apps = []
-            if project_resp.ok:
-                project_detail = project_resp.json()
-                for env in project_detail.get('environments', []):
-                    apps.extend(env.get('applications', []))
-
-            # Find existing app
-            app_id = None
-            for a in apps:
-                if a.get('name') == APP_NAME:
-                    app_id = a.get('applicationId')
-                    print(f"Found existing application: {APP_NAME} ({app_id})")
-                    break
-
-            created = False
-            if not app_id:
-                # Create application
-                app_data = {
-                    "name": APP_NAME,
-                    "projectId": PROJECT_ID,
-                    "environmentId": ENVIRONMENT_ID,
-                    "buildType": BUILD_TYPE,
-                }
-                if SERVER_ID:
-                    app_data["serverId"] = SERVER_ID
-
-                create_resp = requests.post(
-                    f"{DOKPLOY_URL}/api/application.create",
-                    headers=headers,
-                    json=app_data,
-                    timeout=30
-                )
-                create_resp.raise_for_status()
-                app_id = create_resp.json().get('applicationId')
-                created = True
-                print(f"Created application: {APP_NAME} ({app_id})")
-
-            # Configure source
-            if DOCKER_IMAGE:
-                print(f"Configuring Docker source: {DOCKER_IMAGE}")
-                source_resp = requests.post(
-                    f"{DOKPLOY_URL}/api/application.update",
-                    headers=headers,
-                    json={
-                        "applicationId": app_id,
-                        "sourceType": "docker",
-                        "dockerImage": DOCKER_IMAGE,
-                    },
-                    timeout=30
-                )
-                if source_resp.ok:
-                    print(f"Docker source configured")
-                else:
-                    print(f"::warning::Docker source config: {source_resp.status_code}")
-            elif GITHUB_REPOSITORY:
-                github_url = f"https://github.com/{GITHUB_REPOSITORY}"
-                source_resp = requests.post(
-                    f"{DOKPLOY_URL}/api/application.update",
-                    headers=headers,
-                    json={
-                        "applicationId": app_id,
-                        "sourceType": "github",
-                        "customGitUrl": github_url,
-                        "customGitBranch": "main"
-                    },
-                    timeout=30
-                )
-                if source_resp.ok:
-                    print(f"GitHub source configured: {github_url}")
-
-            # Configure domain
-            if DOMAIN:
-                domain_resp = requests.post(
-                    f"{DOKPLOY_URL}/api/domain.create",
-                    headers=headers,
-                    json={
-                        "applicationId": app_id,
-                        "host": DOMAIN,
-                        "port": PORT,
-                        "https": True,
-                        "certificateType": "letsencrypt"
-                    },
-                    timeout=30
-                )
-                if domain_resp.ok:
-                    print(f"Domain configured: {DOMAIN} (port {PORT})")
-                else:
-                    print(f"::warning::Domain config: {domain_resp.status_code}")
-
-            # Configure health check (Docker Swarm format)
-            healthcheck_swarm = {
-                "Test": ["CMD", "curl", "-f", f"http://localhost:{PORT}{HC_PATH}"],
-                "Interval": HC_INTERVAL * 1_000_000_000,
-                "Timeout": HC_TIMEOUT * 1_000_000_000,
-                "StartPeriod": HC_START_PERIOD * 1_000_000_000,
-                "Retries": HC_RETRIES
-            }
-
-            update_config_swarm = {
-                "Parallelism": 1,
-                "Delay": 10 * 1_000_000_000,
-                "FailureAction": "rollback" if ROLLBACK else "pause",
-                "Order": "start-first"
-            }
-
-            hc_resp = requests.post(
-                f"{DOKPLOY_URL}/api/application.update",
-                headers=headers,
-                json={
-                    "applicationId": app_id,
-                    "healthCheckSwarm": healthcheck_swarm,
-                    "updateConfigSwarm": update_config_swarm,
-                },
-                timeout=30
-            )
-            if hc_resp.ok:
-                print(f"Health check configured: {HC_PATH}")
-            else:
-                print(f"::warning::Health check config: {hc_resp.status_code}")
-
-            # Trigger deployment
-            deploy_resp = requests.post(
-                f"{DOKPLOY_URL}/api/application.deploy",
-                headers=headers,
-                json={"applicationId": app_id},
-                timeout=60
-            )
-            if deploy_resp.ok:
-                print("Deployment triggered")
-            else:
-                print(f"::warning::Deployment trigger: {deploy_resp.status_code}")
-
-            output('application-id', app_id)
-            output('created', 'true' if created else 'false')
-            output('success', 'true')
-
-        except Exception as e:
-            print(f"::error::Failed to sync application: {e}")
-            output('success', 'false')
-            sys.exit(1)
-
-        print("::endgroup::")
+    # Step 5: Trigger deployment
+    - name: Trigger deployment
+      id: deploy
+      if: inputs.skip-deploy != 'true'
+      uses: ./actions/app/dokploy-deploy-trigger
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-token: ${{ inputs.dokploy-token }}
+        app-id: ${{ steps.app-create.outputs.app-id }}

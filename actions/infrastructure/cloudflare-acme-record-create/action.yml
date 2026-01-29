@@ -1,0 +1,98 @@
+name: 'Cloudflare ACME Challenge Record Create'
+description: "Create _acme-challenge DNS record for SSL validation (Railway/Let's Encrypt)"
+author: 'NextNodeSolutions'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  zone-id:
+    description: 'Cloudflare Zone ID'
+    required: true
+  domain:
+    description: 'Domain to create ACME challenge for (creates _acme-challenge.domain)'
+    required: true
+  target:
+    description: 'Target content for the ACME record (typically same as main CNAME target)'
+    required: true
+  ttl:
+    description: 'TTL in seconds (1 = auto)'
+    required: false
+    default: '1'
+
+outputs:
+  created:
+    description: 'Whether the ACME record was created (true/false/exists)'
+    value: ${{ steps.acme.outputs.created }}
+  acme-domain:
+    description: 'The full ACME challenge domain created'
+    value: ${{ steps.acme.outputs.acme-domain }}
+  record-id:
+    description: 'The DNS record ID'
+    value: ${{ steps.acme.outputs.record-id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create ACME Challenge Record
+      id: acme
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        TARGET: ${{ inputs.target }}
+        TTL: ${{ inputs.ttl }}
+      run: |
+        echo "::group::Cloudflare ACME Challenge Record Create"
+
+        ACME_DOMAIN="_acme-challenge.${DOMAIN}"
+        echo "acme-domain=$ACME_DOMAIN" >> $GITHUB_OUTPUT
+
+        echo "Creating ACME challenge record for SSL validation:"
+        echo "  Record: $ACME_DOMAIN"
+        echo "  Target: $TARGET"
+        echo "  Proxied: false (required for ACME validation)"
+
+        # Check if ACME record already exists
+        EXISTING=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records?name=${ACME_DOMAIN}&type=CNAME" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        EXISTING_COUNT=$(echo "$EXISTING" | jq -r '.result | length')
+        EXISTING_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+
+        if [[ $EXISTING_COUNT -gt 0 && -n "$EXISTING_ID" ]]; then
+          echo "ACME challenge record already exists: $ACME_DOMAIN"
+          echo "created=exists" >> $GITHUB_OUTPUT
+          echo "record-id=$EXISTING_ID" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Create ACME record (always proxied=false for ACME validation)
+        RECORD_DATA=$(jq -n \
+          --arg name "$ACME_DOMAIN" \
+          --arg content "$TARGET" \
+          --argjson ttl "$TTL" \
+          '{type: "CNAME", name: $name, content: $content, proxied: false, ttl: $ttl}')
+
+        RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/dns_records" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data "$RECORD_DATA")
+
+        SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+        RECORD_ID=$(echo "$RESPONSE" | jq -r '.result.id // empty')
+
+        if [[ "$SUCCESS" == "true" ]]; then
+          echo "ACME challenge record created successfully"
+          echo "created=true" >> $GITHUB_OUTPUT
+          echo "record-id=$RECORD_ID" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::ACME challenge creation failed (non-blocking)"
+          echo "$RESPONSE" | jq '.errors'
+          echo "created=false" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"

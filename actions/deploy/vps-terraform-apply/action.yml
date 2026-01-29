@@ -1,0 +1,91 @@
+name: 'VPS Terraform Apply'
+description: 'Run Terraform to create/update VPS in Hetzner Cloud'
+author: 'NextNodeSolutions'
+
+inputs:
+  vps-name:
+    description: 'Name of the VPS to provision'
+    required: true
+  project-name:
+    description: 'Project name for tagging'
+    required: true
+  server-type:
+    description: 'Hetzner server type (e.g., cx33)'
+    required: false
+    default: 'cx33'
+  hcloud-token:
+    description: 'Hetzner Cloud API token'
+    required: true
+  tailscale-auth-key:
+    description: 'Tailscale auth key for VPS to join network'
+    required: true
+  cloudflare-api-token:
+    description: 'Cloudflare API token (for Terraform DNS provider)'
+    required: true
+  tf-api-token:
+    description: 'Terraform Cloud API token'
+    required: true
+  github-token:
+    description: 'GitHub token with access to infrastructure repo'
+    required: true
+  working-directory:
+    description: 'Terraform working directory (relative to infrastructure repo)'
+    required: false
+    default: 'terraform/app-vps'
+
+outputs:
+  terraform-applied:
+    description: 'Whether Terraform was applied'
+    value: ${{ steps.apply.outputs.terraform-applied }}
+  server-id:
+    description: 'Hetzner server ID'
+    value: ${{ steps.apply.outputs.server-id }}
+  server-ip:
+    description: 'Public IPv4 address of the provisioned VPS'
+    value: ${{ steps.apply.outputs.server-ip }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout Infrastructure
+      uses: actions/checkout@v4
+      with:
+        repository: nextnodesolutions/infrastructure
+        path: .infrastructure
+        token: ${{ inputs.github-token }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.7'
+        cli_config_credentials_token: ${{ inputs.tf-api-token }}
+        terraform_wrapper: false
+
+    - name: Apply Terraform
+      id: apply
+      shell: bash
+      working-directory: .infrastructure/${{ inputs.working-directory }}
+      env:
+        TF_VAR_hetzner_token: ${{ inputs.hcloud-token }}
+        TF_VAR_vps_name: ${{ inputs.vps-name }}
+        TF_VAR_project_name: ${{ inputs.project-name }}
+        TF_VAR_server_type: ${{ inputs.server-type }}
+        TF_VAR_tailscale_auth_key: ${{ inputs.tailscale-auth-key }}
+        TF_VAR_cloudflare_dns_token: ${{ inputs.cloudflare-api-token }}
+      run: |
+        echo "::group::Terraform Apply"
+        echo "Creating VPS: $TF_VAR_vps_name ($TF_VAR_server_type)"
+
+        terraform init
+        terraform apply -auto-approve
+
+        # Get outputs (suppress Terraform Cloud warnings)
+        SERVER_ID=$(terraform output -raw server_id 2>/dev/null)
+        IPV4=$(terraform output -raw ipv4_address 2>/dev/null)
+
+        echo "terraform-applied=true" >> $GITHUB_OUTPUT
+        echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+        echo "server-ip=$IPV4" >> $GITHUB_OUTPUT
+
+        echo "VPS provisioned: $TF_VAR_vps_name ($IPV4)"
+        echo "::endgroup::"

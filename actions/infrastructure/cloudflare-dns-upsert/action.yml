@@ -30,7 +30,11 @@ inputs:
     required: false
     default: '1'
   proxied:
-    description: 'Whether to proxy through Cloudflare (true/false)'
+    description: 'Whether to proxy through Cloudflare (true/false). Auto-disabled for sub-subdomains (Railway compatibility)'
+    required: false
+    default: 'false'
+  force-proxied:
+    description: 'Force proxied setting even for sub-subdomains (override Railway compatibility check)'
     required: false
     default: 'false'
   max-retries:
@@ -55,6 +59,15 @@ outputs:
   resolved-content:
     description: 'The actual content used (useful when resolving from Tailscale)'
     value: ${{ steps.upsert.outputs.resolved-content }}
+  zone-id:
+    description: 'The Cloudflare Zone ID (useful for downstream actions)'
+    value: ${{ steps.upsert.outputs.zone-id }}
+  is-sub-subdomain:
+    description: 'Whether this is a sub-subdomain (3+ levels like pr-56.dev.nextnode.fr)'
+    value: ${{ steps.upsert.outputs.is-sub-subdomain }}
+  effective-proxied:
+    description: 'The actual proxied setting used (may differ from input for sub-subdomains)'
+    value: ${{ steps.upsert.outputs.effective-proxied }}
 
 runs:
   using: 'composite'
@@ -80,6 +93,7 @@ runs:
         TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
         INPUT_TTL: ${{ inputs.ttl }}
         INPUT_PROXIED: ${{ inputs.proxied }}
+        INPUT_FORCE_PROXIED: ${{ inputs.force-proxied }}
         INPUT_MAX_RETRIES: ${{ inputs.max-retries }}
         INPUT_RETRY_DELAY: ${{ inputs.retry-delay }}
       run: |
@@ -100,7 +114,43 @@ runs:
           exit 1
         fi
 
+        echo "zone-id=$CF_ZONE_ID" >> $GITHUB_OUTPUT
+
+        # Detect sub-subdomain depth for Railway compatibility
+        # Railway + Cloudflare proxy: sub-subdomains (3+ levels) require proxied=false
+        # Example: pr-56.dev.nextnode.fr (3 levels) -> proxied=false
+        # Example: dev.nextnode.fr (2 levels) -> proxied=true (default)
+        DOT_COUNT=$(echo "$INPUT_DOMAIN" | grep -o '\.' | wc -l | xargs)
+        IS_SUB_SUBDOMAIN="false"
+        EFFECTIVE_PROXIED="$INPUT_PROXIED"
+
+        if [[ $DOT_COUNT -ge 2 ]]; then
+          IS_SUB_SUBDOMAIN="true"
+          if [[ "$INPUT_FORCE_PROXIED" != "true" ]]; then
+            echo "Sub-subdomain detected ($INPUT_DOMAIN, $DOT_COUNT dots)"
+            echo "  Railway requires DNS-only mode (proxied=false) for sub-subdomains"
+            EFFECTIVE_PROXIED="false"
+          else
+            echo "Sub-subdomain detected but force-proxied=true, keeping proxied=$INPUT_PROXIED"
+          fi
+        else
+          echo "Standard domain ($INPUT_DOMAIN, $DOT_COUNT dots)"
+          echo "  Using proxied=$EFFECTIVE_PROXIED"
+        fi
+
+        echo "is-sub-subdomain=$IS_SUB_SUBDOMAIN" >> $GITHUB_OUTPUT
+        echo "effective-proxied=$EFFECTIVE_PROXIED" >> $GITHUB_OUTPUT
+
         RECORD_CONTENT="$INPUT_CONTENT"
+
+        # Clean target URL for CNAME records (remove protocol prefixes)
+        if [[ "$INPUT_RECORD_TYPE" == "CNAME" && -n "$RECORD_CONTENT" ]]; then
+          ORIGINAL_CONTENT="$RECORD_CONTENT"
+          RECORD_CONTENT=$(echo "$RECORD_CONTENT" | sed -E 's|https?://||g' | sed 's|/$||g')
+          if [[ "$ORIGINAL_CONTENT" != "$RECORD_CONTENT" ]]; then
+            echo "Cleaned CNAME target: $ORIGINAL_CONTENT -> $RECORD_CONTENT"
+          fi
+        fi
 
         # Resolve content from Tailscale if hostname provided
         if [[ -n "$INPUT_TAILSCALE_HOSTNAME" ]]; then
@@ -200,9 +250,9 @@ runs:
         CURRENT_CONTENT=$(echo "$EXISTING_RECORD" | jq -r '.result[0].content // empty')
         CURRENT_PROXIED=$(echo "$EXISTING_RECORD" | jq -r '.result[0].proxied // false')
 
-        # Convert proxied to boolean for JSON
+        # Convert proxied to boolean for JSON (use effective proxied after sub-subdomain check)
         PROXIED_BOOL="false"
-        if [[ "$INPUT_PROXIED" == "true" ]]; then
+        if [[ "$EFFECTIVE_PROXIED" == "true" ]]; then
           PROXIED_BOOL="true"
         fi
 

@@ -1,0 +1,169 @@
+name: 'Cloudflare Redirects Setup'
+description: 'Configure www and other redirects via Cloudflare Page Rules'
+
+inputs:
+  cloudflare-api-token:
+    description: 'Cloudflare API token with Zone:Edit permissions'
+    required: true
+  cloudflare-zone-id:
+    description: 'Cloudflare Zone ID (auto-detected if not provided)'
+    required: false
+  domain:
+    description: 'Primary domain (e.g., nextnode.fr)'
+    required: true
+  enable-www-redirect:
+    description: 'Create www -> non-www redirect'
+    required: false
+    default: 'true'
+  dry-run:
+    description: 'Show what would be configured without making changes'
+    required: false
+    default: 'false'
+
+outputs:
+  configured:
+    description: 'Whether the redirects configuration was successful'
+    value: ${{ steps.redirects-setup.outputs.configured }}
+  redirects-count:
+    description: 'Number of redirect rules created'
+    value: ${{ steps.redirects-setup.outputs.redirects-count }}
+  page-rule-id:
+    description: 'The Page Rule ID if created'
+    value: ${{ steps.redirects-setup.outputs.page-rule-id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lookup Cloudflare Zone
+      id: zone-lookup
+      if: ${{ inputs.cloudflare-zone-id == '' }}
+      uses: nextnodesolutions/github-actions/actions/utilities/cloudflare-zone-lookup@main
+      with:
+        domain: ${{ inputs.domain }}
+        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
+
+    - name: Configure Redirects via Page Rules
+      id: redirects-setup
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CF_ZONE_ID: ${{ inputs.cloudflare-zone-id || steps.zone-lookup.outputs.zone-id }}
+        DOMAIN: ${{ inputs.domain }}
+        ENABLE_WWW_REDIRECT: ${{ inputs.enable-www-redirect }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        echo "::group::Cloudflare Redirects Setup"
+
+        # Validate inputs
+        if [[ -z "$CF_API_TOKEN" ]]; then
+          echo "::error::Cloudflare API token is required"
+          exit 1
+        fi
+
+        if [[ -z "$CF_ZONE_ID" ]]; then
+          echo "::error::Could not determine Zone ID"
+          exit 1
+        fi
+
+        echo "Configuration:"
+        echo "  Domain: $DOMAIN"
+        echo "  Zone ID: $CF_ZONE_ID"
+        echo "  WWW redirect: $ENABLE_WWW_REDIRECT"
+        echo "  Dry run: $DRY_RUN"
+        echo ""
+
+        REDIRECTS_COUNT=0
+
+        if [[ "$ENABLE_WWW_REDIRECT" != "true" ]]; then
+          echo "WWW redirect disabled"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "redirects-count=0" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Check if domain is a subdomain (skip www redirect for subdomains)
+        ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. 'NF>=2{print $(NF-1)"."$NF; next} {print $0}')
+        if [[ "$DOMAIN" != "$ROOT_DOMAIN" ]]; then
+          echo "Skipping www redirect for subdomain: $DOMAIN"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "redirects-count=0" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Check for existing Page Rules with same pattern
+        EXISTING_RULES_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json")
+
+        EXISTING_RULES_SUCCESS=$(echo "$EXISTING_RULES_RESPONSE" | jq -r '.success // false')
+
+        if [[ "$EXISTING_RULES_SUCCESS" == "true" ]]; then
+          WWW_PATTERN="www.$DOMAIN/*"
+          DUPLICATE_EXISTS=$(echo "$EXISTING_RULES_RESPONSE" | jq --arg pattern "$WWW_PATTERN" '[.result[] | select(.targets[0].constraint.value == $pattern)] | length')
+
+          if [[ "$DUPLICATE_EXISTS" -gt 0 ]]; then
+            echo "Page Rule already exists for $WWW_PATTERN"
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "redirects-count=0" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+        fi
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+          echo "[DRY RUN] Would create Page Rule: www.$DOMAIN/* -> https://$DOMAIN/\$1"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "redirects-count=1" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Create Page Rule for www -> non-www redirect
+        PAGE_RULE_DATA=$(jq -n \
+          --arg pattern "www.$DOMAIN/*" \
+          --arg target_url "https://$DOMAIN/\$1" \
+          '{
+            actions: [{
+              id: "forwarding_url",
+              value: {
+                url: $target_url,
+                status_code: 301
+              }
+            }],
+            targets: [{
+              constraint: {
+                operator: "matches",
+                value: $pattern
+              },
+              target: "url"
+            }],
+            priority: 1,
+            status: "active"
+          }')
+
+        echo "Creating Page Rule: www.$DOMAIN/* -> https://$DOMAIN/\$1"
+
+        REDIRECT_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/pagerules" \
+          -H "Authorization: Bearer $CF_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          --data "$PAGE_RULE_DATA")
+
+        REDIRECT_SUCCESS=$(echo "$REDIRECT_RESPONSE" | jq -r '.success // false')
+
+        if [[ "$REDIRECT_SUCCESS" == "true" ]]; then
+          PAGE_RULE_ID=$(echo "$REDIRECT_RESPONSE" | jq -r '.result.id // empty')
+          echo "Created Page Rule redirect (ID: $PAGE_RULE_ID)"
+          echo "configured=true" >> $GITHUB_OUTPUT
+          echo "redirects-count=1" >> $GITHUB_OUTPUT
+          echo "page-rule-id=$PAGE_RULE_ID" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Failed to create Page Rule redirect"
+          echo "$REDIRECT_RESPONSE" | jq '.errors[]?' 2>/dev/null
+          echo "configured=false" >> $GITHUB_OUTPUT
+          echo "redirects-count=0" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        echo "::endgroup::"
