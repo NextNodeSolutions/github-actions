@@ -45,6 +45,14 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # SEC-002: Mask pass-through secrets at parent level
+    # This ensures secrets are masked before being passed to child actions
+    - name: Mask Sensitive Inputs
+      shell: bash
+      run: |
+        echo "::add-mask::${{ inputs.dokploy-admin-password }}"
+        echo "::add-mask::${{ inputs.dokploy-ssh-private-key }}"
+
     # Step 1: Admin setup (waits for Dokploy, creates admin if first time)
     - name: Setup Dokploy Admin
       id: admin-setup
@@ -64,6 +72,9 @@ runs:
         ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
       run: |
         echo "::group::Dokploy Authentication"
+
+        # SEC-002: Ensure password is masked (belt and suspenders with parent mask)
+        echo "::add-mask::${ADMIN_PASSWORD}"
 
         COOKIE_JAR="/tmp/dokploy_cookies_$$.txt"
         echo "cookie-jar=$COOKIE_JAR" >> $GITHUB_OUTPUT

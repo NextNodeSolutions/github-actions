@@ -46,6 +46,10 @@ runs:
       run: |
         echo "::group::Dokploy SSH Key Import"
 
+        # SEC-002: Mask sensitive values FIRST (GitHub Actions best practice)
+        # This prevents the SSH private key from appearing in logs
+        echo "::add-mask::${SSH_PRIVATE_KEY}"
+
         # Check if key already exists
         EXISTING_KEYS=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/sshKey.all" \
           -H "Content-Type: application/json")
@@ -63,11 +67,16 @@ runs:
 
         echo "Importing SSH key: $KEY_NAME"
 
+        # SEC-002: Use trap for guaranteed cleanup on exit/error
+        # PID-based temp file prevents conflicts in parallel runs
+        cleanup() { rm -f /tmp/dokploy_key_$$; }
+        trap cleanup EXIT
+
         # Extract public key from private key
-        echo "$SSH_PRIVATE_KEY" > /tmp/dokploy_key
-        chmod 600 /tmp/dokploy_key
-        PUBLIC_KEY=$(ssh-keygen -y -f /tmp/dokploy_key 2>/dev/null)
-        rm -f /tmp/dokploy_key
+        # Write key to temp file with unique PID-based name
+        echo "$SSH_PRIVATE_KEY" > /tmp/dokploy_key_$$
+        chmod 600 /tmp/dokploy_key_$$
+        PUBLIC_KEY=$(ssh-keygen -y -f /tmp/dokploy_key_$$ 2>/dev/null)
 
         if [[ -z "$PUBLIC_KEY" ]]; then
           echo "::error::Failed to extract public key from private key"
@@ -76,12 +85,13 @@ runs:
           exit 1
         fi
 
-        # Create SSH key using tRPC format
+        # SEC-002: Use --rawfile to read private key from file instead of passing via command line
+        # This avoids exposing the key in process args (visible via ps)
         CREATE_DATA=$(jq -n \
           --arg name "$KEY_NAME" \
           --arg publicKey "$PUBLIC_KEY" \
-          --arg privateKey "$SSH_PRIVATE_KEY" \
           --arg organizationId "$ORGANIZATION_ID" \
+          --rawfile privateKey /tmp/dokploy_key_$$ \
           '{name: $name, publicKey: $publicKey, privateKey: $privateKey, organizationId: $organizationId}')
 
         WRAPPED_DATA="{\"0\":{\"json\":${CREATE_DATA}}}"

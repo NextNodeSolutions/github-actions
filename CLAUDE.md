@@ -370,3 +370,79 @@ Replaced inefficient 53-job matrix system with single actionlint job:
 Enable debug logging by setting repository secret:
 - `ACTIONS_RUNNER_DEBUG: true`
 - `ACTIONS_STEP_DEBUG: true`
+
+## Secrets and Token Chain Requirements
+
+This section documents the required secrets and how tokens are derived across the deployment workflows.
+
+### Token Derivation Chains
+
+#### Tailscale OAuth Chain
+```
+TAILSCALE_OAUTH_CLIENT_ID + TAILSCALE_OAUTH_SECRET
+    |
+    v tailscale-oauth action
+TAILSCALE_API_TOKEN (for API calls - device management, DNS)
+TAILSCALE_AUTH_KEY (for device registration - VPS provisioning)
+```
+
+#### Dokploy Authentication Chain
+```
+DOKPLOY_ADMIN_EMAIL + DOKPLOY_ADMIN_PASSWORD
+    |
+    v dokploy-auth action
+DOKPLOY_BEARER_TOKEN (for all subsequent Dokploy API calls)
+```
+
+#### GitHub App Token Chain (VPS provisioning only)
+```
+NEXTNODE_APP_ID + NEXTNODE_APP_PRIVATE_KEY
+    |
+    v actions/create-github-app-token@v1
+GITHUB_TOKEN (scoped to infrastructure repo for Terraform dispatch)
+```
+
+### Required Secrets by Deployment Type
+
+#### Standard Deployments (existing servers)
+
+Projects deploying to admin-dokploy, dev-worker, or prod-worker:
+
+| Secret | Required | Purpose |
+|--------|----------|---------|
+| `TAILSCALE_OAUTH_CLIENT_ID` | Yes | Registry access, Dokploy URL resolution |
+| `TAILSCALE_OAUTH_SECRET` | Yes | Registry access, Dokploy URL resolution |
+| `DOKPLOY_ADMIN_EMAIL` | Yes | Dokploy API authentication |
+| `DOKPLOY_ADMIN_PASSWORD` | Yes | Dokploy API authentication |
+| `CLOUDFLARE_API_TOKEN` | If DNS needed | DNS record creation/update |
+
+#### VPS Provisioning Deployments
+
+Projects with `server = "custom"` in dokploy.toml (dedicated VPS):
+
+| Secret | Required | Purpose |
+|--------|----------|---------|
+| All secrets above | Yes | Same purposes |
+| `HETZNER_TOKEN` | Yes | VPS creation via Hetzner API |
+| `TF_API_TOKEN` | Yes | Terraform Cloud state management |
+| `NEXTNODE_APP_ID` | Yes | GitHub App for infrastructure repo access |
+| `NEXTNODE_APP_PRIVATE_KEY` | Yes | GitHub App for infrastructure repo access |
+
+### Workflow Token Requirements
+
+#### app-deploy.yml (called by external projects)
+
+| Job | Required Secrets |
+|-----|------------------|
+| config | None (reads dokploy.toml only) |
+| build | TAILSCALE_OAUTH_* (registry access) |
+| provision | HETZNER_TOKEN, TF_API_TOKEN, NEXTNODE_APP_*, TAILSCALE_OAUTH_*, DOKPLOY_ADMIN_*, CLOUDFLARE_API_TOKEN |
+| deploy | TAILSCALE_OAUTH_*, DOKPLOY_ADMIN_*, CLOUDFLARE_API_TOKEN |
+
+### Design Decision: Explicit Secret Passing
+
+The workflows use explicit secret passing rather than `secrets: inherit` for:
+
+1. **Security**: Only required secrets available to each job
+2. **Auditability**: Clear documentation of what each workflow needs
+3. **Least Privilege**: Compromised job has limited access scope
