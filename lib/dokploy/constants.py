@@ -95,6 +95,9 @@ class Endpoints:
     # Domains
     DOMAIN_CREATE = "/api/domain.create"
 
+    # Mounts
+    MOUNT_CREATE = "/api/mounts.create"
+
     # Servers
     SERVER_UPDATE = "/api/trpc/server.update?batch=1"
 

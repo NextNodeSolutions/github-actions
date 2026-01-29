@@ -87,6 +87,13 @@ domain = "my-project.com"
 # [compose]
 # enabled = true                # Enable compose deployment mode
 # file = "docker-compose.yml"   # Path to compose file
+#
+# # File mounts - files to upload to Dokploy's /files directory
+# # These are created as Dokploy File Mounts before deployment
+# # In your docker-compose.yml, reference them as: ../files/<target>
+# [[compose.mounts]]
+# source = "config/nginx.conf"  # Local file path (relative to repo root)
+# target = "nginx.conf"         # Target filename in Dokploy's /files directory
 
 # =============================================================================
 # SERVICES (optional - future implementation)

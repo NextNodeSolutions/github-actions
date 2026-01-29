@@ -110,6 +110,7 @@ jobs:
       port: ${{ steps.config.outputs.port }}
       is-compose: ${{ steps.config.outputs.is-compose }}
       compose-file: ${{ steps.config.outputs.compose-file }}
+      compose-mounts: ${{ steps.config.outputs.compose-mounts }}
       traefik-server: ${{ steps.config.outputs.traefik-server }}
       environment-enabled: ${{ steps.config.outputs.environment-enabled }}
       vps-enabled: ${{ steps.config.outputs.vps-enabled }}
@@ -358,6 +359,7 @@ jobs:
           server-id: ${{ steps.server.outputs.server-id }}
           compose-file: project/${{ inputs.compose-file || needs.config.outputs.compose-file }}
           env: ${{ secrets.compose-env }}
+          mounts: ${{ needs.config.outputs.compose-mounts }}
 
       # DNS Configuration
       - name: Configure DNS

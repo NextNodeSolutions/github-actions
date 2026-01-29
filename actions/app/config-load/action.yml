@@ -47,6 +47,9 @@ outputs:
   compose-file:
     description: 'Path to docker-compose.yml (if compose mode)'
     value: ${{ steps.load.outputs.compose-file }}
+  compose-mounts:
+    description: 'Compose file mounts as JSON array'
+    value: ${{ steps.load.outputs.compose-mounts }}
   traefik-server:
     description: 'Traefik ingress server name'
     value: ${{ steps.load.outputs.traefik-server }}
@@ -178,6 +181,7 @@ runs:
         compose_config = config.get('compose', {})
         is_compose = compose_config.get('enabled', False)
         compose_file = compose_config.get('file', 'docker-compose.yml') if is_compose else ''
+        compose_mounts = compose_config.get('mounts', []) if is_compose else []
 
         # Get cluster config
         traefik_server = config.get('cluster', {}).get('traefik-server', 'admin-dokploy')
@@ -198,6 +202,7 @@ runs:
         output('port', str(app_port))
         output('is-compose', 'true' if is_compose else 'false')
         output('compose-file', compose_file)
+        output('compose-mounts', json.dumps(compose_mounts))
         output('traefik-server', traefik_server)
         output('environment-enabled', 'true' if environment_enabled else 'false')
         output('vps-enabled', 'true' if vps_enabled else 'false')
@@ -217,5 +222,7 @@ runs:
             print(f"Domain: https://{domain}")
         if is_compose:
             print(f"Compose: {compose_file}")
+            if compose_mounts:
+                print(f"Mounts: {len(compose_mounts)} file(s)")
         print(f"Exposure: {exposure}")
         print("=" * 60)

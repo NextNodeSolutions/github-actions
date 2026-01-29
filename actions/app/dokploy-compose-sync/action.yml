@@ -29,6 +29,10 @@ inputs:
     description: 'Environment variables for compose (newline-separated KEY=VALUE)'
     required: false
     default: ''
+  mounts:
+    description: 'File mounts as JSON array of {source, target} objects'
+    required: false
+    default: '[]'
 
 outputs:
   compose-id:
@@ -61,7 +65,9 @@ runs:
         SERVER_ID: ${{ inputs.server-id }}
         COMPOSE_FILE: ${{ inputs.compose-file }}
         COMPOSE_ENV: ${{ inputs.env }}
+        COMPOSE_MOUNTS: ${{ inputs.mounts }}
       run: |
+        import json
         import os
         import sys
         from pathlib import Path
@@ -74,6 +80,7 @@ runs:
         SERVER_ID = os.environ.get('SERVER_ID', '')
         COMPOSE_FILE = os.environ['COMPOSE_FILE']
         COMPOSE_ENV = os.environ.get('COMPOSE_ENV', '')
+        COMPOSE_MOUNTS = os.environ.get('COMPOSE_MOUNTS', '[]')
 
         print("::group::Syncing compose stack")
         print(f"Compose: {APP_NAME}")
@@ -128,6 +135,40 @@ runs:
                 compose_id = create_result.get('composeId')
                 created = True
                 print(f"Created compose: {APP_NAME} ({compose_id})")
+
+            # Create file mounts before updating compose
+            mounts = json.loads(COMPOSE_MOUNTS)
+            if mounts:
+                print(f"Creating {len(mounts)} file mount(s)...")
+                compose_dir = compose_path.parent
+                for mount in mounts:
+                    source = mount.get('source', '')
+                    target = mount.get('target', '')
+                    if not source or not target:
+                        print(f"::warning::Skipping invalid mount: {mount}")
+                        continue
+
+                    source_path = compose_dir / source
+                    if not source_path.exists():
+                        print(f"::error::Mount source not found: {source_path}")
+                        output('success', 'false')
+                        sys.exit(1)
+
+                    content = source_path.read_text()
+                    mount_payload = {
+                        "type": "file",
+                        "serviceId": compose_id,
+                        "serviceType": "compose",
+                        "filePath": target,
+                        "mountPath": f"/files/{target}",
+                        "content": content,
+                    }
+                    try:
+                        client.post(Endpoints.MOUNT_CREATE, json=mount_payload)
+                        print(f"Created mount: {source} -> /files/{target}")
+                    except DokployError as e:
+                        # Mount may already exist, treat as warning
+                        print(f"::warning::Mount creation failed (may exist): {e}")
 
             # Update compose with file content and environment
             update_payload = {
