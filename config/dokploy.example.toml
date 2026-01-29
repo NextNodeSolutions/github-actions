@@ -96,7 +96,6 @@ domain = "my-project.com"
 
 # [environments.production]
 # replicas = 2
-# auto_deploy = false
 
 # [environments.development]
 # replicas = 1

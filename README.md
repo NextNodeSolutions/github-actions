@@ -200,11 +200,11 @@ When you push code or trigger a deployment, this is what happens:
 
 ### Environment-Based Deployment
 
-| Environment | Domain Pattern | Default Server | Auto-Deploy |
-|-------------|---------------|----------------|-------------|
-| `production` | `{domain}` | prod-worker | No (manual) |
-| `development` | `dev.{domain}` | dev-worker | Yes |
-| `preview` | `pr-{number}.dev.{domain}` | dev-worker | Yes |
+| Environment | Domain Pattern | Default Server |
+|-------------|---------------|----------------|
+| `production` | `{domain}` | prod-worker |
+| `development` | `dev.{domain}` | dev-worker |
+| `preview` | `pr-{number}.dev.{domain}` | dev-worker |
 
 ### Using Reusable Workflows
 
@@ -413,7 +413,6 @@ rollback = true               # Auto-rollback on failure
 enabled = true                # Enable dev environment
 server = "dev-worker"         # Target server
 replicas = 1
-auto_deploy = true
 
 [environments.preview]
 enabled = true                # Enable PR previews
@@ -423,7 +422,6 @@ cleanup_on_merge = true       # Delete preview on PR merge
 [environments.production]
 server = "prod-worker"        # Default production server
 replicas = 1
-auto_deploy = false           # Manual deploy for production
 
 # =============================================================================
 # CUSTOM VPS (dedicated server for this project)

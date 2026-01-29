@@ -85,6 +85,18 @@ bucket = "uploads"
 enabled = false
 
 # =============================================================================
+# SCALE-TO-ZERO (Sablier)
+# Automatically scales idle dev/preview containers to 0 replicas
+# Wakes them on-demand when requests arrive (shows loading page while starting)
+# =============================================================================
+[scale_to_zero]
+enabled = true                    # Enable for dev/preview by default
+idle_timeout = "30m"              # Scale to 0 after 30 minutes of inactivity
+session_duration = "30m"          # Keep alive for 30 minutes after wake
+startup_timeout = "2m"            # Max time to wait for service to start
+theme = "hacker-terminal"         # Loading page theme: hacker-terminal, ghost, shuffle
+
+# =============================================================================
 # ENVIRONMENT: DEVELOPMENT
 # Domain: dev.{project.domain}
 # =============================================================================
@@ -92,7 +104,13 @@ enabled = false
 enabled = true
 server = "dev-worker"
 replicas = 1
-auto_deploy = true
+# Lighter resources for dev (only you use it)
+memory = "128Mi"
+cpu = 0.1
+memory_limit = "256Mi"
+cpu_limit = 0.25
+# Scale-to-zero enabled by default for dev
+scale_to_zero = true
 
 # =============================================================================
 # ENVIRONMENT: PREVIEW (PR deployments)
@@ -103,8 +121,14 @@ auto_deploy = true
 enabled = true
 server = "dev-worker"
 replicas = 1
-auto_deploy = true
 cleanup_on_merge = true
+# Lighter resources for PR previews
+memory = "128Mi"
+cpu = 0.1
+memory_limit = "256Mi"
+cpu_limit = 0.25
+# Scale-to-zero enabled by default for preview
+scale_to_zero = true
 
 # =============================================================================
 # ENVIRONMENT: PRODUCTION
@@ -113,4 +137,3 @@ cleanup_on_merge = true
 [environments.production]
 server = "prod-worker"
 replicas = 1
-auto_deploy = false           # Manual deploy for prod
