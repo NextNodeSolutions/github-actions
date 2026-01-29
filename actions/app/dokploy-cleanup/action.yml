@@ -1,0 +1,182 @@
+name: 'Dokploy Cleanup'
+description: 'Cleanup preview deployments (application or compose)'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  project-name:
+    description: 'Project name'
+    required: true
+  pr-number:
+    description: 'PR number to cleanup'
+    required: true
+  is-compose:
+    description: 'Whether this is a compose deployment'
+    required: false
+    default: 'false'
+
+outputs:
+  deleted:
+    description: 'Whether a resource was deleted'
+    value: ${{ steps.cleanup.outputs.deleted }}
+  resource-type:
+    description: 'Type of resource deleted (application or compose)'
+    value: ${{ steps.cleanup.outputs.resource-type }}
+  success:
+    description: 'Whether cleanup succeeded'
+    value: ${{ steps.cleanup.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Cleanup preview
+      id: cleanup
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        IS_COMPOSE: ${{ inputs.is-compose }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        PROJECT_NAME = os.environ['PROJECT_NAME']
+        PR_NUMBER = os.environ['PR_NUMBER']
+        IS_COMPOSE = os.environ.get('IS_COMPOSE', 'false') == 'true'
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        preview_name = f"{PROJECT_NAME}-pr-{PR_NUMBER}"
+
+        print("::group::Cleanup preview deployment")
+        print(f"Looking for: {preview_name}")
+
+        try:
+            # Get all projects
+            projects_resp = requests.get(
+                f"{DOKPLOY_URL}/api/project.all",
+                headers=headers,
+                timeout=30
+            )
+            projects = projects_resp.json() if projects_resp.ok else []
+
+            # Find project
+            project_id = None
+            for p in projects:
+                if p.get('name') == PROJECT_NAME:
+                    project_id = p.get('projectId')
+                    break
+
+            if not project_id:
+                print(f"Project {PROJECT_NAME} not found")
+                output('deleted', 'false')
+                output('resource-type', '')
+                output('success', 'true')
+                print("::endgroup::")
+                sys.exit(0)
+
+            # Get project details
+            proj_resp = requests.get(
+                f"{DOKPLOY_URL}/api/project.one",
+                params={"projectId": project_id},
+                headers=headers,
+                timeout=30
+            )
+
+            if not proj_resp.ok:
+                print("Failed to get project details")
+                output('deleted', 'false')
+                output('success', 'true')
+                print("::endgroup::")
+                sys.exit(0)
+
+            proj_data = proj_resp.json()
+            deleted = False
+            resource_type = ''
+
+            if IS_COMPOSE:
+                # Look for compose stacks
+                composes = proj_data.get('compose', [])
+                for env in proj_data.get('environments', []):
+                    composes.extend(env.get('compose', []))
+
+                for compose in composes:
+                    if compose.get('name') == preview_name:
+                        delete_resp = requests.post(
+                            f"{DOKPLOY_URL}/api/compose.delete",
+                            headers=headers,
+                            json={"composeId": compose.get('composeId')},
+                            timeout=30
+                        )
+                        if delete_resp.ok:
+                            print(f"Deleted compose: {preview_name}")
+                            deleted = True
+                            resource_type = 'compose'
+                        else:
+                            print(f"::warning::Failed to delete compose: {delete_resp.status_code}")
+                        break
+            else:
+                # Look for applications
+                apps = proj_data.get('applications', [])
+                for env in proj_data.get('environments', []):
+                    apps.extend(env.get('applications', []))
+
+                for app in apps:
+                    if app.get('name') == preview_name:
+                        delete_resp = requests.post(
+                            f"{DOKPLOY_URL}/api/application.delete",
+                            headers=headers,
+                            json={"applicationId": app.get('applicationId')},
+                            timeout=30
+                        )
+                        if delete_resp.ok:
+                            print(f"Deleted application: {preview_name}")
+                            deleted = True
+                            resource_type = 'application'
+                        else:
+                            print(f"::warning::Failed to delete application: {delete_resp.status_code}")
+                        break
+
+            if not deleted:
+                print(f"No preview resource found for: {preview_name}")
+
+            output('deleted', 'true' if deleted else 'false')
+            output('resource-type', resource_type)
+            output('success', 'true')
+
+        except Exception as e:
+            print(f"::warning::Cleanup failed: {e}")
+            output('deleted', 'false')
+            output('resource-type', '')
+            output('success', 'true')  # Don't fail the workflow on cleanup errors
+
+        print("::endgroup::")

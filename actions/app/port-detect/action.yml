@@ -1,0 +1,76 @@
+name: 'Port Detect'
+description: 'Detect application port from .env, Dockerfile, or config'
+author: 'NextNodeSolutions'
+
+inputs:
+  config-port:
+    description: 'Explicit port from config (highest priority)'
+    required: false
+    default: ''
+  env-file:
+    description: 'Path to .env file'
+    required: false
+    default: '.env'
+  dockerfile:
+    description: 'Path to Dockerfile'
+    required: false
+    default: 'Dockerfile'
+  default-port:
+    description: 'Default port if nothing else found'
+    required: false
+    default: '3000'
+
+outputs:
+  port:
+    description: 'Detected application port'
+    value: ${{ steps.detect.outputs.port }}
+  source:
+    description: 'Where the port was detected from (config, .env, Dockerfile, default)'
+    value: ${{ steps.detect.outputs.source }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Detect port
+      id: detect
+      shell: bash
+      env:
+        CONFIG_PORT: ${{ inputs.config-port }}
+        ENV_FILE: ${{ inputs.env-file }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        DEFAULT_PORT: ${{ inputs.default-port }}
+      run: |
+        # Priority 1: Explicit config
+        if [[ -n "$CONFIG_PORT" ]]; then
+          echo "port=$CONFIG_PORT" >> $GITHUB_OUTPUT
+          echo "source=config" >> $GITHUB_OUTPUT
+          echo "Port: $CONFIG_PORT (from config)"
+          exit 0
+        fi
+
+        # Priority 2: .env file
+        if [[ -f "$ENV_FILE" ]]; then
+          PORT=$(grep -E "^APP_PORT\s*=" "$ENV_FILE" | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+          if [[ -n "$PORT" ]]; then
+            echo "port=$PORT" >> $GITHUB_OUTPUT
+            echo "source=.env" >> $GITHUB_OUTPUT
+            echo "Port: $PORT (from .env)"
+            exit 0
+          fi
+        fi
+
+        # Priority 3: Dockerfile ARG
+        if [[ -f "$DOCKERFILE" ]]; then
+          PORT=$(grep -E "^ARG\s+APP_PORT\s*=" "$DOCKERFILE" | head -1 | sed 's/.*=\s*//')
+          if [[ -n "$PORT" ]]; then
+            echo "port=$PORT" >> $GITHUB_OUTPUT
+            echo "source=Dockerfile" >> $GITHUB_OUTPUT
+            echo "Port: $PORT (from Dockerfile)"
+            exit 0
+          fi
+        fi
+
+        # Priority 4: Default
+        echo "port=$DEFAULT_PORT" >> $GITHUB_OUTPUT
+        echo "source=default" >> $GITHUB_OUTPUT
+        echo "Port: $DEFAULT_PORT (default)"

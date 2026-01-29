@@ -1,0 +1,298 @@
+name: 'Dokploy App Sync'
+description: 'Create or update Dokploy application'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  project-id:
+    description: 'Dokploy project ID'
+    required: true
+  environment-id:
+    description: 'Dokploy environment ID'
+    required: true
+  app-name:
+    description: 'Application name'
+    required: true
+  server-id:
+    description: 'Dokploy server ID'
+    required: false
+    default: ''
+  docker-image:
+    description: 'Docker image to deploy'
+    required: false
+    default: ''
+  domain:
+    description: 'Domain for the application'
+    required: false
+    default: ''
+  port:
+    description: 'Application port'
+    required: false
+    default: '3000'
+  build-type:
+    description: 'Build type (dockerfile, nixpacks, etc.)'
+    required: false
+    default: 'dockerfile'
+  healthcheck-path:
+    description: 'Health check path'
+    required: false
+    default: '/health'
+  healthcheck-interval:
+    description: 'Health check interval in seconds'
+    required: false
+    default: '30'
+  healthcheck-timeout:
+    description: 'Health check timeout in seconds'
+    required: false
+    default: '10'
+  healthcheck-retries:
+    description: 'Health check retries'
+    required: false
+    default: '3'
+  healthcheck-start-period:
+    description: 'Health check start period in seconds'
+    required: false
+    default: '40'
+  rollback-on-failure:
+    description: 'Auto-rollback on failure'
+    required: false
+    default: 'true'
+
+outputs:
+  application-id:
+    description: 'Dokploy application ID'
+    value: ${{ steps.sync.outputs.application-id }}
+  created:
+    description: 'Whether application was created'
+    value: ${{ steps.sync.outputs.created }}
+  success:
+    description: 'Whether operation succeeded'
+    value: ${{ steps.sync.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Sync application
+      id: sync
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        PROJECT_ID: ${{ inputs.project-id }}
+        ENVIRONMENT_ID: ${{ inputs.environment-id }}
+        APP_NAME: ${{ inputs.app-name }}
+        SERVER_ID: ${{ inputs.server-id }}
+        DOCKER_IMAGE: ${{ inputs.docker-image }}
+        DOMAIN: ${{ inputs.domain }}
+        PORT: ${{ inputs.port }}
+        BUILD_TYPE: ${{ inputs.build-type }}
+        HC_PATH: ${{ inputs.healthcheck-path }}
+        HC_INTERVAL: ${{ inputs.healthcheck-interval }}
+        HC_TIMEOUT: ${{ inputs.healthcheck-timeout }}
+        HC_RETRIES: ${{ inputs.healthcheck-retries }}
+        HC_START_PERIOD: ${{ inputs.healthcheck-start-period }}
+        ROLLBACK_ON_FAILURE: ${{ inputs.rollback-on-failure }}
+        GITHUB_OUTPUT: ${{ github.output }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        PROJECT_ID = os.environ['PROJECT_ID']
+        ENVIRONMENT_ID = os.environ['ENVIRONMENT_ID']
+        APP_NAME = os.environ['APP_NAME']
+        SERVER_ID = os.environ.get('SERVER_ID', '')
+        DOCKER_IMAGE = os.environ.get('DOCKER_IMAGE', '')
+        DOMAIN = os.environ.get('DOMAIN', '')
+        PORT = int(os.environ.get('PORT', '3000'))
+        BUILD_TYPE = os.environ.get('BUILD_TYPE', 'dockerfile')
+        HC_PATH = os.environ.get('HC_PATH', '/health')
+        HC_INTERVAL = int(os.environ.get('HC_INTERVAL', '30'))
+        HC_TIMEOUT = int(os.environ.get('HC_TIMEOUT', '10'))
+        HC_RETRIES = int(os.environ.get('HC_RETRIES', '3'))
+        HC_START_PERIOD = int(os.environ.get('HC_START_PERIOD', '40'))
+        ROLLBACK = os.environ.get('ROLLBACK_ON_FAILURE', 'true') == 'true'
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+        GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        print("::group::Syncing application")
+        print(f"Application: {APP_NAME}")
+
+        try:
+            # Get project details to find existing apps
+            project_resp = requests.get(
+                f"{DOKPLOY_URL}/api/project.one",
+                params={"projectId": PROJECT_ID},
+                headers=headers,
+                timeout=30
+            )
+
+            apps = []
+            if project_resp.ok:
+                project_detail = project_resp.json()
+                for env in project_detail.get('environments', []):
+                    apps.extend(env.get('applications', []))
+
+            # Find existing app
+            app_id = None
+            for a in apps:
+                if a.get('name') == APP_NAME:
+                    app_id = a.get('applicationId')
+                    print(f"Found existing application: {APP_NAME} ({app_id})")
+                    break
+
+            created = False
+            if not app_id:
+                # Create application
+                app_data = {
+                    "name": APP_NAME,
+                    "projectId": PROJECT_ID,
+                    "environmentId": ENVIRONMENT_ID,
+                    "buildType": BUILD_TYPE,
+                }
+                if SERVER_ID:
+                    app_data["serverId"] = SERVER_ID
+
+                create_resp = requests.post(
+                    f"{DOKPLOY_URL}/api/application.create",
+                    headers=headers,
+                    json=app_data,
+                    timeout=30
+                )
+                create_resp.raise_for_status()
+                app_id = create_resp.json().get('applicationId')
+                created = True
+                print(f"Created application: {APP_NAME} ({app_id})")
+
+            # Configure source
+            if DOCKER_IMAGE:
+                print(f"Configuring Docker source: {DOCKER_IMAGE}")
+                source_resp = requests.post(
+                    f"{DOKPLOY_URL}/api/application.update",
+                    headers=headers,
+                    json={
+                        "applicationId": app_id,
+                        "sourceType": "docker",
+                        "dockerImage": DOCKER_IMAGE,
+                    },
+                    timeout=30
+                )
+                if source_resp.ok:
+                    print(f"Docker source configured")
+                else:
+                    print(f"::warning::Docker source config: {source_resp.status_code}")
+            elif GITHUB_REPOSITORY:
+                github_url = f"https://github.com/{GITHUB_REPOSITORY}"
+                source_resp = requests.post(
+                    f"{DOKPLOY_URL}/api/application.update",
+                    headers=headers,
+                    json={
+                        "applicationId": app_id,
+                        "sourceType": "github",
+                        "customGitUrl": github_url,
+                        "customGitBranch": "main"
+                    },
+                    timeout=30
+                )
+                if source_resp.ok:
+                    print(f"GitHub source configured: {github_url}")
+
+            # Configure domain
+            if DOMAIN:
+                domain_resp = requests.post(
+                    f"{DOKPLOY_URL}/api/domain.create",
+                    headers=headers,
+                    json={
+                        "applicationId": app_id,
+                        "host": DOMAIN,
+                        "port": PORT,
+                        "https": True,
+                        "certificateType": "letsencrypt"
+                    },
+                    timeout=30
+                )
+                if domain_resp.ok:
+                    print(f"Domain configured: {DOMAIN} (port {PORT})")
+                else:
+                    print(f"::warning::Domain config: {domain_resp.status_code}")
+
+            # Configure health check (Docker Swarm format)
+            healthcheck_swarm = {
+                "Test": ["CMD", "curl", "-f", f"http://localhost:{PORT}{HC_PATH}"],
+                "Interval": HC_INTERVAL * 1_000_000_000,
+                "Timeout": HC_TIMEOUT * 1_000_000_000,
+                "StartPeriod": HC_START_PERIOD * 1_000_000_000,
+                "Retries": HC_RETRIES
+            }
+
+            update_config_swarm = {
+                "Parallelism": 1,
+                "Delay": 10 * 1_000_000_000,
+                "FailureAction": "rollback" if ROLLBACK else "pause",
+                "Order": "start-first"
+            }
+
+            hc_resp = requests.post(
+                f"{DOKPLOY_URL}/api/application.update",
+                headers=headers,
+                json={
+                    "applicationId": app_id,
+                    "healthCheckSwarm": healthcheck_swarm,
+                    "updateConfigSwarm": update_config_swarm,
+                },
+                timeout=30
+            )
+            if hc_resp.ok:
+                print(f"Health check configured: {HC_PATH}")
+            else:
+                print(f"::warning::Health check config: {hc_resp.status_code}")
+
+            # Trigger deployment
+            deploy_resp = requests.post(
+                f"{DOKPLOY_URL}/api/application.deploy",
+                headers=headers,
+                json={"applicationId": app_id},
+                timeout=60
+            )
+            if deploy_resp.ok:
+                print("Deployment triggered")
+            else:
+                print(f"::warning::Deployment trigger: {deploy_resp.status_code}")
+
+            output('application-id', app_id)
+            output('created', 'true' if created else 'false')
+            output('success', 'true')
+
+        except Exception as e:
+            print(f"::error::Failed to sync application: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")

@@ -1,0 +1,88 @@
+name: 'Domain Generate'
+description: 'Generate environment-specific domain from base domain'
+author: 'NextNodeSolutions'
+
+inputs:
+  base-domain:
+    description: 'Base domain (e.g., example.com)'
+    required: false
+    default: ''
+  environment:
+    description: 'Target environment: development, preview, production'
+    required: true
+  pr-number:
+    description: 'PR number (for preview deployments)'
+    required: false
+    default: ''
+
+outputs:
+  domain:
+    description: 'Computed domain for this environment'
+    value: ${{ steps.generate.outputs.domain }}
+  url:
+    description: 'Full URL with https prefix'
+    value: ${{ steps.generate.outputs.url }}
+  is-sub-subdomain:
+    description: 'Whether domain is a sub-subdomain (cannot use Cloudflare proxy)'
+    value: ${{ steps.generate.outputs.is-sub-subdomain }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate domain
+      id: generate
+      shell: bash
+      env:
+        BASE_DOMAIN: ${{ inputs.base-domain }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        if [[ -z "$BASE_DOMAIN" ]]; then
+          echo "domain=" >> $GITHUB_OUTPUT
+          echo "url=" >> $GITHUB_OUTPUT
+          echo "is-sub-subdomain=false" >> $GITHUB_OUTPUT
+          echo "No base domain configured"
+          exit 0
+        fi
+
+        case "$ENVIRONMENT" in
+          production)
+            DOMAIN="$BASE_DOMAIN"
+            ;;
+          development)
+            DOMAIN="dev.$BASE_DOMAIN"
+            ;;
+          preview)
+            if [[ -n "$PR_NUMBER" ]]; then
+              DOMAIN="pr-${PR_NUMBER}.dev.$BASE_DOMAIN"
+            else
+              echo "::warning::Preview environment requires PR number"
+              DOMAIN=""
+            fi
+            ;;
+          *)
+            DOMAIN="${ENVIRONMENT}.$BASE_DOMAIN"
+            ;;
+        esac
+
+        if [[ -n "$DOMAIN" ]]; then
+          URL="https://$DOMAIN"
+          # Count dots to determine if sub-subdomain
+          DOT_COUNT=$(echo "$DOMAIN" | tr -cd '.' | wc -c | tr -d ' ')
+          if [[ $DOT_COUNT -ge 2 ]]; then
+            IS_SUB_SUBDOMAIN="true"
+          else
+            IS_SUB_SUBDOMAIN="false"
+          fi
+        else
+          URL=""
+          IS_SUB_SUBDOMAIN="false"
+        fi
+
+        echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+        echo "url=$URL" >> $GITHUB_OUTPUT
+        echo "is-sub-subdomain=$IS_SUB_SUBDOMAIN" >> $GITHUB_OUTPUT
+
+        echo "Domain: $DOMAIN"
+        echo "URL: $URL"
+        echo "Is sub-subdomain: $IS_SUB_SUBDOMAIN"

@@ -1,0 +1,219 @@
+name: 'Server Resolve'
+description: 'Resolve server ID from Dokploy and public IP from Hetzner/Tailscale'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  server-name:
+    description: 'Target server name'
+    required: true
+  traefik-server:
+    description: 'Traefik ingress server name'
+    required: false
+    default: 'admin-dokploy'
+  hcloud-token:
+    description: 'Hetzner Cloud API token'
+    required: false
+    default: ''
+  tailscale-api-token:
+    description: 'Tailscale API token'
+    required: false
+    default: ''
+
+outputs:
+  server-id:
+    description: 'Dokploy server ID'
+    value: ${{ steps.resolve.outputs.server-id }}
+  server-public-ip:
+    description: 'Server public IP address'
+    value: ${{ steps.resolve.outputs.server-public-ip }}
+  traefik-public-ip:
+    description: 'Traefik server public IP (for DNS)'
+    value: ${{ steps.resolve.outputs.traefik-public-ip }}
+  server-tailscale-ip:
+    description: 'Server Tailscale IP'
+    value: ${{ steps.resolve.outputs.server-tailscale-ip }}
+  cross-swarm:
+    description: 'Whether cross-swarm routing is needed'
+    value: ${{ steps.resolve.outputs.cross-swarm }}
+  success:
+    description: 'Whether resolution succeeded'
+    value: ${{ steps.resolve.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Resolve server
+      id: resolve
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        SERVER_NAME: ${{ inputs.server-name }}
+        TRAEFIK_SERVER: ${{ inputs.traefik-server }}
+        HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
+        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        SERVER_NAME = os.environ['SERVER_NAME']
+        TRAEFIK_SERVER = os.environ.get('TRAEFIK_SERVER', 'admin-dokploy')
+        HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
+        TAILSCALE_API_KEY = os.environ.get('TAILSCALE_API_KEY', '')
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        server_id = None
+        server_public_ip = None
+        traefik_public_ip = None
+        server_tailscale_ip = None
+
+        print("::group::Resolving server")
+        print(f"Target server: {SERVER_NAME}")
+        print(f"Traefik server: {TRAEFIK_SERVER}")
+
+        # Get public IP from Hetzner Cloud API
+        def get_hetzner_ip(name):
+            if not HCLOUD_TOKEN:
+                return None
+            try:
+                resp = requests.get(
+                    f"https://api.hetzner.cloud/v1/servers?name={name}",
+                    headers={"Authorization": f"Bearer {HCLOUD_TOKEN}"},
+                    timeout=30
+                )
+                if resp.ok:
+                    servers = resp.json().get('servers', [])
+                    if servers:
+                        return servers[0].get('public_net', {}).get('ipv4', {}).get('ip')
+            except Exception as e:
+                print(f"::warning::Hetzner API error for {name}: {e}")
+            return None
+
+        # Get Tailscale IP
+        def get_tailscale_ip(name):
+            if not TAILSCALE_API_KEY:
+                return None
+            try:
+                resp = requests.get(
+                    "https://api.tailscale.com/api/v2/tailnet/-/devices",
+                    headers={"Authorization": f"Bearer {TAILSCALE_API_KEY}"},
+                    timeout=30
+                )
+                if resp.ok:
+                    devices = resp.json().get('devices', [])
+                    for device in devices:
+                        if device.get('hostname', '').lower() == name.lower():
+                            addresses = device.get('addresses', [])
+                            for addr in addresses:
+                                if addr.startswith('100.'):
+                                    return addr
+            except Exception as e:
+                print(f"::warning::Tailscale API error for {name}: {e}")
+            return None
+
+        try:
+            # Step 1: Get server public IP from Hetzner
+            server_public_ip = get_hetzner_ip(SERVER_NAME)
+            if server_public_ip:
+                print(f"Server public IP (Hetzner): {server_public_ip}")
+
+            # Step 2: Get server ID from Dokploy
+            servers_resp = requests.get(
+                f"{DOKPLOY_URL}/api/server.all",
+                headers=headers,
+                timeout=30
+            )
+            servers = servers_resp.json() if servers_resp.ok else []
+
+            for s in servers:
+                if s.get('name') == SERVER_NAME:
+                    server_id = s.get('serverId')
+                    print(f"Dokploy server ID: {server_id}")
+
+                    # Fallback: get IP from Dokploy if Hetzner failed
+                    if not server_public_ip:
+                        try:
+                            ip_resp = requests.get(
+                                f"{DOKPLOY_URL}/api/server.publicIp",
+                                params={"serverId": server_id},
+                                headers=headers,
+                                timeout=30
+                            )
+                            if ip_resp.ok:
+                                ip_data = ip_resp.json()
+                                if isinstance(ip_data, str):
+                                    server_public_ip = ip_data if ip_data else None
+                                elif isinstance(ip_data, dict):
+                                    server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
+                                if server_public_ip:
+                                    print(f"Server public IP (Dokploy fallback): {server_public_ip}")
+                        except Exception as e:
+                            print(f"::warning::Failed to get IP from Dokploy: {e}")
+                    break
+
+            if not server_id:
+                print(f"::warning::Server {SERVER_NAME} not found in Dokploy")
+
+            # Step 3: Get Traefik server public IP
+            traefik_public_ip = get_hetzner_ip(TRAEFIK_SERVER)
+            if traefik_public_ip:
+                print(f"Traefik public IP: {traefik_public_ip}")
+            else:
+                # Fallback to worker IP
+                traefik_public_ip = server_public_ip
+                if traefik_public_ip:
+                    print(f"Traefik IP (fallback to worker): {traefik_public_ip}")
+
+            # Step 4: Check if cross-swarm routing needed
+            cross_swarm = SERVER_NAME != TRAEFIK_SERVER
+
+            if cross_swarm:
+                print(f"Cross-swarm routing needed: {SERVER_NAME} != {TRAEFIK_SERVER}")
+                server_tailscale_ip = get_tailscale_ip(SERVER_NAME)
+                if server_tailscale_ip:
+                    print(f"Server Tailscale IP: {server_tailscale_ip}")
+            else:
+                print("Same-swarm deployment, no cross-swarm routing needed")
+
+            output('server-id', server_id or '')
+            output('server-public-ip', server_public_ip or '')
+            output('traefik-public-ip', traefik_public_ip or '')
+            output('server-tailscale-ip', server_tailscale_ip or '')
+            output('cross-swarm', 'true' if cross_swarm else 'false')
+            output('success', 'true')
+
+        except Exception as e:
+            print(f"::error::Failed to resolve server: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")

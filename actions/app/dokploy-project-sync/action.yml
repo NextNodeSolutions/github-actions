@@ -1,0 +1,131 @@
+name: 'Dokploy Project Sync'
+description: 'Create or get Dokploy project'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-token:
+    description: 'Dokploy bearer token'
+    required: true
+  project-name:
+    description: 'Project name'
+    required: true
+  project-description:
+    description: 'Project description'
+    required: false
+    default: ''
+
+outputs:
+  project-id:
+    description: 'Dokploy project ID'
+    value: ${{ steps.sync.outputs.project-id }}
+  created:
+    description: 'Whether project was created (true) or already existed (false)'
+    value: ${{ steps.sync.outputs.created }}
+  success:
+    description: 'Whether operation succeeded'
+    value: ${{ steps.sync.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Sync project
+      id: sync
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        PROJECT_DESCRIPTION: ${{ inputs.project-description }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
+        PROJECT_NAME = os.environ['PROJECT_NAME']
+        PROJECT_DESCRIPTION = os.environ.get('PROJECT_DESCRIPTION', '')
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        headers = {
+            "Authorization": f"Bearer {DOKPLOY_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        print("::group::Syncing Dokploy project")
+
+        try:
+            # Get all projects
+            projects_resp = requests.get(
+                f"{DOKPLOY_URL}/api/project.all",
+                headers=headers,
+                timeout=30
+            )
+            projects = projects_resp.json() if projects_resp.ok else []
+
+            # Find existing project
+            project_id = None
+            for p in projects:
+                if p.get('name') == PROJECT_NAME:
+                    project_id = p.get('projectId')
+                    print(f"Found existing project: {PROJECT_NAME} ({project_id})")
+                    output('project-id', project_id)
+                    output('created', 'false')
+                    output('success', 'true')
+                    print("::endgroup::")
+                    sys.exit(0)
+
+            # Create project
+            create_resp = requests.post(
+                f"{DOKPLOY_URL}/api/project.create",
+                headers=headers,
+                json={"name": PROJECT_NAME, "description": PROJECT_DESCRIPTION},
+                timeout=30
+            )
+            create_resp.raise_for_status()
+            create_data = create_resp.json()
+
+            project_id = create_data.get('projectId') or create_data.get('id')
+
+            if not project_id:
+                # Fallback: search again
+                projects_resp2 = requests.get(f"{DOKPLOY_URL}/api/project.all", headers=headers, timeout=30)
+                for p in projects_resp2.json() if projects_resp2.ok else []:
+                    if p.get('name') == PROJECT_NAME:
+                        project_id = p.get('projectId')
+                        break
+
+            if not project_id:
+                print("::error::Failed to get project ID after creation")
+                output('success', 'false')
+                sys.exit(1)
+
+            print(f"Created project: {PROJECT_NAME} ({project_id})")
+            output('project-id', project_id)
+            output('created', 'true')
+            output('success', 'true')
+
+        except Exception as e:
+            print(f"::error::Failed to sync project: {e}")
+            output('success', 'false')
+            sys.exit(1)
+
+        print("::endgroup::")

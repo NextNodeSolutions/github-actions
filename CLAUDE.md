@@ -15,25 +15,51 @@ This is a **reusable GitHub Actions repository** for NextNode projects. It provi
 github-actions/
 ├── .github/workflows/              # Reusable workflows (external + internal)
 │   ├── quality-checks.yml         # Full quality pipeline (workflow_call)
-│   ├── dokploy-deploy.yml         # Dokploy deployment (workflow_call)
+│   ├── app-deploy.yml             # App deployment - composes atomic actions (workflow_call)
 │   ├── release.yml                # NPM library release (workflow_call)
 │   ├── publish-release.yml        # Publish workflow with repository_dispatch
 │   ├── version-management.yml     # Automated versioning with changesets
 │   ├── security.yml               # Security scanning (workflow_call)
 │   ├── health-check.yml           # Health monitoring (workflow_call)
 │   └── [additional workflows]     # Lint, test, typecheck individual workflows
+├── lib/                            # Shared Python utilities
+│   └── dokploy/                   # Dokploy deployment utilities
+│       ├── __init__.py            # Package exports
+│       ├── config.py              # deep_merge(), load_toml(), get_environment_config()
+│       ├── domain.py              # compute_domain(), compute_url(), compute_app_name()
+│       ├── port.py                # read_env_file(), detect_port(), get_port()
+│       └── output.py              # output() helper for GITHUB_OUTPUT
 ├── actions/                        # Domain-organized atomic actions
+│   ├── app/                       # App Deployment domain (atomic actions)
+│   │   ├── config-load/           # Load and merge TOML configuration
+│   │   ├── domain-generate/       # Compute environment-specific domain
+│   │   ├── port-detect/           # Detect port from .env/Dockerfile
+│   │   ├── dokploy-auth/          # Authenticate with Dokploy API
+│   │   ├── dokploy-project-sync/  # Create/get Dokploy project
+│   │   ├── dokploy-environment-sync/ # Create/get Dokploy environment
+│   │   ├── dokploy-app-sync/      # Create/update Dokploy application
+│   │   ├── dokploy-compose-sync/  # Create/update Dokploy compose stack
+│   │   ├── dokploy-cleanup/       # Cleanup preview deployments
+│   │   └── server-resolve/        # Resolve server ID and IPs
 │   ├── build/                     # Build & Setup domain
 │   │   ├── install/               # Dependency installation
 │   │   ├── build-project/         # Project building
+│   │   ├── docker-build-push/     # Build and push Docker images
 │   │   └── smart-cache/           # Intelligent caching
 │   ├── quality/                   # Code Quality domain
 │   │   ├── lint/                  # ESLint checks
 │   │   ├── typecheck/             # TypeScript validation
 │   │   └── security-audit/        # Security scanning
-│   ├── deploy/                    # Dokploy Deployment domain
-│   │   ├── dokploy-sync/          # Sync dokploy.toml config to Dokploy API
-│   │   └── vps-provision/         # Auto-provision Hetzner VPS for custom servers
+│   ├── deploy/                    # Deployment Infrastructure domain
+│   │   ├── cross-swarm-routing/   # Configure cross-swarm Traefik routing
+│   │   ├── publish-service-port/  # Publish service port via socat
+│   │   └── vps-provision/         # Auto-provision Hetzner VPS
+│   ├── infrastructure/            # Infrastructure Integrations domain
+│   │   ├── cloudflare-dns-upsert/ # Create/update DNS records
+│   │   ├── tailscale-oauth/       # Tailscale OAuth token management
+│   │   ├── tailscale-dokploy-url/ # Get Dokploy URL via Tailscale
+│   │   ├── tailscale-device-cleanup/ # Cleanup Tailscale devices
+│   │   └── dokploy-init-workers/  # Initialize Dokploy workers
 │   ├── release/                   # NPM Release Management domain
 │   │   ├── changesets-setup/      # Setup changesets for versioning
 │   │   ├── changesets-version/    # Create version PRs with changesets
@@ -73,15 +99,24 @@ github-actions/
 
 The actions are organized into logical domains to improve maintainability and discoverability:
 
+- **app/**: Atomic actions for app deployment - config loading, Dokploy API interactions, server resolution
 - **build/**: Everything related to project setup, dependency installation, building, and Docker image creation
 - **quality/**: Code quality checks including linting, type checking, and security
-- **deploy/**: Dokploy platform deployment, VPS provisioning, and cross-swarm routing
+- **deploy/**: Deployment infrastructure - cross-swarm routing, port publishing, VPS provisioning
 - **infrastructure/**: Tailscale VPN, Cloudflare DNS, and other infrastructure integrations
 - **release/**: NPM package release management with changesets and provenance
 - **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks and job result verification
 - **utilities/**: Generic helper actions used across domains
 - **Root level**: Only globally-used actions that external projects depend on
+
+### Shared Python Library (lib/dokploy/)
+
+The `lib/dokploy/` directory contains shared Python utilities used by multiple actions:
+- **config.py**: `deep_merge()`, `load_toml()`, `load_merged_config()`, `get_project_name()`, `get_environment_config()`
+- **domain.py**: `compute_domain()`, `compute_url()`, `compute_app_name()`, `is_sub_subdomain()`
+- **port.py**: `read_env_file()`, `detect_port()`, `get_port()`
+- **output.py**: `output()` helper for GitHub Actions output
 
 ## Infrastructure Integration
 
@@ -96,7 +131,7 @@ This repository is the CI/CD component of NextNode's self-hosted platform. It wo
 │                                                                     │
 │  github-actions                     infrastructure                  │
 │  ┌─────────────────────┐           ┌─────────────────────┐         │
-│  │ dokploy-deploy.yml  │           │ terraform/          │         │
+│  │ app-deploy.yml  │           │ terraform/          │         │
 │  │   │                 │           │   ├── main.tf       │         │
 │  │   ├── build         │           │   └── modules/      │         │
 │  │   │   └── push ─────┼──────────>│       └── hetzner   │         │
@@ -171,7 +206,7 @@ External projects can call workflows in two ways:
 1. **Full pipelines** (reusable workflows):
 ```yaml
 uses: nextnodesolutions/github-actions/.github/workflows/quality-checks.yml@main
-uses: nextnodesolutions/github-actions/.github/workflows/dokploy-deploy.yml@main
+uses: nextnodesolutions/github-actions/.github/workflows/app-deploy.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/release.yml@main
 uses: nextnodesolutions/github-actions/.github/workflows/version-management.yml@main
 ```

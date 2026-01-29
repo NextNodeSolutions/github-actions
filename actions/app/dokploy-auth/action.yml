@@ -1,0 +1,103 @@
+name: 'Dokploy Auth'
+description: 'Authenticate with Dokploy API and return bearer token'
+author: 'NextNodeSolutions'
+
+inputs:
+  dokploy-url:
+    description: 'Dokploy instance URL'
+    required: true
+  dokploy-admin-email:
+    description: 'Dokploy admin email'
+    required: true
+  dokploy-admin-password:
+    description: 'Dokploy admin password'
+    required: true
+
+outputs:
+  token:
+    description: 'Bearer token for Dokploy API'
+    value: ${{ steps.auth.outputs.token }}
+  success:
+    description: 'Whether authentication succeeded'
+    value: ${{ steps.auth.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Authenticate with Dokploy
+      id: auth
+      shell: python
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
+        DOKPLOY_ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
+        GITHUB_OUTPUT: ${{ github.output }}
+      run: |
+        import os
+        import sys
+        import requests
+
+        DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
+        DOKPLOY_ADMIN_EMAIL = os.environ['DOKPLOY_ADMIN_EMAIL']
+        DOKPLOY_ADMIN_PASSWORD = os.environ['DOKPLOY_ADMIN_PASSWORD']
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    f.write(f"{key}={value}\n")
+
+        print("::group::Authenticating with Dokploy")
+
+        try:
+            auth_resp = requests.post(
+                f"{DOKPLOY_URL}/api/auth/sign-in/email",
+                json={"email": DOKPLOY_ADMIN_EMAIL, "password": DOKPLOY_ADMIN_PASSWORD},
+                timeout=30
+            )
+
+            if auth_resp.status_code == 401:
+                print("::error::Invalid email or password")
+                output('success', 'false')
+                output('token', '')
+                sys.exit(1)
+
+            auth_resp.raise_for_status()
+
+            auth_data = auth_resp.json()
+            token = auth_data.get('token')
+
+            if not token:
+                print("::error::No token in auth response")
+                output('success', 'false')
+                output('token', '')
+                sys.exit(1)
+
+            # Verify token works
+            verify_resp = requests.get(
+                f"{DOKPLOY_URL}/api/project.all",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30
+            )
+            verify_resp.raise_for_status()
+
+            print("Authentication successful")
+            output('token', token)
+            output('success', 'true')
+
+        except requests.exceptions.RequestException as e:
+            print(f"::error::Failed to authenticate: {e}")
+            output('success', 'false')
+            output('token', '')
+            sys.exit(1)
+
+        print("::endgroup::")

@@ -1,0 +1,275 @@
+name: 'Config Load'
+description: 'Load and merge Dokploy configuration from defaults and project config'
+author: 'NextNodeSolutions'
+
+inputs:
+  config-file:
+    description: 'Path to project dokploy.toml'
+    required: false
+    default: 'dokploy.toml'
+  defaults-file:
+    description: 'Path to defaults TOML file'
+    required: false
+    default: ''
+  environment:
+    description: 'Target environment: development, preview, production'
+    required: true
+  pr-number:
+    description: 'PR number (for preview deployments)'
+    required: false
+    default: ''
+
+outputs:
+  config-json:
+    description: 'Full merged configuration as JSON'
+    value: ${{ steps.load.outputs.config-json }}
+  project-name:
+    description: 'Project name'
+    value: ${{ steps.load.outputs.project-name }}
+  domain:
+    description: 'Computed domain for this environment'
+    value: ${{ steps.load.outputs.domain }}
+  url:
+    description: 'Computed URL for this environment'
+    value: ${{ steps.load.outputs.url }}
+  app-name:
+    description: 'Dokploy application/compose name'
+    value: ${{ steps.load.outputs.app-name }}
+  server:
+    description: 'Target server name'
+    value: ${{ steps.load.outputs.server }}
+  port:
+    description: 'Application port'
+    value: ${{ steps.load.outputs.port }}
+  is-compose:
+    description: 'Whether this is a compose deployment'
+    value: ${{ steps.load.outputs.is-compose }}
+  compose-file:
+    description: 'Path to docker-compose.yml (if compose mode)'
+    value: ${{ steps.load.outputs.compose-file }}
+  traefik-server:
+    description: 'Traefik ingress server name'
+    value: ${{ steps.load.outputs.traefik-server }}
+  environment-enabled:
+    description: 'Whether the environment is enabled'
+    value: ${{ steps.load.outputs.environment-enabled }}
+  vps-enabled:
+    description: 'Whether custom VPS is needed'
+    value: ${{ steps.load.outputs.vps-enabled }}
+  vps-name:
+    description: 'Custom VPS name if VPS enabled'
+    value: ${{ steps.load.outputs.vps-name }}
+  vps-type:
+    description: 'Hetzner server type for VPS'
+    value: ${{ steps.load.outputs.vps-type }}
+  success:
+    description: 'Whether configuration loading succeeded'
+    value: ${{ steps.load.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install tomli
+
+    - name: Load configuration
+      id: load
+      shell: python
+      env:
+        CONFIG_FILE: ${{ inputs.config-file }}
+        DEFAULTS_FILE: ${{ inputs.defaults-file }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        GITHUB_OUTPUT: ${{ github.output }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        import os
+        import sys
+        import json
+        import re
+        import tomli
+        from pathlib import Path
+
+        # Configuration
+        CONFIG_FILE = os.environ.get('CONFIG_FILE', 'dokploy.toml')
+        DEFAULTS_FILE = os.environ.get('DEFAULTS_FILE', '')
+        ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+        PR_NUMBER = os.environ.get('PR_NUMBER', '')
+        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
+        GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
+        ACTION_PATH = os.environ.get('GITHUB_ACTION_PATH', '')
+
+        def output(key, value):
+            if GITHUB_OUTPUT:
+                with open(GITHUB_OUTPUT, 'a') as f:
+                    if '\n' in str(value):
+                        import uuid
+                        delimiter = f"EOF_{uuid.uuid4().hex[:8]}"
+                        f.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+                    else:
+                        f.write(f"{key}={value}\n")
+
+        def deep_merge(base, override):
+            result = base.copy()
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
+
+        def read_env_file(env_path='.env'):
+            env_vars = {}
+            env_file = Path(env_path)
+            if not env_file.exists():
+                return env_vars
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, _, value = line.partition('=')
+                    env_vars[key.strip()] = value.strip().strip('"\'')
+            return env_vars
+
+        def detect_port():
+            env_vars = read_env_file('.env')
+            if 'APP_PORT' in env_vars:
+                return int(env_vars['APP_PORT']), '.env'
+            dockerfile = Path('Dockerfile')
+            if dockerfile.exists():
+                content = dockerfile.read_text()
+                match = re.search(r'^ARG\s+APP_PORT\s*=\s*(\d+)', content, re.MULTILINE)
+                if match:
+                    return int(match.group(1)), 'Dockerfile'
+            return None, None
+
+        # Load and merge configuration
+        print("::group::Loading configuration")
+
+        defaults = {}
+        if DEFAULTS_FILE and Path(DEFAULTS_FILE).exists():
+            with open(DEFAULTS_FILE, 'rb') as f:
+                defaults = tomli.load(f)
+            print(f"Loaded defaults from: {DEFAULTS_FILE}")
+
+        project_config = {}
+        if Path(CONFIG_FILE).exists():
+            with open(CONFIG_FILE, 'rb') as f:
+                project_config = tomli.load(f)
+            print(f"Loaded project config from: {CONFIG_FILE}")
+        else:
+            print(f"No {CONFIG_FILE} found, using defaults only")
+
+        config = deep_merge(defaults, project_config)
+        print("::endgroup::")
+
+        # Get project name
+        project_name = config.get('project', {}).get('name', '')
+        if not project_name and GITHUB_REPOSITORY:
+            project_name = GITHUB_REPOSITORY.split('/')[-1]
+            print(f"Inferred project name from repository: {project_name}")
+
+        if not project_name:
+            print("::error::Could not determine project name")
+            output('success', 'false')
+            sys.exit(1)
+
+        # Get environment config
+        env_config = config.get('environments', {}).get(ENVIRONMENT, {})
+        if ENVIRONMENT == 'preview':
+            env_config = config.get('environments', {}).get('preview', config.get('environments', {}).get('development', {}))
+
+        # Check if environment is enabled
+        environment_enabled = True
+        if ENVIRONMENT != 'production':
+            environment_enabled = env_config.get('enabled', True)
+
+        # Compute domain
+        base_domain = config.get('project', {}).get('domain', '')
+        domain = ''
+        if base_domain:
+            if ENVIRONMENT == 'production':
+                domain = base_domain
+            elif ENVIRONMENT == 'development':
+                domain = f"dev.{base_domain}"
+            elif ENVIRONMENT == 'preview' and PR_NUMBER:
+                domain = f"pr-{PR_NUMBER}.dev.{base_domain}"
+            else:
+                domain = f"{ENVIRONMENT}.{base_domain}"
+
+        url = f"https://{domain}" if domain else ''
+
+        # Compute app name
+        if ENVIRONMENT == 'production':
+            app_name = project_name
+        elif ENVIRONMENT == 'preview' and PR_NUMBER:
+            app_name = f"{project_name}-pr-{PR_NUMBER}"
+        else:
+            app_name = f"{project_name}-{ENVIRONMENT}"
+
+        # Get server
+        server_name = env_config.get('server', 'dev-worker' if ENVIRONMENT != 'production' else 'prod-worker')
+
+        # Handle custom VPS
+        vps_config = config.get('vps', {})
+        vps_enabled = vps_config.get('enabled', False) or server_name == 'custom'
+        vps_name = ''
+        vps_type = vps_config.get('type', 'cpx21')
+
+        if server_name == 'custom':
+            vps_name = env_config.get('vps', f"{project_name}-worker")
+            server_name = vps_name
+
+        # Detect port
+        config_port = config.get('project', {}).get('port')
+        if config_port:
+            app_port = int(config_port)
+        else:
+            detected_port, source = detect_port()
+            app_port = detected_port if detected_port else 3000
+
+        # Check compose mode
+        compose_config = config.get('compose', {})
+        is_compose = compose_config.get('enabled', False)
+        compose_file = compose_config.get('file', 'docker-compose.yml') if is_compose else ''
+
+        # Get cluster config
+        traefik_server = config.get('cluster', {}).get('traefik-server', 'admin-dokploy')
+
+        # Output results
+        output('config-json', json.dumps(config, indent=2))
+        output('project-name', project_name)
+        output('domain', domain)
+        output('url', url)
+        output('app-name', app_name)
+        output('server', server_name)
+        output('port', str(app_port))
+        output('is-compose', 'true' if is_compose else 'false')
+        output('compose-file', compose_file)
+        output('traefik-server', traefik_server)
+        output('environment-enabled', 'true' if environment_enabled else 'false')
+        output('vps-enabled', 'true' if vps_enabled else 'false')
+        output('vps-name', vps_name)
+        output('vps-type', vps_type)
+        output('success', 'true')
+
+        print("")
+        print("=" * 60)
+        print(f"Project: {project_name}")
+        print(f"Environment: {ENVIRONMENT}")
+        print(f"App name: {app_name}")
+        print(f"Server: {server_name}")
+        print(f"Port: {app_port}")
+        if domain:
+            print(f"Domain: https://{domain}")
+        if is_compose:
+            print(f"Compose: {compose_file}")
+        print("=" * 60)
