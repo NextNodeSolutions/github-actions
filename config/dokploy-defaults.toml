@@ -10,6 +10,15 @@
 traefik-server = "admin-dokploy"
 
 # =============================================================================
+# PROJECT DEFAULTS
+# =============================================================================
+[project]
+# App exposure type determines which IP is used for DNS:
+# - external: Public apps → DNS points to Hetzner public IP (Cloudflare proxied)
+# - internal: Tailscale-protected apps → DNS points to Tailscale IP (not proxied)
+exposure = "external"
+
+# =============================================================================
 # BUILD CONFIGURATION
 # =============================================================================
 [build]

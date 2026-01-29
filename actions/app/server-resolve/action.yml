@@ -16,6 +16,10 @@ inputs:
     description: 'Traefik ingress server name'
     required: false
     default: 'admin-dokploy'
+  exposure:
+    description: 'App exposure: external (Hetzner IP for DNS) or internal (Tailscale IP for DNS)'
+    required: false
+    default: 'external'
   hcloud-token:
     description: 'Hetzner Cloud API token'
     required: false
@@ -38,6 +42,9 @@ outputs:
   server-tailscale-ip:
     description: 'Server Tailscale IP'
     value: ${{ steps.resolve.outputs.server-tailscale-ip }}
+  dns-ip:
+    description: 'IP address for DNS record (based on exposure type)'
+    value: ${{ steps.resolve.outputs.dns-ip }}
   cross-swarm:
     description: 'Whether cross-swarm routing is needed'
     value: ${{ steps.resolve.outputs.cross-swarm }}
@@ -61,6 +68,7 @@ runs:
         DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
         SERVER_NAME: ${{ inputs.server-name }}
         TRAEFIK_SERVER: ${{ inputs.traefik-server }}
+        EXPOSURE: ${{ inputs.exposure }}
         HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
         TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
         GITHUB_OUTPUT: ${{ github.output }}
@@ -73,6 +81,7 @@ runs:
         DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
         SERVER_NAME = os.environ['SERVER_NAME']
         TRAEFIK_SERVER = os.environ.get('TRAEFIK_SERVER', 'admin-dokploy')
+        EXPOSURE = os.environ.get('EXPOSURE', 'external')
         HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
         TAILSCALE_API_KEY = os.environ.get('TAILSCALE_API_KEY', '')
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
@@ -91,10 +100,12 @@ runs:
         server_public_ip = None
         traefik_public_ip = None
         server_tailscale_ip = None
+        dns_ip = None
 
         print("::group::Resolving server")
         print(f"Target server: {SERVER_NAME}")
         print(f"Traefik server: {TRAEFIK_SERVER}")
+        print(f"Exposure: {EXPOSURE}")
 
         # Get public IP from Hetzner Cloud API
         def get_hetzner_ip(name):
@@ -200,10 +211,28 @@ runs:
             else:
                 print("Same-swarm deployment, no cross-swarm routing needed")
 
+            # Step 5: Determine DNS IP based on exposure type
+            if EXPOSURE == 'internal':
+                # Internal app: use Tailscale IP for DNS
+                traefik_tailscale_ip = get_tailscale_ip(TRAEFIK_SERVER)
+                if traefik_tailscale_ip:
+                    dns_ip = traefik_tailscale_ip
+                    print(f"DNS IP (Tailscale for internal): {dns_ip}")
+                else:
+                    print("::error::Failed to resolve Tailscale IP for internal app")
+            else:
+                # External app: use Hetzner public IP for DNS
+                if traefik_public_ip:
+                    dns_ip = traefik_public_ip
+                    print(f"DNS IP (Hetzner for external): {dns_ip}")
+                else:
+                    print("::error::Failed to resolve Hetzner IP for external app")
+
             output('server-id', server_id or '')
             output('server-public-ip', server_public_ip or '')
             output('traefik-public-ip', traefik_public_ip or '')
             output('server-tailscale-ip', server_tailscale_ip or '')
+            output('dns-ip', dns_ip or '')
             output('cross-swarm', 'true' if cross_swarm else 'false')
             output('success', 'true')
 
