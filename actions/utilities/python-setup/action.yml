@@ -10,7 +10,7 @@ inputs:
   packages:
     description: 'Comma-separated list of pip packages to install'
     required: false
-    default: 'requests,tomli'
+    default: 'requests'
 
 runs:
   using: 'composite'

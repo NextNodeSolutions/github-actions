@@ -72,7 +72,7 @@ runs:
     - name: Setup Python
       uses: nextnodesolutions/github-actions/actions/utilities/python-setup@main
       with:
-        packages: 'tomli'
+        packages: ''
 
     - name: Load configuration
       id: load
@@ -82,84 +82,39 @@ runs:
         DEFAULTS_FILE: ${{ inputs.defaults-file }}
         ENVIRONMENT: ${{ inputs.environment }}
         PR_NUMBER: ${{ inputs.pr-number }}
-        GITHUB_OUTPUT: ${{ github.output }}
         GITHUB_REPOSITORY: ${{ github.repository }}
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
       run: |
         import os
         import sys
         import json
-        import re
-        import tomli
         from pathlib import Path
 
-        # Configuration
+        from lib.dokploy import (
+            output,
+            deep_merge,
+            load_toml,
+            get_port,
+            compute_domain,
+            compute_url,
+            compute_app_name,
+        )
+
+        # Configuration from environment
         CONFIG_FILE = os.environ.get('CONFIG_FILE', 'dokploy.toml')
         DEFAULTS_FILE = os.environ.get('DEFAULTS_FILE', '')
         ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
         PR_NUMBER = os.environ.get('PR_NUMBER', '')
-        GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
         GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
-        ACTION_PATH = os.environ.get('GITHUB_ACTION_PATH', '')
-
-        def output(key, value):
-            if GITHUB_OUTPUT:
-                with open(GITHUB_OUTPUT, 'a') as f:
-                    if '\n' in str(value):
-                        import uuid
-                        delimiter = f"EOF_{uuid.uuid4().hex[:8]}"
-                        f.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
-                    else:
-                        f.write(f"{key}={value}\n")
-
-        def deep_merge(base, override):
-            result = base.copy()
-            for key, value in override.items():
-                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                    result[key] = deep_merge(result[key], value)
-                else:
-                    result[key] = value
-            return result
-
-        def read_env_file(env_path='.env'):
-            env_vars = {}
-            env_file = Path(env_path)
-            if not env_file.exists():
-                return env_vars
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if '=' in line:
-                    key, _, value = line.partition('=')
-                    env_vars[key.strip()] = value.strip().strip('"\'')
-            return env_vars
-
-        def detect_port():
-            env_vars = read_env_file('.env')
-            if 'APP_PORT' in env_vars:
-                return int(env_vars['APP_PORT']), '.env'
-            dockerfile = Path('Dockerfile')
-            if dockerfile.exists():
-                content = dockerfile.read_text()
-                match = re.search(r'^ARG\s+APP_PORT\s*=\s*(\d+)', content, re.MULTILINE)
-                if match:
-                    return int(match.group(1)), 'Dockerfile'
-            return None, None
 
         # Load and merge configuration
         print("::group::Loading configuration")
 
-        defaults = {}
-        if DEFAULTS_FILE and Path(DEFAULTS_FILE).exists():
-            with open(DEFAULTS_FILE, 'rb') as f:
-                defaults = tomli.load(f)
+        defaults = load_toml(DEFAULTS_FILE) if DEFAULTS_FILE else {}
+        if defaults:
             print(f"Loaded defaults from: {DEFAULTS_FILE}")
 
-        project_config = {}
-        if Path(CONFIG_FILE).exists():
-            with open(CONFIG_FILE, 'rb') as f:
-                project_config = tomli.load(f)
+        project_config = load_toml(CONFIG_FILE)
+        if project_config:
             print(f"Loaded project config from: {CONFIG_FILE}")
         else:
             print(f"No {CONFIG_FILE} found, using defaults only")
@@ -188,28 +143,13 @@ runs:
         if ENVIRONMENT != 'production':
             environment_enabled = env_config.get('enabled', True)
 
-        # Compute domain
+        # Compute domain and URL
         base_domain = config.get('project', {}).get('domain', '')
-        domain = ''
-        if base_domain:
-            if ENVIRONMENT == 'production':
-                domain = base_domain
-            elif ENVIRONMENT == 'development':
-                domain = f"dev.{base_domain}"
-            elif ENVIRONMENT == 'preview' and PR_NUMBER:
-                domain = f"pr-{PR_NUMBER}.dev.{base_domain}"
-            else:
-                domain = f"{ENVIRONMENT}.{base_domain}"
-
-        url = f"https://{domain}" if domain else ''
+        domain = compute_domain(base_domain, ENVIRONMENT, PR_NUMBER)
+        url = compute_url(domain)
 
         # Compute app name
-        if ENVIRONMENT == 'production':
-            app_name = project_name
-        elif ENVIRONMENT == 'preview' and PR_NUMBER:
-            app_name = f"{project_name}-pr-{PR_NUMBER}"
-        else:
-            app_name = f"{project_name}-{ENVIRONMENT}"
+        app_name = compute_app_name(project_name, ENVIRONMENT, PR_NUMBER)
 
         # Get server
         server_name = env_config.get('server', 'dev-worker' if ENVIRONMENT != 'production' else 'prod-worker')
@@ -236,11 +176,7 @@ runs:
 
         # Detect port
         config_port = config.get('project', {}).get('port')
-        if config_port:
-            app_port = int(config_port)
-        else:
-            detected_port, source = detect_port()
-            app_port = detected_port if detected_port else 3000
+        app_port, _ = get_port(config_port)
 
         # Check compose mode
         compose_config = config.get('compose', {})

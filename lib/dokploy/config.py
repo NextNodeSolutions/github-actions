@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import tomli
+import tomllib
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -28,7 +28,7 @@ def load_toml(path: str | Path) -> dict[str, Any]:
         return {}
 
     with open(file_path, "rb") as f:
-        return tomli.load(f)
+        return tomllib.load(f)
 
 
 def load_merged_config(
