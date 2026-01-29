@@ -62,6 +62,9 @@ outputs:
   vps-type:
     description: 'Hetzner server type for VPS'
     value: ${{ steps.load.outputs.vps-type }}
+  exposure:
+    description: 'App exposure type: external (Hetzner IP) or internal (Tailscale IP)'
+    value: ${{ steps.load.outputs.exposure }}
   success:
     description: 'Whether configuration loading succeeded'
     value: ${{ steps.load.outputs.success }}
@@ -179,6 +182,12 @@ runs:
         # Get cluster config
         traefik_server = config.get('cluster', {}).get('traefik-server', 'admin-dokploy')
 
+        # Get exposure type (external = Hetzner IP, internal = Tailscale IP)
+        exposure = config.get('project', {}).get('exposure', 'external')
+        if exposure not in ('external', 'internal'):
+            print(f"::warning::Invalid exposure '{exposure}', defaulting to 'external'")
+            exposure = 'external'
+
         # Output results
         output('config-json', json.dumps(config, indent=2))
         output('project-name', project_name)
@@ -194,6 +203,7 @@ runs:
         output('vps-enabled', 'true' if vps_enabled else 'false')
         output('vps-name', vps_name)
         output('vps-type', vps_type)
+        output('exposure', exposure)
         output('success', 'true')
 
         print("")
@@ -207,4 +217,5 @@ runs:
             print(f"Domain: https://{domain}")
         if is_compose:
             print(f"Compose: {compose_file}")
+        print(f"Exposure: {exposure}")
         print("=" * 60)
