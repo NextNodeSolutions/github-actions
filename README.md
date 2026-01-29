@@ -239,7 +239,6 @@ jobs:
       enable-provenance: true
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## Available Actions
@@ -482,31 +481,149 @@ cpu = 2
 
 ## Secrets Reference
 
-Secrets required for the deployment workflow:
+### Quick Reference Table
 
-| Secret | Workflow | Description | Required |
-|--------|----------|-------------|----------|
-| `DOKPLOY_ADMIN_EMAIL` | dokploy-deploy | Dokploy admin email | Yes |
-| `DOKPLOY_ADMIN_PASSWORD` | dokploy-deploy | Dokploy admin password | Yes |
-| `TAILSCALE_OAUTH_CLIENT_ID` | dokploy-deploy | Tailscale OAuth client ID | Yes |
-| `TAILSCALE_OAUTH_SECRET` | dokploy-deploy | Tailscale OAuth secret | Yes |
-| `CLOUDFLARE_API_TOKEN` | dokploy-deploy | Cloudflare DNS API token | Yes |
-| `HETZNER_TOKEN` | dokploy-deploy | Hetzner Cloud API (for custom VPS) | For VPS |
-| `TF_API_TOKEN` | dokploy-deploy | Terraform Cloud token (for custom VPS) | For VPS |
-| `DOKPLOY_SSH_KEY_ID` | dokploy-deploy | SSH key ID for VPS registration | For VPS |
-| `INFISICAL_CLIENT_ID` | dokploy-deploy | Infisical secrets (optional) | Optional |
-| `INFISICAL_CLIENT_SECRET` | dokploy-deploy | Infisical secrets (optional) | Optional |
-| `NPM_TOKEN` | release | NPM publishing token | For libs |
-| `GITHUB_TOKEN` | release, version-management | GitHub API access | Yes |
+| Secret | Workflows | Purpose | Required |
+|--------|-----------|---------|----------|
+| `TAILSCALE_OAUTH_CLIENT_ID` | app-deploy, infra-healthcheck, swarm-rollback, terraform-plan | Tailscale OAuth authentication | Yes |
+| `TAILSCALE_OAUTH_SECRET` | app-deploy, infra-healthcheck, swarm-rollback, terraform-plan | Tailscale OAuth authentication | Yes |
+| `DOKPLOY_ADMIN_EMAIL` | app-deploy | Dokploy API login | Yes (deployments) |
+| `DOKPLOY_ADMIN_PASSWORD` | app-deploy | Dokploy API login | Yes (deployments) |
+| `CLOUDFLARE_API_TOKEN` | dns, terraform-apply, app-deploy | DNS record management | Yes (DNS operations) |
+| `CLOUDFLARE_ZONE_ID` | dns | Zone ID (optional, auto-lookup) | No |
+| `HETZNER_TOKEN` | terraform-plan, terraform-apply, packer-build, app-deploy | Hetzner Cloud API | Yes (infrastructure) |
+| `TF_API_TOKEN` | terraform-plan, terraform-apply, app-deploy | Terraform Cloud state | Yes (infrastructure) |
+| `NPM_TOKEN` | release, publish-release | NPM package publishing | Yes (releases) |
+| `CHANGESET_GITHUB_TOKEN` | release | Enhanced GitHub access | No (fallback to GITHUB_TOKEN) |
+| `NEXTNODE_APP_ID` | app-deploy, publish-release | GitHub App ID | Conditional (VPS/cross-repo) |
+| `NEXTNODE_APP_PRIVATE_KEY` | app-deploy, publish-release | GitHub App private key | Conditional (VPS/cross-repo) |
+
+### Secrets by Deployment Type
+
+#### Standard Deployments (existing servers)
+
+For projects deploying to admin-dokploy, dev-worker, or prod-worker:
+
+```yaml
+secrets:
+  TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+  TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+  DOKPLOY_ADMIN_EMAIL: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
+  DOKPLOY_ADMIN_PASSWORD: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+#### VPS Provisioning Deployments
+
+For projects with `server = "custom"` in dokploy.toml (dedicated VPS):
+
+```yaml
+secrets:
+  # All standard secrets above, plus:
+  HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+  TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+  NEXTNODE_APP_ID: ${{ secrets.NEXTNODE_APP_ID }}
+  NEXTNODE_APP_PRIVATE_KEY: ${{ secrets.NEXTNODE_APP_PRIVATE_KEY }}
+```
+
+#### NPM Library Releases
+
+```yaml
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+  # Optional: CHANGESET_GITHUB_TOKEN for enhanced permissions
+```
+
+### Tailscale Authentication (IMPORTANT)
+
+**There is NO static `TAILSCALE_AUTH_KEY` secret.** Auth keys are generated dynamically via OAuth.
+
+#### Why OAuth Instead of Static Auth Keys?
+
+- **Security**: Auth keys expire and are ephemeral
+- **Audit**: Each workflow run gets a unique key
+- **Flexibility**: Different tags/permissions per use case
+
+#### How It Works
+
+```yaml
+# Step 1: Get OAuth tokens
+- name: Get Tailscale Auth Key
+  id: tailscale-oauth
+  uses: nextnodesolutions/github-actions/actions/infrastructure/tailscale-oauth@main
+  with:
+    oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+    oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+    generate-auth-key: 'true'
+    auth-key-ephemeral: 'true'
+
+# Step 2: Use the generated auth key
+- name: Setup Tailscale
+  uses: tailscale/github-action@v2
+  with:
+    authkey: ${{ steps.tailscale-oauth.outputs.auth-key }}
+```
+
+### Token Types
+
+| Token Type | Source | When to Use |
+|------------|--------|-------------|
+| `github.token` | Automatic | Default for current repo operations (prefer this) |
+| `secrets.GITHUB_TOKEN` | Automatic | Same as above (avoid for consistency) |
+| GitHub App Token | Generated | Cross-repo operations, infrastructure dispatch |
+| OAuth tokens | Generated | External services (Tailscale, Dokploy) |
+
+### Using Secrets in Reusable Workflows
+
+When calling reusable workflows, pass secrets explicitly:
+
+```yaml
+jobs:
+  deploy:
+    uses: nextnodesolutions/github-actions/.github/workflows/app-deploy.yml@main
+    with:
+      environment: production
+    secrets:
+      TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+      TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+      DOKPLOY_ADMIN_EMAIL: ${{ secrets.DOKPLOY_ADMIN_EMAIL }}
+      DOKPLOY_ADMIN_PASSWORD: ${{ secrets.DOKPLOY_ADMIN_PASSWORD }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+### Job Permissions for Releases
+
+Jobs that push tags or create releases need explicit permissions:
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # For git push, tag creation
+      id-token: write   # For NPM provenance
+```
 
 ### How to Obtain Secrets
 
-- **DOKPLOY_***: Created during Dokploy setup on admin-dokploy
-- **TAILSCALE_***: [Tailscale Admin Console](https://login.tailscale.com/admin/settings/oauth) → OAuth clients
-- **CLOUDFLARE_API_TOKEN**: [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) → Zone:DNS Edit
-- **HETZNER_TOKEN**: [Hetzner Cloud Console](https://console.hetzner.cloud/) → API tokens
-- **TF_API_TOKEN**: [Terraform Cloud](https://app.terraform.io/app/settings/tokens) → User tokens
-- **NPM_TOKEN**: [npmjs.com](https://www.npmjs.com/) → Access Tokens → Automation
+| Secret | Where to Get It |
+|--------|-----------------|
+| `TAILSCALE_OAUTH_*` | [Tailscale Admin Console](https://login.tailscale.com/admin/settings/oauth) > OAuth clients |
+| `DOKPLOY_*` | Created during Dokploy setup on admin-dokploy server |
+| `CLOUDFLARE_API_TOKEN` | [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) > Create Token > Zone:DNS:Edit |
+| `HETZNER_TOKEN` | [Hetzner Cloud Console](https://console.hetzner.cloud/) > Project > Security > API tokens |
+| `TF_API_TOKEN` | [Terraform Cloud](https://app.terraform.io/app/settings/tokens) > User tokens |
+| `NPM_TOKEN` | [npmjs.com](https://www.npmjs.com/) > Access Tokens > Generate New Token > Automation |
+| `NEXTNODE_APP_*` | GitHub Organization Settings > Developer settings > GitHub Apps |
+
+### Common Mistakes
+
+| Mistake | Solution |
+|---------|----------|
+| Using `secrets.TAILSCALE_AUTH_KEY` | Use `tailscale-oauth` action to generate auth keys dynamically |
+| Using `secrets.GITHUB_TOKEN` | Use `github.token` for consistency |
+| Not declaring secrets in workflow_call | Add `secrets:` block with all required secrets |
+| Missing permissions for releases | Add `permissions: contents: write` to jobs creating tags |
 
 ### VPS Auto-Provisioning
 
@@ -549,7 +666,6 @@ jobs:
       publish-script: 'changeset:publish'
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Version Management Workflow
@@ -571,8 +687,6 @@ jobs:
     with:
       auto-merge: true
       version-script: 'changeset:version'
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## Configuration

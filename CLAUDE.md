@@ -371,81 +371,173 @@ Enable debug logging by setting repository secret:
 - `ACTIONS_RUNNER_DEBUG: true`
 - `ACTIONS_STEP_DEBUG: true`
 
-## Secrets and Token Chain Requirements
+## Secrets and Tokens Guide (CRITICAL)
 
-This section documents the required secrets and how tokens are derived across the deployment workflows.
+This section is essential for understanding how secrets flow through workflows. **Read this before modifying any workflow.**
+
+### Token Types and When to Use Each
+
+| Token Type | Source | Scope | Use Case |
+|------------|--------|-------|----------|
+| `github.token` | Automatic | Current repo | Default operations, checkouts, API calls |
+| `secrets.GITHUB_TOKEN` | Automatic | Current repo | Same as above (prefer `github.token`) |
+| GitHub App Token | Generated via action | Cross-repo | Infrastructure dispatch, cross-repo access |
+| OAuth-derived tokens | Generated via action | External service | Tailscale API, Dokploy API |
+
+**Rule**: Prefer `github.token` over `secrets.GITHUB_TOKEN` for consistency. They are identical.
+
+### Secrets Declaration in workflow_call Workflows (MANDATORY)
+
+**All reusable workflows MUST declare secrets explicitly** in the `on.workflow_call.secrets` block:
+
+```yaml
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: string
+    secrets:
+      TAILSCALE_OAUTH_CLIENT_ID:
+        description: 'Tailscale OAuth client ID'
+        required: true
+      TAILSCALE_OAUTH_SECRET:
+        description: 'Tailscale OAuth client secret'
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        description: 'Cloudflare API token for DNS'
+        required: false  # Optional secrets use required: false
+```
+
+**Why explicit declaration**:
+1. Validation at workflow call time
+2. Clear documentation of requirements
+3. Type-safe secret passing
+4. Easier debugging when secrets are missing
+
+### Tailscale OAuth Pattern (CRITICAL - NO STATIC AUTH KEY)
+
+**There is NO `TAILSCALE_AUTH_KEY` secret. Auth keys are generated dynamically.**
+
+```yaml
+# WRONG - This secret does NOT exist
+- uses: tailscale/github-action@v2
+  with:
+    authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}  # NEVER DO THIS
+
+# CORRECT - Generate auth key via OAuth
+- name: Get Tailscale Auth Key
+  id: tailscale-oauth
+  uses: nextnodesolutions/github-actions/actions/infrastructure/tailscale-oauth@main
+  with:
+    oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+    oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+    generate-auth-key: 'true'
+    auth-key-ephemeral: 'true'  # Recommended for CI
+
+- name: Setup Tailscale
+  uses: tailscale/github-action@v2
+  with:
+    authkey: ${{ steps.tailscale-oauth.outputs.auth-key }}
+```
+
+**OAuth Action Outputs**:
+| Output | Description | Use Case |
+|--------|-------------|----------|
+| `api-token` | OAuth access token | Tailscale API calls (device management, DNS) |
+| `auth-key` | Ephemeral auth key | Device registration (tailscale/github-action) |
+| `success` | Boolean success flag | Conditional logic |
+
+### Job Permissions for Tag/Release Operations
+
+Jobs that push tags or create releases need explicit permissions:
+
+```yaml
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for git push, tag creation
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git tag v1.0.0
+          git push origin v1.0.0
+
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # Required for NPM provenance
+```
+
+### Complete Secrets Reference
+
+| Secret | Used By Workflows | Purpose | Required |
+|--------|-------------------|---------|----------|
+| `TAILSCALE_OAUTH_CLIENT_ID` | app-deploy, infra-healthcheck, swarm-rollback, terraform-plan | Tailscale OAuth | Yes |
+| `TAILSCALE_OAUTH_SECRET` | app-deploy, infra-healthcheck, swarm-rollback, terraform-plan | Tailscale OAuth | Yes |
+| `DOKPLOY_ADMIN_EMAIL` | app-deploy | Dokploy API authentication | Yes (deploy) |
+| `DOKPLOY_ADMIN_PASSWORD` | app-deploy | Dokploy API authentication | Yes (deploy) |
+| `CLOUDFLARE_API_TOKEN` | dns, terraform-apply, app-deploy | DNS management | Yes (DNS) |
+| `CLOUDFLARE_ZONE_ID` | dns | Zone ID (auto-lookup if not provided) | No |
+| `HETZNER_TOKEN` | terraform-plan, terraform-apply, packer-build, app-deploy | Hetzner Cloud API | Yes (infra) |
+| `TF_API_TOKEN` | terraform-plan, terraform-apply, app-deploy | Terraform Cloud state | Yes (infra) |
+| `NPM_TOKEN` | release, publish-release | NPM publishing | Yes (release) |
+| `CHANGESET_GITHUB_TOKEN` | release | GitHub access (fallback: GITHUB_TOKEN) | No |
+| `NEXTNODE_APP_ID` | app-deploy, publish-release | GitHub App for cross-repo | Conditional |
+| `NEXTNODE_APP_PRIVATE_KEY` | app-deploy, publish-release | GitHub App private key | Conditional |
 
 ### Token Derivation Chains
 
 #### Tailscale OAuth Chain
 ```
 TAILSCALE_OAUTH_CLIENT_ID + TAILSCALE_OAUTH_SECRET
-    |
-    v tailscale-oauth action (with generate-auth-key: 'true')
-    |
-    ├── api-token (output) → for API calls (device management, DNS)
-    └── auth-key (output) → for device registration (VPS, Tailscale connect)
+    │
+    ▼ tailscale-oauth action
+    │
+    ├── api-token → Tailscale API calls
+    └── auth-key → Device registration (ephemeral)
 ```
-
-**Note:** Auth keys are generated dynamically via the `tailscale-oauth` action. There is no static `TAILSCALE_AUTH_KEY` secret - all auth keys are ephemeral and created on-demand.
 
 #### Dokploy Authentication Chain
 ```
 DOKPLOY_ADMIN_EMAIL + DOKPLOY_ADMIN_PASSWORD
-    |
-    v dokploy-auth action
-DOKPLOY_BEARER_TOKEN (for all subsequent Dokploy API calls)
+    │
+    ▼ dokploy-auth action
+    │
+    └── token → All Dokploy API calls
 ```
 
-#### GitHub App Token Chain (VPS provisioning only)
+#### GitHub App Token Chain
 ```
 NEXTNODE_APP_ID + NEXTNODE_APP_PRIVATE_KEY
-    |
-    v actions/create-github-app-token@v1
-GITHUB_TOKEN (scoped to infrastructure repo for Terraform dispatch)
+    │
+    ▼ actions/create-github-app-token@v1
+    │
+    └── token → Cross-repo operations (infrastructure dispatch)
 ```
 
-### Required Secrets by Deployment Type
+### Common Mistakes to Avoid
 
-#### Standard Deployments (existing servers)
+| Mistake | Why It's Wrong | Correct Approach |
+|---------|----------------|------------------|
+| `secrets.TAILSCALE_AUTH_KEY` | Secret doesn't exist | Use tailscale-oauth action |
+| Missing secrets declaration | No validation, unclear requirements | Declare in workflow_call.secrets |
+| `secrets.GITHUB_TOKEN` | Inconsistent | Use `github.token` |
+| Missing permissions block | Tag/release operations fail | Add `permissions: contents: write` |
+| Hardcoded tokens | Security risk | Always use secrets or generated tokens |
+| Using `secrets: inherit` | Over-privileges jobs | Explicit secret passing |
 
-Projects deploying to admin-dokploy, dev-worker, or prod-worker:
+### When Adding New Workflows
 
-| Secret | Required | Purpose |
-|--------|----------|---------|
-| `TAILSCALE_OAUTH_CLIENT_ID` | Yes | Registry access, Dokploy URL resolution |
-| `TAILSCALE_OAUTH_SECRET` | Yes | Registry access, Dokploy URL resolution |
-| `DOKPLOY_ADMIN_EMAIL` | Yes | Dokploy API authentication |
-| `DOKPLOY_ADMIN_PASSWORD` | Yes | Dokploy API authentication |
-| `CLOUDFLARE_API_TOKEN` | If DNS needed | DNS record creation/update |
-
-#### VPS Provisioning Deployments
-
-Projects with `server = "custom"` in dokploy.toml (dedicated VPS):
-
-| Secret | Required | Purpose |
-|--------|----------|---------|
-| All secrets above | Yes | Same purposes |
-| `HETZNER_TOKEN` | Yes | VPS creation via Hetzner API |
-| `TF_API_TOKEN` | Yes | Terraform Cloud state management |
-| `NEXTNODE_APP_ID` | Yes | GitHub App for infrastructure repo access |
-| `NEXTNODE_APP_PRIVATE_KEY` | Yes | GitHub App for infrastructure repo access |
-
-### Workflow Token Requirements
-
-#### app-deploy.yml (called by external projects)
-
-| Job | Required Secrets |
-|-----|------------------|
-| config | None (reads dokploy.toml only) |
-| build | TAILSCALE_OAUTH_* (registry access) |
-| provision | HETZNER_TOKEN, TF_API_TOKEN, NEXTNODE_APP_*, TAILSCALE_OAUTH_*, DOKPLOY_ADMIN_*, CLOUDFLARE_API_TOKEN |
-| deploy | TAILSCALE_OAUTH_*, DOKPLOY_ADMIN_*, CLOUDFLARE_API_TOKEN |
-
-### Design Decision: Explicit Secret Passing
-
-The workflows use explicit secret passing rather than `secrets: inherit` for:
-
-1. **Security**: Only required secrets available to each job
-2. **Auditability**: Clear documentation of what each workflow needs
-3. **Least Privilege**: Compromised job has limited access scope
+Checklist for secrets:
+- [ ] Declare all required secrets in `on.workflow_call.secrets`
+- [ ] Add descriptions for each secret
+- [ ] Mark optional secrets with `required: false`
+- [ ] Document in this CLAUDE.md secrets table
+- [ ] Use `github.token` not `secrets.GITHUB_TOKEN`
+- [ ] Add `permissions` block if creating tags/releases
+- [ ] Use tailscale-oauth action (never static TAILSCALE_AUTH_KEY)
