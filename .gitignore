@@ -16,5 +16,9 @@ Thumbs.db
 *.temp
 temp/
 
+# Python
+__pycache__/
+*.pyc
+
 # Claude AI
 .claude

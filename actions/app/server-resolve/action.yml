@@ -45,6 +45,9 @@ outputs:
   dns-ip:
     description: 'IP address for DNS record (based on exposure type)'
     value: ${{ steps.resolve.outputs.dns-ip }}
+  traefik-tailscale-ip:
+    description: 'Traefik server Tailscale IP (for SSH access)'
+    value: ${{ steps.resolve.outputs.traefik-tailscale-ip }}
   cross-swarm:
     description: 'Whether cross-swarm routing is needed'
     value: ${{ steps.resolve.outputs.cross-swarm }}
@@ -188,7 +191,10 @@ runs:
                     break
 
             if not server_id:
-                print(f"::warning::Server {SERVER_NAME} not found in Dokploy")
+                if SERVER_NAME == TRAEFIK_SERVER:
+                    print(f"Using admin server (no remote server-id needed)")
+                else:
+                    print(f"::warning::Server {SERVER_NAME} not found in Dokploy")
 
             # Step 3: Get Traefik server public IP
             traefik_public_ip = get_hetzner_ip(TRAEFIK_SERVER)
@@ -211,10 +217,14 @@ runs:
             else:
                 print("Same-swarm deployment, no cross-swarm routing needed")
 
-            # Step 5: Determine DNS IP based on exposure type
+            # Step 5: Get Traefik server Tailscale IP (for SSH access)
+            traefik_tailscale_ip = get_tailscale_ip(TRAEFIK_SERVER)
+            if traefik_tailscale_ip:
+                print(f"Traefik Tailscale IP: {traefik_tailscale_ip}")
+
+            # Step 6: Determine DNS IP based on exposure type
             if EXPOSURE == 'internal':
                 # Internal app: use Tailscale IP for DNS
-                traefik_tailscale_ip = get_tailscale_ip(TRAEFIK_SERVER)
                 if traefik_tailscale_ip:
                     dns_ip = traefik_tailscale_ip
                     print(f"DNS IP (Tailscale for internal): {dns_ip}")
@@ -232,6 +242,7 @@ runs:
             output('server-public-ip', server_public_ip or '')
             output('traefik-public-ip', traefik_public_ip or '')
             output('server-tailscale-ip', server_tailscale_ip or '')
+            output('traefik-tailscale-ip', traefik_tailscale_ip or '')
             output('dns-ip', dns_ip or '')
             output('cross-swarm', 'true' if cross_swarm else 'false')
             output('success', 'true')

@@ -24,9 +24,9 @@ inputs:
     required: false
     default: 'true'
   certificate-type:
-    description: 'Certificate type (letsencrypt, none)'
+    description: 'Certificate type (letsencrypt, none). Default is none since Traefik handles wildcard certs.'
     required: false
-    default: 'letsencrypt'
+    default: 'none'
 
 outputs:
   domain-id:

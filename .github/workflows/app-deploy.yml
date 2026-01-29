@@ -370,6 +370,20 @@ jobs:
           content: ${{ steps.server.outputs.dns-ip }}
           proxied: ${{ needs.config.outputs.exposure == 'external' && !contains(needs.config.outputs.domain, '.dev.') }}
 
+      # Wildcard Certificate Configuration
+      - name: Configure Wildcard Certificate
+        id: wildcard
+        if: |
+          inputs.action == 'deploy' &&
+          needs.config.outputs.domain != '' &&
+          steps.server.outputs.traefik-tailscale-ip != ''
+        uses: ./.github-actions/actions/ssl/traefik-wildcard-config
+        with:
+          domain: ${{ needs.config.outputs.domain }}
+          router-name: ${{ needs.config.outputs.app-name }}
+          traefik-server-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
+          container-port: ${{ needs.config.outputs.port }}
+
       # Cross-Swarm Routing
       - name: Configure Cross-Swarm Routing
         if: |
