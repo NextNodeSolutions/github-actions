@@ -529,10 +529,6 @@ runs:
 
         server_name = env_config.get('server', 'dev-worker' if ENVIRONMENT != 'production' else 'prod-worker')
 
-        # Override from environment-specific config in project
-        if ENVIRONMENT == 'production' and 'production' in config:
-            server_name = config['production'].get('server', server_name)
-
         # Handle custom VPS: if server = "custom", use the VPS name from config
         # VPS provisioning is handled by vps-provision action BEFORE this action
         if server_name == 'custom':
@@ -754,8 +750,9 @@ runs:
 
             # Get resource config (merge defaults with environment-specific)
             resources = config.get('resources', {}).copy()
-            if ENVIRONMENT == 'production' and 'production' in config:
-                resources.update({k: v for k, v in config['production'].items() if k in ['memory', 'cpu', 'replicas']})
+            # Merge environment-specific resource settings
+            env_resources = {k: v for k, v in env_config.items() if k in ['memory', 'cpu', 'replicas']}
+            resources.update(env_resources)
 
             try:
                 # Check if app exists by getting project details which include applications
