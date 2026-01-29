@@ -10,8 +10,8 @@ inputs:
     description: 'Tailscale OAuth secret for connecting to private network'
     required: true
   registry-host:
-    description: 'Docker registry hostname (via Tailscale)'
-    default: 'admin.nextnode.fr'
+    description: 'Docker registry hostname'
+    default: 'registry.nextnode.fr'
   dockerfile:
     description: 'Path to Dockerfile'
     default: 'Dockerfile'
