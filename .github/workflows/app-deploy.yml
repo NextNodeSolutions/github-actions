@@ -339,6 +339,8 @@ jobs:
       - name: Checkout Project
         if: inputs.action == 'deploy' && (needs.config.outputs.is-compose == 'true' || inputs.compose-file != '')
         uses: actions/checkout@v4
+        with:
+          path: project
 
       # Deploy compose (if compose mode)
       - name: Sync Compose
@@ -352,7 +354,7 @@ jobs:
           environment-id: ${{ steps.environment.outputs.environment-id }}
           app-name: ${{ needs.config.outputs.app-name }}
           server-id: ${{ steps.server.outputs.server-id }}
-          compose-file: ${{ inputs.compose-file || needs.config.outputs.compose-file }}
+          compose-file: project/${{ inputs.compose-file || needs.config.outputs.compose-file }}
           env: ${{ secrets.compose-env }}
 
       # DNS Configuration
