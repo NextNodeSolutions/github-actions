@@ -1,5 +1,5 @@
 name: 'Cloudflare SSL/TLS Setup'
-description: 'Configure Cloudflare SSL/TLS mode for Railway deployments'
+description: 'Configure Cloudflare SSL/TLS mode for origin server connections'
 
 inputs:
   cloudflare-api-token:
@@ -12,7 +12,7 @@ inputs:
     description: 'Domain to configure (used for auto-detecting zone if zone-id not provided)'
     required: true
   ssl-mode:
-    description: 'SSL/TLS mode: off, flexible, full, strict (Railway requires "full")'
+    description: 'SSL/TLS mode: off, flexible, full, strict ("full" recommended for most deployments)'
     required: false
     default: 'full'
 
@@ -140,21 +140,21 @@ runs:
               echo ""
               echo "ℹ️  SSL/TLS Mode: Full"
               echo "   • Cloudflare encrypts traffic to the origin server"
-              echo "   • Accepts self-signed certificates from Railway"
-              echo "   • ✅ Recommended for Railway deployments"
+              echo "   • Accepts self-signed certificates from origin"
+              echo "   • Recommended for most deployments"
               ;;
             "strict")
               echo ""
               echo "⚠️  SSL/TLS Mode: Full (Strict)"
-              echo "   • Requires valid SSL certificate on Railway"
-              echo "   • May fail if Railway hasn't provisioned the certificate yet"
+              echo "   • Requires valid SSL certificate on origin"
+              echo "   • May fail if origin hasn't provisioned the certificate yet"
               echo "   • Consider using 'full' mode instead"
               ;;
             "flexible")
               echo ""
               echo "⚠️  SSL/TLS Mode: Flexible"
               echo "   • Not recommended for production"
-              echo "   • May cause SSL/TLS errors with Railway"
+              echo "   • May cause SSL/TLS errors"
               echo "   • Consider using 'full' mode instead"
               ;;
           esac

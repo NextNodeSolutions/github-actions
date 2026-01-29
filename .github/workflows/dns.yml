@@ -75,12 +75,12 @@ on:
         default: '60'
         type: string
       enable-ssl-setup:
-        description: 'Enable automatic SSL/TLS mode configuration (recommended for Railway)'
+        description: 'Enable automatic SSL/TLS mode configuration'
         required: false
         default: true
         type: boolean
       ssl-mode:
-        description: 'SSL/TLS mode: off, flexible, full, strict (Railway requires "full")'
+        description: 'SSL/TLS mode: off, flexible, full, strict ("full" recommended)'
         required: false
         default: 'full'
         type: string
@@ -200,13 +200,13 @@ jobs:
           parent-domain: ${{ steps.zone-lookup.outputs.parent-subdomain }}
           target: ${{ steps.dns-upsert.outputs.resolved-content }}
           record-type: ${{ inputs.record-type }}
-          proxied: ${{ steps.dns-upsert.outputs.effective-proxied }}
+          proxied: ${{ inputs.proxied }}
           ttl: ${{ inputs.ttl }}
 
-      # Step 4: Create ACME Challenge Record for Railway SSL (conditional)
-      - name: Create ACME Challenge Record (for Railway SSL)
+      # Step 4: Create ACME Challenge Record for SSL validation (conditional)
+      - name: Create ACME Challenge Record (for SSL validation)
         id: acme
-        if: inputs.record-type == 'CNAME' && steps.dns-upsert.outputs.effective-proxied == 'false'
+        if: inputs.record-type == 'CNAME' && inputs.proxied == false
         uses: ./.github-actions/actions/infrastructure/cloudflare-acme-record-create
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}

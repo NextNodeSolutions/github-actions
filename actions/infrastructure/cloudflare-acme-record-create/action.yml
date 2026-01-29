@@ -1,5 +1,5 @@
 name: 'Cloudflare ACME Challenge Record Create'
-description: "Create _acme-challenge DNS record for SSL validation (Railway/Let's Encrypt)"
+description: "Create _acme-challenge DNS record for SSL validation (Let's Encrypt)"
 author: 'NextNodeSolutions'
 
 inputs:
