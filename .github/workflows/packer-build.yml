@@ -17,6 +17,10 @@ on:
         description: 'Override datacenter location'
         required: false
         type: string
+    secrets:
+      HETZNER_TOKEN:
+        description: 'Hetzner Cloud API token for image building'
+        required: true
     outputs:
       snapshot-id:
         description: 'Created snapshot ID'

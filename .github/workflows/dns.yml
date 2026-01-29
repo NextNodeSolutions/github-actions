@@ -84,6 +84,13 @@ on:
         required: false
         default: 'full'
         type: string
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: 'Cloudflare API token'
+        required: true
+      CLOUDFLARE_ZONE_ID:
+        description: 'Cloudflare Zone ID (optional, will be looked up if not provided)'
+        required: false
     outputs:
       dns-updated:
         description: 'Whether DNS was successfully updated'

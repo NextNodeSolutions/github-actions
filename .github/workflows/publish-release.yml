@@ -44,7 +44,16 @@ on:
         description: 'Merge commit SHA (required for workflow_call)'
         required: false
         type: string
-        
+    secrets:
+      NPM_TOKEN:
+        description: 'NPM authentication token for publishing'
+        required: true
+      NEXTNODE_APP_ID:
+        description: 'GitHub App ID for repository access'
+        required: false
+      NEXTNODE_APP_PRIVATE_KEY:
+        description: 'GitHub App private key'
+        required: false
     outputs:
       published:
         description: 'Whether packages were published'
@@ -235,9 +244,11 @@ jobs:
     name: Create Git Tag
     needs: [validate-tokens, validate-event]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag-name: ${{ steps.tag.outputs.tag-name }}
-      
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -245,7 +256,7 @@ jobs:
           # Checkout the exact merge commit
           ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Configure Git for Tagging
         run: |
@@ -298,7 +309,7 @@ jobs:
           # Checkout the exact merge commit  
           ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Setup Release Environment
         uses: NextNodeSolutions/github-actions/actions/release/changesets-setup@main
@@ -360,16 +371,18 @@ jobs:
     needs: [validate-event, tag, publish]
     if: needs.publish.outputs.published == 'true' && needs.validate-event.outputs.create-github-release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       release-url: ${{ steps.release.outputs.release-url }}
-      
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate-event.outputs.merge-commit-sha }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Generate Release Notes
         id: release-notes

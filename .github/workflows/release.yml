@@ -59,7 +59,13 @@ on:
         required: false
         default: false
         type: boolean
-        
+    secrets:
+      NPM_TOKEN:
+        description: 'NPM authentication token for publishing'
+        required: true
+      CHANGESET_GITHUB_TOKEN:
+        description: 'GitHub token with repo access (falls back to GITHUB_TOKEN)'
+        required: false
     outputs:
       published:
         description: 'Whether packages were published'

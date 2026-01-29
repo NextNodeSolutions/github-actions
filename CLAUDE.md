@@ -381,10 +381,13 @@ This section documents the required secrets and how tokens are derived across th
 ```
 TAILSCALE_OAUTH_CLIENT_ID + TAILSCALE_OAUTH_SECRET
     |
-    v tailscale-oauth action
-TAILSCALE_API_TOKEN (for API calls - device management, DNS)
-TAILSCALE_AUTH_KEY (for device registration - VPS provisioning)
+    v tailscale-oauth action (with generate-auth-key: 'true')
+    |
+    ├── api-token (output) → for API calls (device management, DNS)
+    └── auth-key (output) → for device registration (VPS, Tailscale connect)
 ```
+
+**Note:** Auth keys are generated dynamically via the `tailscale-oauth` action. There is no static `TAILSCALE_AUTH_KEY` secret - all auth keys are ephemeral and created on-demand.
 
 #### Dokploy Authentication Chain
 ```

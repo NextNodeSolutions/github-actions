@@ -18,6 +18,16 @@ on:
         required: false
         default: true
         type: boolean
+    secrets:
+      TF_API_TOKEN:
+        description: 'Terraform Cloud API token'
+        required: true
+      HETZNER_TOKEN:
+        description: 'Hetzner Cloud API token'
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        description: 'Cloudflare API token for DNS configuration'
+        required: false
     outputs:
       admin-ip:
         description: 'Admin server IP'

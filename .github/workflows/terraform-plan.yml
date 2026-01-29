@@ -13,6 +13,19 @@ on:
         required: false
         default: 'config/infrastructure.json'
         type: string
+    secrets:
+      HETZNER_TOKEN:
+        description: 'Hetzner Cloud API token'
+        required: true
+      TF_API_TOKEN:
+        description: 'Terraform Cloud API token'
+        required: true
+      TAILSCALE_OAUTH_CLIENT_ID:
+        description: 'Tailscale OAuth client ID'
+        required: true
+      TAILSCALE_OAUTH_SECRET:
+        description: 'Tailscale OAuth secret'
+        required: true
     outputs:
       has-changes:
         description: 'Whether plan has changes'
@@ -85,11 +98,28 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v4
+        with:
+          repository: NextNodeSolutions/github-actions
+          token: ${{ github.token }}
+          path: .github-actions
+
+      - name: Generate Tailscale Auth Key
+        id: tailscale
+        uses: ./.github-actions/actions/infrastructure/tailscale-oauth
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          generate-auth-key: 'true'
+          auth-key-tags: 'tag:server'
+          auth-key-expiry: '3600'
+
       - name: Terraform Plan
         id: plan
         env:
           HCLOUD_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-          TF_VAR_tailscale_auth_key: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          TF_VAR_tailscale_auth_key: ${{ steps.tailscale.outputs.auth-key }}
         run: |
           set +e
           set -o pipefail

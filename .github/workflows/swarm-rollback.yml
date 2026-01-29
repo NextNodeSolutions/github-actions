@@ -20,6 +20,13 @@ on:
         required: false
         default: true
         type: boolean
+    secrets:
+      TAILSCALE_OAUTH_CLIENT_ID:
+        description: 'Tailscale OAuth client ID'
+        required: true
+      TAILSCALE_OAUTH_SECRET:
+        description: 'Tailscale OAuth client secret'
+        required: true
     outputs:
       success:
         description: 'Whether rollback succeeded'
@@ -58,10 +65,26 @@ jobs:
       current-image: ${{ steps.verify.outputs.current-image }}
 
     steps:
+      - name: Checkout for shared actions
+        uses: actions/checkout@v4
+        with:
+          repository: nextnodesolutions/github-actions
+          path: .github-actions
+          sparse-checkout: actions/infrastructure/tailscale-oauth
+
+      - name: Get Tailscale Auth Key
+        id: tailscale-oauth
+        uses: ./.github-actions/actions/infrastructure/tailscale-oauth
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          generate-auth-key: 'true'
+          auth-key-ephemeral: 'true'
+
       - name: Setup Tailscale
         uses: tailscale/github-action@v2
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          authkey: ${{ steps.tailscale-oauth.outputs.auth-key }}
           version: latest
 
       - name: Wait for Tailscale connection
