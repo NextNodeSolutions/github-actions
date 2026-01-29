@@ -182,6 +182,28 @@ Apps deployed on worker nodes (dev-worker, prod-worker) need routing through Tra
 
 This is handled automatically by `deploy/cross-swarm-routing` and `deploy/publish-service-port`.
 
+### Scale-to-Zero (Sablier)
+
+Development and preview environments use Sablier for automatic scale-to-zero:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `idle_timeout` | 30m | Time before scaling to 0 replicas |
+| `session_duration` | 30m | Keep-alive time after wake |
+| `startup_timeout` | 2m | Max wait for container to start |
+| `theme` | hacker-terminal | Loading page theme |
+
+**Environment defaults:**
+- Development: `scale_to_zero = true`, lighter resources (128Mi/0.1 CPU)
+- Preview: `scale_to_zero = true`, lighter resources (128Mi/0.1 CPU)
+- Production: No scale-to-zero, standard resources (512Mi/0.5 CPU)
+
+**Override per environment:**
+```toml
+[environments.development]
+scale_to_zero = false  # Disable for always-on dev
+```
+
 ### VPS Auto-Provisioning (INT-28)
 
 Projects can request a dedicated VPS by setting `server = "custom"` in `dokploy.toml`:

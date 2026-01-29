@@ -50,6 +50,23 @@ domain = "my-project.com"
 # start_period = 40             # Grace period on startup (seconds)
 
 # =============================================================================
+# SCALE-TO-ZERO OVERRIDES (optional)
+# =============================================================================
+# Dev and preview environments scale to 0 after idle_timeout by default
+# Sablier shows a loading page while container starts on-demand
+
+# [scale_to_zero]
+# enabled = true                  # Enabled by default for dev/preview
+# idle_timeout = "1h"             # Scale down after 1 hour (default: 30m)
+# session_duration = "1h"         # Stay awake for 1 hour (default: 30m)
+# startup_timeout = "3m"          # Wait up to 3 minutes (default: 2m)
+# theme = "ghost"                 # Loading page: hacker-terminal, ghost, shuffle
+
+# Disable scale-to-zero for a specific environment:
+# [environments.development]
+# scale_to_zero = false           # Keep dev always running
+
+# =============================================================================
 # DEDICATED VPS (optional)
 # =============================================================================
 # Provision a dedicated Hetzner VPS for this project

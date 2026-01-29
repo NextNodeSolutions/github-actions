@@ -407,21 +407,40 @@ start_period = 40             # Startup grace period
 rollback = true               # Auto-rollback on failure
 
 # =============================================================================
+# SCALE-TO-ZERO (Sablier)
+# =============================================================================
+[scale_to_zero]
+enabled = true                # Enable scale-to-zero (default: true for dev/preview)
+idle_timeout = "30m"          # Scale to 0 after 30 minutes of inactivity
+session_duration = "30m"      # Keep alive for 30 minutes after wake
+startup_timeout = "2m"        # Max time to wait for service to start
+theme = "hacker-terminal"     # Loading page theme: hacker-terminal, ghost, shuffle
+
+# =============================================================================
 # ENVIRONMENT OVERRIDES
 # =============================================================================
 [environments.development]
 enabled = true                # Enable dev environment
 server = "dev-worker"         # Target server
 replicas = 1
+memory = "128Mi"              # Lighter resources for dev
+cpu = 0.1
+scale_to_zero = true          # Scale to 0 when idle (default for dev)
 
 [environments.preview]
 enabled = true                # Enable PR previews
 server = "dev-worker"
+replicas = 1
+memory = "128Mi"              # Lighter resources for previews
+cpu = 0.1
 cleanup_on_merge = true       # Delete preview on PR merge
+scale_to_zero = true          # Scale to 0 when idle (default for preview)
 
 [environments.production]
 server = "prod-worker"        # Default production server
 replicas = 1
+# Uses default resources (512Mi/0.5 CPU)
+# No scale_to_zero - production is always available
 
 # =============================================================================
 # CUSTOM VPS (dedicated server for this project)
@@ -703,12 +722,46 @@ Default values are defined directly in each action's `action.yml` file:
 
 The deployment workflow automatically adjusts settings based on environment:
 
-| Setting | Development | Production |
-|---------|------------|------------|
-| Memory | 512MB | 1024MB |
-| Build Command | `build:dev` | `build` |
-| Coverage Threshold | 60% | 80% |
-| Fail on Warning | No | Yes |
+| Setting | Development | Preview | Production |
+|---------|-------------|---------|------------|
+| Memory Request | 128Mi | 128Mi | 512Mi |
+| CPU Request | 0.1 | 0.1 | 0.5 |
+| Memory Limit | 256Mi | 256Mi | 1Gi |
+| CPU Limit | 0.25 | 0.25 | 1 |
+| Scale-to-Zero | Yes | Yes | No |
+| Server | dev-worker | dev-worker | prod-worker |
+
+### Scale-to-Zero (Sablier)
+
+Development and preview environments automatically scale to zero replicas after 30 minutes of inactivity. When a request arrives, Sablier displays a loading page while the container starts (up to 2 minutes timeout).
+
+**How it works:**
+1. Container runs normally when receiving traffic
+2. After `idle_timeout` (default: 30m) with no requests, container scales to 0
+3. Next request triggers Sablier loading page
+4. Container starts, Sablier waits up to `startup_timeout` (default: 2m)
+5. Traffic routes to container, session stays active for `session_duration` (default: 30m)
+
+**Benefits:**
+- Reduces resource usage for idle dev/preview environments
+- Saves costs on shared worker nodes
+- Automatic wake-on-demand with visual feedback
+
+**Customization:**
+```toml
+# Disable scale-to-zero for a specific environment
+[environments.development]
+scale_to_zero = false
+
+# Or customize Sablier settings globally
+[scale_to_zero]
+idle_timeout = "1h"               # Scale down after 1 hour
+theme = "ghost"                   # Use ghost loading theme
+```
+
+**Available themes:** `hacker-terminal`, `ghost`, `shuffle`
+
+**Note:** Production environments do NOT use scale-to-zero by default to ensure instant availability.
 
 ## Testing
 
