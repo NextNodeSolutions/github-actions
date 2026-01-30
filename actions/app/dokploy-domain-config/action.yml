@@ -47,6 +47,9 @@ outputs:
   success:
     description: 'Whether operation succeeded'
     value: ${{ steps.config.outputs.success }}
+  existed:
+    description: 'Whether domain already existed'
+    value: ${{ steps.config.outputs.existed }}
 
 runs:
   using: 'composite'
@@ -105,32 +108,68 @@ runs:
         try:
             client = DokployClient.from_env()
 
-            # Build domain payload based on deployment type
-            payload = {
-                "host": DOMAIN,
-                "port": PORT,
-                "https": HTTPS,
-                "certificateType": CERTIFICATE_TYPE if HTTPS else "none"
-            }
+            # Check if domain already exists for this compose/app
+            existing_domain_id = None
+            try:
+                if is_compose:
+                    domains = client.get(
+                        Endpoints.DOMAIN_BY_COMPOSE_ID,
+                        params={"composeId": COMPOSE_ID}
+                    )
+                else:
+                    domains = client.get(
+                        Endpoints.DOMAIN_BY_APPLICATION_ID,
+                        params={"applicationId": APP_ID}
+                    )
 
-            if is_compose:
-                payload["composeId"] = COMPOSE_ID
-                payload["serviceName"] = SERVICE_NAME
+                # Check if domain with same host already exists
+                if isinstance(domains, list):
+                    for d in domains:
+                        if d.get('host') == DOMAIN:
+                            existing_domain_id = d.get('domainId')
+                            print(f"Domain already exists: {DOMAIN} ({existing_domain_id})")
+                            break
+            except DokployError as e:
+                print(f"::warning::Could not check existing domains: {e}")
+
+            if existing_domain_id:
+                # Domain already exists, skip creation
+                print(f"Using existing domain: {existing_domain_id}")
+                output('domain-id', existing_domain_id)
+                output('configured', 'true')
+                output('existed', 'true')
+                output('success', 'true')
             else:
-                payload["applicationId"] = APP_ID
+                # Create new domain
+                payload = {
+                    "host": DOMAIN,
+                    "port": PORT,
+                    "https": HTTPS,
+                    "certificateType": CERTIFICATE_TYPE if HTTPS else "none",
+                    "path": "/",
+                    "stripPath": False
+                }
 
-            result = client.post(Endpoints.DOMAIN_CREATE, json=payload)
+                if is_compose:
+                    payload["composeId"] = COMPOSE_ID
+                    payload["serviceName"] = SERVICE_NAME
+                else:
+                    payload["applicationId"] = APP_ID
 
-            domain_id = result.get('domainId', '')
-            print(f"Domain configured: {DOMAIN}")
-            output('domain-id', domain_id)
-            output('configured', 'true')
-            output('success', 'true')
+                result = client.post(Endpoints.DOMAIN_CREATE, json=payload)
+
+                domain_id = result.get('domainId', '')
+                print(f"Domain created: {DOMAIN} ({domain_id})")
+                output('domain-id', domain_id)
+                output('configured', 'true')
+                output('existed', 'false')
+                output('success', 'true')
 
         except DokployError as e:
             print(f"::error::Failed to configure domain: {e}")
             output('domain-id', '')
             output('configured', 'false')
+            output('existed', 'false')
             output('success', 'false')
             sys.exit(1)
 
