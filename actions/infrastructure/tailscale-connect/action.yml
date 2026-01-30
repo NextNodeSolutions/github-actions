@@ -45,7 +45,7 @@ runs:
       shell: bash
       run: |
         echo "::group::Configuring Tailscale DNS"
-        tailscale set --accept-dns=true
+        sudo tailscale set --accept-dns=true
         echo "DNS acceptance enabled"
         echo "::endgroup::"
 
