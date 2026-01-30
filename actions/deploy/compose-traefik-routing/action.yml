@@ -1,0 +1,101 @@
+name: 'Compose Traefik Routing'
+description: 'Configure file-based Traefik routing for compose deployments on NixOS servers'
+author: 'NextNodeSolutions'
+
+inputs:
+  compose-name:
+    description: 'Compose stack name (used for Traefik service/router names)'
+    required: true
+  domain:
+    description: 'Domain to route to this service'
+    required: true
+  service-port:
+    description: 'Port the compose service listens on'
+    required: true
+  server-tailscale-ip:
+    description: 'Tailscale IP of the server running the compose stack'
+    required: true
+  traefik-tailscale-ip:
+    description: 'Tailscale IP of the Traefik server'
+    required: true
+  same-server:
+    description: 'Whether compose runs on the same server as Traefik'
+    required: false
+    default: 'false'
+
+outputs:
+  config-path:
+    description: 'Path to deployed Traefik config file'
+    value: ${{ steps.deploy.outputs.config-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Deploy Traefik config
+      id: deploy
+      shell: bash
+      run: |
+        NAME="${{ inputs.compose-name }}"
+        DOMAIN="${{ inputs.domain }}"
+        PORT="${{ inputs.service-port }}"
+        SERVER_IP="${{ inputs.server-tailscale-ip }}"
+        TRAEFIK_IP="${{ inputs.traefik-tailscale-ip }}"
+        SAME_SERVER="${{ inputs.same-server }}"
+
+        # Backend URL: localhost if same server, Tailscale IP otherwise
+        if [[ "$SAME_SERVER" == "true" ]]; then
+          BACKEND="http://127.0.0.1:${PORT}"
+        else
+          BACKEND="http://${SERVER_IP}:${PORT}"
+        fi
+
+        CONFIG_PATH="/etc/traefik/dynamic/${NAME}.yml"
+        echo "config-path=$CONFIG_PATH" >> $GITHUB_OUTPUT
+
+        echo "::group::Generating Traefik config for compose: $NAME"
+        echo "Domain: $DOMAIN -> $BACKEND"
+
+        # Generate Traefik configuration
+        # Note: heredoc content has leading spaces to satisfy yamllint, but Traefik tolerates this
+        cat > /tmp/traefik-compose.yml <<EOF
+        # Auto-generated for compose: $NAME
+        http:
+          routers:
+            $NAME:
+              rule: "Host(\`$DOMAIN\`)"
+              service: "$NAME"
+              entryPoints:
+                - websecure
+              tls:
+                certResolver: letsencrypt
+            ${NAME}-http:
+              rule: "Host(\`$DOMAIN\`)"
+              service: "$NAME"
+              entryPoints:
+                - web
+              middlewares:
+                - redirect-https
+          services:
+            $NAME:
+              loadBalancer:
+                servers:
+                  - url: "$BACKEND"
+        EOF
+
+        echo "Generated config:"
+        cat /tmp/traefik-compose.yml
+
+        # Deploy to Traefik server via Tailscale SSH
+        cat /tmp/traefik-compose.yml | tailscale ssh "root@${TRAEFIK_IP}" "cat > ${CONFIG_PATH}"
+
+        echo "Deployed to $CONFIG_PATH"
+        echo "Traefik will auto-reload via file provider watch"
+
+        rm -f /tmp/traefik-compose.yml
+        echo "::endgroup::"
+
+        echo ""
+        echo "Compose Traefik routing configured:"
+        echo "  Domain: $DOMAIN"
+        echo "  Backend: $BACKEND"
+        echo "  Config: $CONFIG_PATH"

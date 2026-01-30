@@ -379,6 +379,22 @@ jobs:
           port: ${{ needs.config.outputs.port }}
           service-name: ${{ needs.config.outputs.service-name }}
 
+      # File-based Traefik routing for compose (NixOS servers with file provider)
+      - name: Configure Compose Traefik Routing
+        if: |
+          inputs.action == 'deploy' &&
+          (needs.config.outputs.is-compose == 'true' || inputs.compose-file != '') &&
+          needs.config.outputs.domain != '' &&
+          steps.server.outputs.traefik-tailscale-ip != ''
+        uses: ./.github-actions/actions/deploy/compose-traefik-routing
+        with:
+          compose-name: ${{ needs.config.outputs.app-name }}
+          domain: ${{ needs.config.outputs.domain }}
+          service-port: ${{ needs.config.outputs.port }}
+          server-tailscale-ip: ${{ steps.server.outputs.server-tailscale-ip }}
+          traefik-tailscale-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
+          same-server: ${{ steps.server.outputs.cross-swarm != 'true' }}
+
       # DNS Configuration
       - name: Configure DNS
         id: dns
