@@ -57,8 +57,18 @@ runs:
         echo "Server IP: $SERVER_IP"
         echo "Max Wait: ${MAX_WAIT}s"
         echo "Stability Checks: $STABILITY_CHECKS"
+
+        # Extract image pattern for service search
+        # If expected-image provided, use repo name from it (e.g., registry.nextnode.fr/nextnode-front:tag -> nextnode-front)
+        # Otherwise fall back to app-name
         if [ -n "$EXPECTED_IMAGE" ]; then
+          # Extract repo name: remove registry prefix and tag suffix
+          # registry.nextnode.fr/nextnode-front:abc123 -> nextnode-front
+          IMAGE_REPO=$(echo "$EXPECTED_IMAGE" | sed 's|.*/||' | sed 's|:.*||')
           echo "Expected Image: $EXPECTED_IMAGE"
+          echo "Image Repo (for search): $IMAGE_REPO"
+        else
+          IMAGE_REPO="$APP_NAME"
         fi
 
         # Generate deterministic port from app name hash
@@ -82,17 +92,18 @@ runs:
         set -e
 
         EXPECTED_IMAGE="$EXPECTED_IMAGE"
+        IMAGE_REPO="$IMAGE_REPO"
         MAX_WAIT=$MAX_WAIT
         WAIT_INTERVAL=5
         STABILITY_CHECKS=$STABILITY_CHECKS
 
-        echo "Looking for Docker service with image matching: $APP_NAME" >&2
+        echo "Looking for Docker service with image matching: \$IMAGE_REPO" >&2
 
         # Find the service by its image name
         # Dokploy creates random service names like "app-navigate-haptic-array-ukwb4a"
-        # But the image follows the pattern: admin-dokploy:5000/{app-name}:{commit-sha}
+        # But the image follows the pattern: registry.nextnode.fr/{repo-name}:{commit-sha}
         find_service() {
-          docker service ls --format '{{.Name}}\t{{.Image}}' | grep -F "/${APP_NAME}:" | cut -f1 | head -1 || echo ""
+          docker service ls --format '{{.Name}}\t{{.Image}}' | grep -F "/\${IMAGE_REPO}:" | cut -f1 | head -1 || echo ""
         }
 
         # Wait for service to exist
@@ -110,7 +121,7 @@ runs:
         done
 
         if [ -z "\$SERVICE_NAME" ]; then
-          echo "::error::No service found with image containing /${APP_NAME}:" >&2
+          echo "::error::No service found with image containing /\${IMAGE_REPO}:" >&2
           echo "Available services:" >&2
           docker service ls --format '{{.Name}}\t{{.Image}}' >&2
           exit 1
@@ -121,7 +132,7 @@ runs:
           echo "Waiting for deployment to complete with image: \$EXPECTED_IMAGE" >&2
           ELAPSED=0
           while [ \$ELAPSED -lt \$MAX_WAIT ]; do
-            CURRENT_IMAGE=\$(docker service ls --format '{{.Image}}' --filter "name=app-" | grep -F "/${APP_NAME}:" | head -1 || echo "")
+            CURRENT_IMAGE=\$(docker service ls --format '{{.Image}}' --filter "name=app-" | grep -F "/\${IMAGE_REPO}:" | head -1 || echo "")
             if [ "\$CURRENT_IMAGE" = "\$EXPECTED_IMAGE" ]; then
               echo "Found expected image" >&2
               break
