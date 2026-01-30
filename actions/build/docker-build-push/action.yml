@@ -61,10 +61,25 @@ runs:
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Test connection using --resolve to properly handle TLS SNI
-        # The --resolve flag maps hostname:port:IP for both DNS and SNI
+        # Debug: test basic connectivity
+        echo "Testing TCP connectivity to ${REGISTRY_IP}:443..."
+        nc -zv -w5 "$REGISTRY_IP" 443 2>&1 || echo "TCP 443 failed"
+
+        echo "Testing TCP connectivity to ${REGISTRY_IP}:80..."
+        nc -zv -w5 "$REGISTRY_IP" 80 2>&1 || echo "TCP 80 failed"
+
+        # Test connection with verbose output
+        echo "Testing HTTPS with --resolve (verbose)..."
+        curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -vk 2>&1 || true
+
+        echo "Testing HTTP with --resolve..."
+        curl --resolve "${REGISTRY_HOST}:80:${REGISTRY_IP}" "http://${REGISTRY_HOST}/v2/" -vk 2>&1 || true
+
+        # Final test
         if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk; then
-          echo "Registry connection successful"
+          echo "Registry connection successful (HTTPS)"
+        elif curl --resolve "${REGISTRY_HOST}:80:${REGISTRY_IP}" "http://${REGISTRY_HOST}/v2/" -sfL; then
+          echo "Registry connection successful (HTTP)"
         else
           echo "::error::Cannot connect to registry at ${REGISTRY_IP} (${REGISTRY_HOST})"
           exit 1
