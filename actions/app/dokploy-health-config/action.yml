@@ -107,8 +107,9 @@ runs:
             NANOSECONDS = 1_000_000_000
 
             # Use wget instead of curl - more commonly available in Alpine-based images
+            # Use 127.0.0.1 instead of localhost - some Alpine images have DNS resolution issues
             healthcheck_swarm = {
-                "Test": ["CMD", "wget", "-q", "-O", "/dev/null", f"http://localhost:{PORT}{HEALTH_PATH}"],
+                "Test": ["CMD", "wget", "-q", "-O", "/dev/null", f"http://127.0.0.1:{PORT}{HEALTH_PATH}"],
                 "Interval": HEALTH_INTERVAL * NANOSECONDS,
                 "Timeout": HEALTH_TIMEOUT * NANOSECONDS,
                 "StartPeriod": HEALTH_START_PERIOD * NANOSECONDS,
