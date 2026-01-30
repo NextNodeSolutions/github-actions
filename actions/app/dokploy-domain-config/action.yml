@@ -10,8 +10,17 @@ inputs:
     description: 'Dokploy bearer token'
     required: true
   app-id:
-    description: 'Dokploy application ID'
-    required: true
+    description: 'Dokploy application ID (for application deployments)'
+    required: false
+    default: ''
+  compose-id:
+    description: 'Dokploy compose ID (for compose deployments)'
+    required: false
+    default: ''
+  service-name:
+    description: 'Service name within compose stack (required for compose)'
+    required: false
+    default: ''
   domain:
     description: 'Domain hostname'
     required: true
@@ -54,6 +63,8 @@ runs:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
         DOKPLOY_TOKEN: ${{ inputs.dokploy-token }}
         APP_ID: ${{ inputs.app-id }}
+        COMPOSE_ID: ${{ inputs.compose-id }}
+        SERVICE_NAME: ${{ inputs.service-name }}
         DOMAIN: ${{ inputs.domain }}
         PORT: ${{ inputs.port }}
         HTTPS: ${{ inputs.https }}
@@ -64,28 +75,51 @@ runs:
 
         from lib.dokploy import DEFAULT_PORT, DokployClient, DokployError, Endpoints, output
 
-        APP_ID = os.environ['APP_ID']
+        APP_ID = os.environ.get('APP_ID', '')
+        COMPOSE_ID = os.environ.get('COMPOSE_ID', '')
+        SERVICE_NAME = os.environ.get('SERVICE_NAME', '')
         DOMAIN = os.environ['DOMAIN']
         PORT = int(os.environ.get('PORT', str(DEFAULT_PORT)))
         HTTPS = os.environ.get('HTTPS', 'true').lower() == 'true'
         CERTIFICATE_TYPE = os.environ.get('CERTIFICATE_TYPE', 'letsencrypt')
 
+        # Validate inputs
+        if not APP_ID and not COMPOSE_ID:
+            print("::error::Either app-id or compose-id must be provided")
+            output('success', 'false')
+            sys.exit(1)
+
+        if COMPOSE_ID and not SERVICE_NAME:
+            print("::error::service-name is required for compose deployments")
+            output('success', 'false')
+            sys.exit(1)
+
+        is_compose = bool(COMPOSE_ID)
         print("::group::Configuring domain")
         print(f"Domain: {DOMAIN} (port {PORT})")
+        if is_compose:
+            print(f"Compose: {COMPOSE_ID} (service: {SERVICE_NAME})")
+        else:
+            print(f"Application: {APP_ID}")
 
         try:
             client = DokployClient.from_env()
 
-            result = client.post(
-                Endpoints.DOMAIN_CREATE,
-                json={
-                    "applicationId": APP_ID,
-                    "host": DOMAIN,
-                    "port": PORT,
-                    "https": HTTPS,
-                    "certificateType": CERTIFICATE_TYPE if HTTPS else "none"
-                }
-            )
+            # Build domain payload based on deployment type
+            payload = {
+                "host": DOMAIN,
+                "port": PORT,
+                "https": HTTPS,
+                "certificateType": CERTIFICATE_TYPE if HTTPS else "none"
+            }
+
+            if is_compose:
+                payload["composeId"] = COMPOSE_ID
+                payload["serviceName"] = SERVICE_NAME
+            else:
+                payload["applicationId"] = APP_ID
+
+            result = client.post(Endpoints.DOMAIN_CREATE, json=payload)
 
             domain_id = result.get('domainId', '')
             print(f"Domain configured: {DOMAIN}")

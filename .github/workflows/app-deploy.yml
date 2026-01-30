@@ -111,6 +111,7 @@ jobs:
       is-compose: ${{ steps.config.outputs.is-compose }}
       compose-file: ${{ steps.config.outputs.compose-file }}
       compose-mounts: ${{ steps.config.outputs.compose-mounts }}
+      service-name: ${{ steps.config.outputs.service-name }}
       traefik-server: ${{ steps.config.outputs.traefik-server }}
       environment-enabled: ${{ steps.config.outputs.environment-enabled }}
       vps-enabled: ${{ steps.config.outputs.vps-enabled }}
@@ -360,6 +361,22 @@ jobs:
           compose-file: project/${{ inputs.compose-file || needs.config.outputs.compose-file }}
           env: ${{ secrets.compose-env }}
           mounts: ${{ needs.config.outputs.compose-mounts }}
+
+      # Configure domain for compose (if domain and service-name provided)
+      - name: Configure Compose Domain
+        if: |
+          inputs.action == 'deploy' &&
+          (needs.config.outputs.is-compose == 'true' || inputs.compose-file != '') &&
+          needs.config.outputs.domain != '' &&
+          needs.config.outputs.service-name != ''
+        uses: ./.github-actions/actions/app/dokploy-domain-config
+        with:
+          dokploy-url: ${{ steps.dokploy-url.outputs.url }}
+          dokploy-token: ${{ steps.auth.outputs.token }}
+          compose-id: ${{ steps.compose.outputs.compose-id }}
+          domain: ${{ needs.config.outputs.domain }}
+          port: ${{ needs.config.outputs.port }}
+          service-name: ${{ needs.config.outputs.service-name }}
 
       # DNS Configuration
       - name: Configure DNS

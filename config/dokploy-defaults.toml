@@ -66,6 +66,9 @@ rollback_on_failure = true
 [compose]
 enabled = false
 # file defaults to "docker-compose.yml" in code when enabled = true
+# service-name: The service within the compose stack that receives traffic
+# Required for domain configuration on compose deployments
+service-name = ""
 
 # =============================================================================
 # VPS DEFAULTS (for custom dedicated servers)
