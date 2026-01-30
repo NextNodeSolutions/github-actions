@@ -322,6 +322,7 @@ jobs:
           exposure: ${{ needs.config.outputs.exposure }}
           hcloud-token: ${{ secrets.HETZNER_TOKEN }}
           tailscale-api-token: ${{ steps.tailscale.outputs.api-token }}
+          is-compose: ${{ needs.config.outputs.is-compose == 'true' || inputs.compose-file != '' }}
 
       # Deploy application (if not compose)
       - name: Sync Application
