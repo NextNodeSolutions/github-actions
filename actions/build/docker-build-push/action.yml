@@ -61,8 +61,9 @@ runs:
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Test connection using IP with Host header (bypasses DNS)
-        if curl -sfLk "https://${REGISTRY_IP}/v2/" --header "Host: ${REGISTRY_HOST}"; then
+        # Test connection using --resolve to properly handle TLS SNI
+        # The --resolve flag maps hostname:port:IP for both DNS and SNI
+        if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk; then
           echo "Registry connection successful"
         else
           echo "::error::Cannot connect to registry at ${REGISTRY_IP} (${REGISTRY_HOST})"
@@ -83,7 +84,6 @@ runs:
       env:
         CUSTOM_TAGS: ${{ inputs.tags }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
-        REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
       run: |
         echo "::group::Generating image tag"
         REPO_NAME="${GITHUB_REPOSITORY#*/}"
@@ -93,16 +93,12 @@ runs:
           # Use first custom tag
           FIRST_TAG="${CUSTOM_TAGS%%,*}"
           IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
-          IMAGE_IP="${REGISTRY_IP}/${REPO_NAME}:${FIRST_TAG}"
         else
           IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${SHA_SHORT}"
-          IMAGE_IP="${REGISTRY_IP}/${REPO_NAME}:${SHA_SHORT}"
         fi
 
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-        echo "image-ip=${IMAGE_IP}" >> $GITHUB_OUTPUT
         echo "Generated image tag: ${IMAGE}"
-        echo "Push target (IP): ${IMAGE_IP}"
         echo "::endgroup::"
 
     - name: Build and Push
@@ -113,7 +109,8 @@ runs:
         CONTEXT: ${{ inputs.context }}
         BUILD_ARGS: ${{ inputs.build-args }}
         IMAGE: ${{ steps.tag.outputs.image }}
-        IMAGE_IP: ${{ steps.tag.outputs.image-ip }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
+        REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
       run: |
         echo "::group::Building and pushing Docker image"
 
@@ -124,19 +121,17 @@ runs:
           done <<< "$BUILD_ARGS"
         fi
 
-        # Build and push using IP-based reference (bypasses DNS resolution issues)
-        # The IMAGE_IP uses Tailscale IP instead of registry.nextnode.fr hostname
+        # Build and push using hostname with --add-host for DNS override
+        # This properly handles TLS SNI (Server Name Indication) unlike IP-based push
         docker buildx build \
           --file "$DOCKERFILE" \
-          --tag "$IMAGE_IP" \
+          --tag "$IMAGE" \
+          --add-host "${REGISTRY_HOST}:${REGISTRY_IP}" \
           --push \
           --network=host \
           $BUILD_ARGS_FLAGS \
           "$CONTEXT"
 
-        # Output the hostname-based image reference for Dokploy
-        # Dokploy uses internal DNS and can resolve registry.nextnode.fr
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-        echo "Successfully pushed image: ${IMAGE_IP}"
-        echo "Dokploy will pull: ${IMAGE}"
+        echo "Successfully pushed image: ${IMAGE}"
         echo "::endgroup::"
