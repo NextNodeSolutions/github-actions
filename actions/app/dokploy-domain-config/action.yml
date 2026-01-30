@@ -76,13 +76,13 @@ runs:
         import os
         import sys
 
-        from lib.dokploy import DEFAULT_PORT, DokployClient, DokployError, Endpoints, output
+        from lib.dokploy import DEFAULT_APP_PORT, DokployClient, DokployError, Endpoints, output
 
         APP_ID = os.environ.get('APP_ID', '')
         COMPOSE_ID = os.environ.get('COMPOSE_ID', '')
         SERVICE_NAME = os.environ.get('SERVICE_NAME', '')
         DOMAIN = os.environ['DOMAIN']
-        PORT = int(os.environ.get('PORT', str(DEFAULT_PORT)))
+        PORT = int(os.environ.get('PORT', str(DEFAULT_APP_PORT)))
         HTTPS = os.environ.get('HTTPS', 'true').lower() == 'true'
         CERTIFICATE_TYPE = os.environ.get('CERTIFICATE_TYPE', 'letsencrypt')
 
