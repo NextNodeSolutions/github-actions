@@ -112,11 +112,11 @@ server = "prod-worker"
 
 Defaults from `config/dokploy-defaults.toml` are merged.
 
-### Cross-Swarm Routing
+### Unified Swarm Architecture
 
-Apps on worker nodes need routing through Traefik:
-1. `publish-service-port` - Expose port via socat
-2. `cross-swarm-routing` - Configure Traefik TCP route
+All worker nodes are part of the same Docker Swarm cluster as admin-dokploy:
+1. Services deploy to workers via Swarm placement constraints
+2. Traefik routes to services via Swarm overlay network
 3. DNS points to admin-dokploy (Traefik ingress)
 
 ## Required Secrets

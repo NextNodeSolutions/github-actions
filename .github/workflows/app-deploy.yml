@@ -322,7 +322,6 @@ jobs:
           exposure: ${{ needs.config.outputs.exposure }}
           hcloud-token: ${{ secrets.HETZNER_TOKEN }}
           tailscale-api-token: ${{ steps.tailscale.outputs.api-token }}
-          is-compose: ${{ needs.config.outputs.is-compose == 'true' || inputs.compose-file != '' }}
 
       # Deploy application (if not compose)
       - name: Sync Application
@@ -393,7 +392,7 @@ jobs:
           service-port: ${{ needs.config.outputs.port }}
           server-tailscale-ip: ${{ steps.server.outputs.server-tailscale-ip }}
           traefik-tailscale-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
-          same-server: ${{ steps.server.outputs.cross-swarm != 'true' }}
+          same-server: ${{ needs.config.outputs.server == needs.config.outputs.traefik-server }}
 
       # DNS Configuration
       - name: Configure DNS
@@ -420,23 +419,6 @@ jobs:
           traefik-server-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
           container-port: ${{ needs.config.outputs.port }}
 
-      # Cross-Swarm Routing
-      - name: Configure Cross-Swarm Routing
-        if: |
-          inputs.action == 'deploy' &&
-          steps.server.outputs.cross-swarm == 'true' &&
-          steps.server.outputs.server-tailscale-ip != '' &&
-          needs.config.outputs.is-compose == 'false'
-        uses: ./.github-actions/actions/deploy/cross-swarm-routing
-        with:
-          app-name: ${{ needs.config.outputs.app-name }}
-          domain: ${{ needs.config.outputs.domain }}
-          worker-tailscale-ip: ${{ steps.server.outputs.server-tailscale-ip }}
-          admin-tailscale-ip: ${{ steps.dokploy-url.outputs.ip }}
-          container-port: ${{ needs.config.outputs.port }}
-          use-https: 'true'
-          expected-image: ${{ needs.build.outputs.image }}
-
       - name: Set Final Status
         id: final
         if: always()
@@ -461,9 +443,6 @@ jobs:
           echo "| Project | \`${{ needs.config.outputs.project-name }}\` |" >> $GITHUB_STEP_SUMMARY
           if [[ -n "${{ needs.build.outputs.image }}" ]]; then
             echo "| Image | \`${{ needs.build.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [[ "${{ steps.server.outputs.cross-swarm }}" == "true" ]]; then
-            echo "| Routing | Cross-Swarm via Traefik |" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Cleanup Summary

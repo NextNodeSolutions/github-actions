@@ -28,11 +28,6 @@ inputs:
     description: 'Tailscale API token'
     required: false
     default: ''
-  is-compose:
-    description: 'Whether this is a compose deployment (affects DNS routing for cross-swarm)'
-    required: false
-    default: 'false'
-
 outputs:
   server-id:
     description: 'Dokploy server ID'
@@ -52,9 +47,6 @@ outputs:
   traefik-tailscale-ip:
     description: 'Traefik server Tailscale IP (for SSH access)'
     value: ${{ steps.resolve.outputs.traefik-tailscale-ip }}
-  cross-swarm:
-    description: 'Whether cross-swarm routing is needed'
-    value: ${{ steps.resolve.outputs.cross-swarm }}
   success:
     description: 'Whether resolution succeeded'
     value: ${{ steps.resolve.outputs.success }}
@@ -78,7 +70,6 @@ runs:
         EXPOSURE: ${{ inputs.exposure }}
         HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
         TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
-        IS_COMPOSE: ${{ inputs.is-compose }}
         GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
@@ -94,7 +85,6 @@ runs:
         EXPOSURE = os.environ.get('EXPOSURE', 'external')
         HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
         TAILSCALE_API_KEY = os.environ.get('TAILSCALE_API_KEY', '')
-        IS_COMPOSE = os.environ.get('IS_COMPOSE', 'false').lower() == 'true'
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
 
         def output(key, value):
@@ -214,16 +204,11 @@ runs:
                 if traefik_public_ip:
                     print(f"Traefik IP (fallback to worker): {traefik_public_ip}")
 
-            # Step 4: Check if cross-swarm routing needed
-            cross_swarm = SERVER_NAME != TRAEFIK_SERVER
-
-            if cross_swarm:
-                print(f"Cross-swarm routing needed: {SERVER_NAME} != {TRAEFIK_SERVER}")
+            # Step 4: Get server Tailscale IP (for compose routing and SSH access)
+            if SERVER_NAME != TRAEFIK_SERVER:
                 server_tailscale_ip = get_tailscale_ip(SERVER_NAME)
                 if server_tailscale_ip:
                     print(f"Server Tailscale IP: {server_tailscale_ip}")
-            else:
-                print("Same-swarm deployment, no cross-swarm routing needed")
 
             # Step 5: Get Traefik server Tailscale IP (for SSH access)
             traefik_tailscale_ip = get_tailscale_ip(TRAEFIK_SERVER)
@@ -232,14 +217,9 @@ runs:
 
             # Step 6: Determine DNS IP based on exposure type
             if EXPOSURE == 'internal':
-                # Internal app: use Tailscale IP for DNS
-                # For compose cross-swarm, use server's Tailscale IP directly
-                # (compose handles its own routing via Caddy/etc, no Traefik routing)
-                # For applications, use Traefik IP (cross-swarm routing configures Traefik)
-                if cross_swarm and IS_COMPOSE and server_tailscale_ip:
-                    dns_ip = server_tailscale_ip
-                    print(f"DNS IP (Tailscale for internal compose, direct to server): {dns_ip}")
-                elif traefik_tailscale_ip:
+                # Internal app: use Traefik's Tailscale IP for DNS
+                # All traffic routes through Traefik on admin-dokploy (unified Swarm)
+                if traefik_tailscale_ip:
                     dns_ip = traefik_tailscale_ip
                     print(f"DNS IP (Tailscale for internal): {dns_ip}")
                 else:
@@ -258,7 +238,6 @@ runs:
             output('server-tailscale-ip', server_tailscale_ip or '')
             output('traefik-tailscale-ip', traefik_tailscale_ip or '')
             output('dns-ip', dns_ip or '')
-            output('cross-swarm', 'true' if cross_swarm else 'false')
             output('success', 'true')
 
         except Exception as e:

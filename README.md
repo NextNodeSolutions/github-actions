@@ -27,7 +27,7 @@ github-actions/
 ├── actions/                    # Domain-organized atomic actions
 │   ├── build/                 # Build & Setup domain (install, build-project, docker-build-push)
 │   ├── quality/               # Code Quality domain
-│   ├── deploy/                # Dokploy Deployment domain (dokploy-sync, cross-swarm-routing)
+│   ├── deploy/                # Dokploy Deployment domain (dokploy-sync, vps-provision)
 │   ├── infrastructure/        # Infrastructure domain (cloudflare-dns, tailscale)
 │   ├── release/               # NPM Release Management domain
 │   ├── ssl/                   # SSL/TLS Configuration domain
@@ -157,7 +157,7 @@ The github-actions repository is the CI/CD component of NextNode's self-hosted d
 - **Tailscale VPN**: All servers communicate via Tailscale mesh network
 - **Registry Access**: Private registry (`admin-dokploy:5000`) accessible only via Tailscale
 - **Traefik Routing**: All public traffic enters through Traefik on admin-dokploy
-- **Cross-Swarm**: Apps on worker nodes are proxied via Traefik TCP routing
+- **Unified Swarm**: All worker nodes are part of the same Docker Swarm cluster, enabling direct overlay network routing
 
 ## Deployment Flow
 
@@ -188,13 +188,7 @@ When you push code or trigger a deployment, this is what happens:
    └── Upsert Cloudflare A record
         │
         ▼
-6. Cross-Swarm Routing (if app on worker)
-   ├── Allocate external port on worker
-   ├── Expose container port via socat
-   └── Configure Traefik TCP route
-        │
-        ▼
-7. Health Check
+6. Health Check
    └── Verify application responds at domain
 ```
 
@@ -277,8 +271,7 @@ jobs:
 |--------|-------------|------------|
 | `deploy/dokploy-sync` | Sync dokploy.toml to Dokploy API | `environment`, `config-file` |
 | `deploy/vps-provision` | Auto-provision Hetzner VPS | `vps-name`, `server-type` |
-| `deploy/cross-swarm-routing` | Configure Traefik routing for worker nodes | `domain`, `worker-tailscale-ip` |
-| `deploy/publish-service-port` | Expose container port via socat | `container-port`, `external-port` |
+| `deploy/compose-traefik-routing` | Configure Traefik routing for compose stacks | `domain`, `server-tailscale-ip` |
 
 #### Infrastructure Domain
 | Action | Description | Key Inputs |
@@ -866,10 +859,6 @@ Update to use domain-organized actions and reusable workflows:
 **Issue:** "DNS record not updated"
 - **Cause:** Cloudflare token missing permissions
 - **Solution:** Ensure token has `Zone:DNS:Edit` permission for the domain's zone
-
-**Issue:** "Cross-swarm routing failed"
-- **Cause:** Worker not reachable via Tailscale
-- **Solution:** Verify worker is online in Tailscale admin, check `worker-tailscale-ip` output
 
 **Issue:** "Health check failed after deployment"
 - **Cause:** Application not responding on expected port/path
