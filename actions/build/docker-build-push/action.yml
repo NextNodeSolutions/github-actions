@@ -64,7 +64,8 @@ runs:
         REGISTRY_HOST: ${{ inputs.registry-host }}
       run: |
         echo "::group::Testing registry connection"
-        if curl -sf "https://${REGISTRY_HOST}/v2/"; then
+        # TODO: Remove -k flag once Let's Encrypt SSL cert is issued
+        if curl -sfLk "https://${REGISTRY_HOST}/v2/"; then
           echo "Registry connection successful"
         else
           echo "::error::Cannot connect to registry at ${REGISTRY_HOST}"

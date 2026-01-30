@@ -157,11 +157,13 @@ This repository is the CI/CD component of NextNode's self-hosted platform. It wo
 Dokploy v0.25+ uses Better Auth and no longer supports API-based builds. The deployment flow now:
 
 1. **Build locally** in GitHub Actions runner
-2. **Push to private registry** at `admin-dokploy:5000` via Tailscale
+2. **Push to private registry** at `registry.nextnode.fr` via Tailscale
 3. **Sync configuration** to Dokploy API (project, app, env vars)
 4. **Set image reference** - Dokploy pulls from registry
 
 This is handled by the `build/docker-build-push` action and `deploy/dokploy-sync` action.
+
+**WARNING**: Do NOT use `admin-dokploy:5000` directly as the registry host. Dokploy runs its own Traefik instance that conflicts with direct port access. Always use `registry.nextnode.fr` which routes through the external Traefik configuration.
 
 ## Deployment Architecture
 
