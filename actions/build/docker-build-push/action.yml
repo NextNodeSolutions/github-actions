@@ -48,7 +48,7 @@ runs:
       run: |
         echo "::group::Testing registry connection"
 
-        # Get admin-dokploy Tailscale IP for DNS override
+        # Get admin-dokploy Tailscale IP for fallback
         REGISTRY_IP=$(tailscale status --json | jq -r '.Peer | to_entries[] | select(.value.HostName == "admin-dokploy") | .value.TailscaleIPs[0]')
 
         if [[ -z "$REGISTRY_IP" || "$REGISTRY_IP" == "null" ]]; then
@@ -59,11 +59,19 @@ runs:
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Test via Traefik (HTTPS) with --resolve for proper TLS SNI
-        if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk --connect-timeout 10; then
-          echo "Registry connection OK via Traefik (HTTPS)"
+        # Primary: Try HTTPS via hostname (Traefik with proper TLS)
+        if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sf --connect-timeout 10; then
+          echo "Registry connection OK via HTTPS (${REGISTRY_HOST})"
+          echo "use-fallback=false" >> $GITHUB_OUTPUT
+          echo "registry-url=${REGISTRY_HOST}" >> $GITHUB_OUTPUT
+        # Fallback: Direct HTTP via Tailscale IP (only accessible from Tailscale network)
+        elif curl -sf "http://${REGISTRY_IP}:5000/v2/" --connect-timeout 10; then
+          echo "::warning::HTTPS failed, using Tailscale fallback (HTTP on ${REGISTRY_IP}:5000)"
+          echo "This is secure: only Tailscale nodes can reach this IP"
+          echo "use-fallback=true" >> $GITHUB_OUTPUT
+          echo "registry-url=${REGISTRY_IP}:5000" >> $GITHUB_OUTPUT
         else
-          echo "::error::Cannot connect to registry at ${REGISTRY_HOST}"
+          echo "::error::Cannot connect to registry via HTTPS or Tailscale fallback"
           exit 1
         fi
         echo "::endgroup::"
@@ -75,13 +83,16 @@ runs:
         buildkitd-config-inline: |
           [registry."${{ inputs.registry-host }}"]
             insecure = true
+          [registry."${{ steps.registry.outputs.registry-ip }}:5000"]
+            http = true
+            insecure = true
 
     - name: Generate Image Tag
       id: tag
       shell: bash
       env:
         CUSTOM_TAGS: ${{ inputs.tags }}
-        REGISTRY_HOST: ${{ inputs.registry-host }}
+        REGISTRY_URL: ${{ steps.registry.outputs.registry-url }}
       run: |
         echo "::group::Generating image tag"
         REPO_NAME="${GITHUB_REPOSITORY#*/}"
@@ -93,7 +104,7 @@ runs:
           FIRST_TAG="${SHA_SHORT}"
         fi
 
-        IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
+        IMAGE="${REGISTRY_URL}/${REPO_NAME}:${FIRST_TAG}"
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
         echo "Generated image tag: ${IMAGE}"
         echo "::endgroup::"
@@ -108,6 +119,7 @@ runs:
         IMAGE: ${{ steps.tag.outputs.image }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
+        USE_FALLBACK: ${{ steps.registry.outputs.use-fallback }}
       run: |
         echo "::group::Building and pushing Docker image"
 
@@ -118,11 +130,16 @@ runs:
           done <<< "$BUILD_ARGS"
         fi
 
-        # Build and push via Traefik using --add-host for DNS override
+        # Add --add-host for hostname resolution when using HTTPS mode
+        ADD_HOST_FLAG=""
+        if [ "$USE_FALLBACK" = "false" ]; then
+          ADD_HOST_FLAG="--add-host ${REGISTRY_HOST}:${REGISTRY_IP}"
+        fi
+
         docker buildx build \
           --file "$DOCKERFILE" \
           --tag "$IMAGE" \
-          --add-host "${REGISTRY_HOST}:${REGISTRY_IP}" \
+          $ADD_HOST_FLAG \
           --push \
           --network=host \
           $BUILD_ARGS_FLAGS \
