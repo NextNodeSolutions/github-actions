@@ -12,9 +12,6 @@ inputs:
   dokploy-admin-password:
     description: 'Dokploy admin password (for first-time setup only)'
     required: true
-  dokploy-api-token:
-    description: 'Dokploy API token (from Settings > Profile > API/CLI) - used for worker registration'
-    required: true
   dokploy-ssh-private-key:
     description: 'SSH private key to import into Dokploy for worker access'
     required: true
@@ -55,7 +52,6 @@ runs:
       run: |
         echo "::add-mask::${{ inputs.dokploy-admin-password }}"
         echo "::add-mask::${{ inputs.dokploy-ssh-private-key }}"
-        echo "::add-mask::${{ inputs.dokploy-api-token }}"
 
     # Step 1: Admin setup (waits for Dokploy, creates admin if first time)
     - name: Setup Dokploy Admin
@@ -163,113 +159,72 @@ runs:
         max-retries: ${{ inputs.max-retries }}
         retry-delay: ${{ inputs.retry-delay }}
 
-    # Step 7: Setup Python for worker registration
-    - name: Setup Python
-      uses: nextnodesolutions/github-actions/actions/utilities/python-setup@main
+    # Step 7: Register dev-worker
+    - name: Register dev-worker
+      id: dev-worker-register
+      if: (inputs.target == 'all' || inputs.target == 'dev-worker') && steps.dev-worker-lookup.outputs.exists == 'true'
+      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-server-register@main
       with:
-        packages: 'requests'
+        dokploy-url: ${{ inputs.dokploy-url }}
+        cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
+        server-name: dev-worker
+        server-ip: ${{ steps.dev-worker-lookup.outputs.ip-address }}
+        ssh-key-id: ${{ steps.ssh-key.outputs.ssh-key-id }}
 
-    # Step 8: Register workers with Dokploy using API token
-    - name: Register Workers
+    # Step 8: Register prod-worker
+    - name: Register prod-worker
+      id: prod-worker-register
+      if: (inputs.target == 'all' || inputs.target == 'prod-worker') && steps.prod-worker-lookup.outputs.exists == 'true'
+      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-server-register@main
+      with:
+        dokploy-url: ${{ inputs.dokploy-url }}
+        cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
+        server-name: prod-worker
+        server-ip: ${{ steps.prod-worker-lookup.outputs.ip-address }}
+        ssh-key-id: ${{ steps.ssh-key.outputs.ssh-key-id }}
+
+    # Step 9: Collect results
+    - name: Collect Results
       id: result
-      shell: python
-      env:
-        DOKPLOY_URL: ${{ inputs.dokploy-url }}
-        DOKPLOY_TOKEN: ${{ inputs.dokploy-api-token }}
-        SSH_KEY_ID: ${{ steps.ssh-key.outputs.ssh-key-id }}
-        TARGET: ${{ inputs.target }}
-        DEV_WORKER_IP: ${{ steps.dev-worker-lookup.outputs.ip-address }}
-        DEV_WORKER_EXISTS: ${{ steps.dev-worker-lookup.outputs.exists }}
-        PROD_WORKER_IP: ${{ steps.prod-worker-lookup.outputs.ip-address }}
-        PROD_WORKER_EXISTS: ${{ steps.prod-worker-lookup.outputs.exists }}
+      shell: bash
       run: |
-        import os
-        import sys
+        echo "::group::Worker Registration Results"
 
-        from lib.dokploy import DokployClient, DokployError, output
+        INITIALIZED=""
 
-        TARGET = os.environ.get('TARGET', 'all')
-        SSH_KEY_ID = os.environ.get('SSH_KEY_ID', '')
-        DEV_WORKER_IP = os.environ.get('DEV_WORKER_IP', '')
-        DEV_WORKER_EXISTS = os.environ.get('DEV_WORKER_EXISTS', '') == 'true'
-        PROD_WORKER_IP = os.environ.get('PROD_WORKER_IP', '')
-        PROD_WORKER_EXISTS = os.environ.get('PROD_WORKER_EXISTS', '') == 'true'
+        # Check dev-worker result
+        if [[ "${{ steps.dev-worker-register.outputs.success }}" == "true" ]]; then
+          echo "dev-worker: success (server-id: ${{ steps.dev-worker-register.outputs.server-id }})"
+          INITIALIZED="dev-worker"
+        elif [[ "${{ inputs.target }}" == "all" || "${{ inputs.target }}" == "dev-worker" ]]; then
+          if [[ "${{ steps.dev-worker-lookup.outputs.exists }}" != "true" ]]; then
+            echo "::warning::dev-worker not found in Tailscale, skipping"
+          else
+            echo "::warning::dev-worker registration did not complete"
+          fi
+        fi
 
-        print("::group::Register Dokploy Workers")
+        # Check prod-worker result
+        if [[ "${{ steps.prod-worker-register.outputs.success }}" == "true" ]]; then
+          echo "prod-worker: success (server-id: ${{ steps.prod-worker-register.outputs.server-id }})"
+          if [[ -n "$INITIALIZED" ]]; then
+            INITIALIZED="${INITIALIZED},prod-worker"
+          else
+            INITIALIZED="prod-worker"
+          fi
+        elif [[ "${{ inputs.target }}" == "all" || "${{ inputs.target }}" == "prod-worker" ]]; then
+          if [[ "${{ steps.prod-worker-lookup.outputs.exists }}" != "true" ]]; then
+            echo "::warning::prod-worker not found in Tailscale, skipping"
+          else
+            echo "::warning::prod-worker registration did not complete"
+          fi
+        fi
 
-        try:
-            client = DokployClient.from_env()
-            initialized = []
+        echo ""
+        echo "=== Initialization complete ==="
+        echo "Initialized workers: ${INITIALIZED:-none}"
 
-            def register_worker(name: str, ip: str, exists: bool) -> bool:
-                print(f"\n=== Processing: {name} ===")
+        echo "success=true" >> $GITHUB_OUTPUT
+        echo "initialized-workers=${INITIALIZED}" >> $GITHUB_OUTPUT
 
-                if not exists or not ip:
-                    print(f"::warning::{name} not found in Tailscale, skipping")
-                    return False
-
-                print(f"Found {name} at IP: {ip}")
-
-                # Check if server already exists
-                existing = client.get_server_by_name(name)
-                if existing:
-                    server_id = existing.get('serverId')
-                    print(f"Server {name} already registered (ID: {server_id})")
-                    return True
-
-                # Register server
-                print(f"Registering server: {name} ({ip})")
-                result = client.create_server(
-                    name=name,
-                    ip_address=ip,
-                    ssh_key_id=SSH_KEY_ID,
-                    server_type='deploy',
-                )
-
-                server_id = result.get('serverId')
-                if not server_id:
-                    # Try to get ID by querying again
-                    import time
-                    time.sleep(1)
-                    created = client.get_server_by_name(name)
-                    if created:
-                        server_id = created.get('serverId')
-
-                if not server_id:
-                    print(f"::error::Failed to register {name}")
-                    return False
-
-                print(f"Server registered: {server_id}")
-
-                # Setup server
-                print("Setting up server...")
-                try:
-                    client.setup_server(server_id)
-                except DokployError:
-                    pass  # Setup may take time
-
-                print(f"{name} initialized successfully!")
-                return True
-
-            # Register workers based on target
-            if TARGET in ('all', 'dev-worker'):
-                if register_worker('dev-worker', DEV_WORKER_IP, DEV_WORKER_EXISTS):
-                    initialized.append('dev-worker')
-
-            if TARGET in ('all', 'prod-worker'):
-                if register_worker('prod-worker', PROD_WORKER_IP, PROD_WORKER_EXISTS):
-                    initialized.append('prod-worker')
-
-            print("\n=== Initialization complete ===")
-            print(f"Initialized workers: {', '.join(initialized) if initialized else 'none'}")
-
-            output('success', 'true')
-            output('initialized-workers', ','.join(initialized))
-
-        except DokployError as e:
-            print(f"::error::Dokploy API error: {e}")
-            output('success', 'false')
-            output('initialized-workers', '')
-            sys.exit(1)
-
-        print("::endgroup::")
+        echo "::endgroup::"
