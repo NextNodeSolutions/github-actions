@@ -61,31 +61,12 @@ runs:
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Debug: check TCP connectivity
-        echo "=== TCP Connectivity Tests ==="
-        for port in 5000 443 80; do
-          if timeout 5 bash -c "echo >/dev/tcp/${REGISTRY_IP}/${port}" 2>/dev/null; then
-            echo "TCP ${port}: OPEN"
-          else
-            echo "TCP ${port}: CLOSED/TIMEOUT"
-          fi
-        done
-
-        # Debug: verbose curl tests
-        echo "=== Curl Tests (verbose) ==="
-        echo "--- Port 5000 ---"
-        curl -v --connect-timeout 5 "http://${REGISTRY_IP}:5000/v2/" 2>&1 || true
-
-        echo "--- Port 443 (Traefik) ---"
-        curl -vk --connect-timeout 5 --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" 2>&1 || true
-
-        # Try direct connection to registry port 5000
-        echo "=== Final Connection Test ==="
+        # Test registry connection (port 5000 direct, or 443 via Traefik)
         if curl -sf --connect-timeout 10 "http://${REGISTRY_IP}:5000/v2/"; then
-          echo "Direct registry connection successful (port 5000)"
+          echo "Registry connection OK (port 5000)"
           echo "registry-port=5000" >> $GITHUB_OUTPUT
         elif curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk --connect-timeout 10; then
-          echo "Traefik connection successful (HTTPS)"
+          echo "Registry connection OK (Traefik HTTPS)"
           echo "registry-port=443" >> $GITHUB_OUTPUT
         else
           echo "::error::Cannot connect to registry at ${REGISTRY_IP}"
@@ -93,12 +74,15 @@ runs:
         fi
         echo "::endgroup::"
 
-    # SECURITY: network=host is required for Tailscale connectivity to private registry.
-    # The registry (admin-dokploy:5000) is only accessible via Tailscale network.
+    # Configure buildx for insecure registry (HTTP on port 5000)
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       with:
         driver-opts: network=host
+        buildkitd-config-inline: |
+          [registry."${{ steps.registry.outputs.registry-ip }}:5000"]
+            http = true
+            insecure = true
 
     - name: Generate Image Tag
       id: tag
