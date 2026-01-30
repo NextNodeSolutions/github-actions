@@ -85,10 +85,12 @@ runs:
         import sys
         import requests
 
+        from lib.dokploy.constants import TRAEFIK_SERVER as DEFAULT_TRAEFIK_SERVER
+
         DOKPLOY_URL = os.environ['DOKPLOY_URL'].rstrip('/')
         DOKPLOY_TOKEN = os.environ['DOKPLOY_TOKEN']
         SERVER_NAME = os.environ['SERVER_NAME']
-        TRAEFIK_SERVER = os.environ.get('TRAEFIK_SERVER', 'admin-dokploy')
+        TRAEFIK_SERVER = os.environ.get('TRAEFIK_SERVER', DEFAULT_TRAEFIK_SERVER)
         EXPOSURE = os.environ.get('EXPOSURE', 'external')
         HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
         TAILSCALE_API_KEY = os.environ.get('TAILSCALE_API_KEY', '')

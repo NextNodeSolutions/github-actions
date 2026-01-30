@@ -3,8 +3,15 @@
 import re
 from pathlib import Path
 
+from .constants import (
+    APP_PORT_VAR,
+    DEFAULT_APP_PORT,
+    DEFAULT_DOCKERFILE,
+    DEFAULT_ENV_FILE,
+)
 
-def read_env_file(env_path: str = ".env") -> dict[str, str]:
+
+def read_env_file(env_path: str = DEFAULT_ENV_FILE) -> dict[str, str]:
     """Read .env file and return dict of key=value pairs.
 
     Args:
@@ -31,8 +38,8 @@ def read_env_file(env_path: str = ".env") -> dict[str, str]:
 
 
 def detect_port(
-    env_path: str = ".env",
-    dockerfile_path: str = "Dockerfile",
+    env_path: str = DEFAULT_ENV_FILE,
+    dockerfile_path: str = DEFAULT_DOCKERFILE,
 ) -> tuple[int | None, str | None]:
     """Detect application port from multiple sources.
 
@@ -49,9 +56,9 @@ def detect_port(
     """
     # 1. Check .env file for APP_PORT
     env_vars = read_env_file(env_path)
-    if "APP_PORT" in env_vars:
+    if APP_PORT_VAR in env_vars:
         try:
-            return int(env_vars["APP_PORT"]), ".env"
+            return int(env_vars[APP_PORT_VAR]), DEFAULT_ENV_FILE
         except ValueError:
             pass
 
@@ -59,18 +66,18 @@ def detect_port(
     dockerfile = Path(dockerfile_path)
     if dockerfile.exists():
         content = dockerfile.read_text()
-        match = re.search(r"^ARG\s+APP_PORT\s*=\s*(\d+)", content, re.MULTILINE)
+        match = re.search(rf"^ARG\s+{APP_PORT_VAR}\s*=\s*(\d+)", content, re.MULTILINE)
         if match:
-            return int(match.group(1)), "Dockerfile"
+            return int(match.group(1)), DEFAULT_DOCKERFILE
 
     return None, None
 
 
 def get_port(
     config_port: int | None = None,
-    env_path: str = ".env",
-    dockerfile_path: str = "Dockerfile",
-    default: int = 3000,
+    env_path: str = DEFAULT_ENV_FILE,
+    dockerfile_path: str = DEFAULT_DOCKERFILE,
+    default: int = DEFAULT_APP_PORT,
 ) -> tuple[int, str]:
     """Get application port with fallback chain.
 

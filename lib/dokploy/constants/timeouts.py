@@ -1,0 +1,18 @@
+"""Timeout constants."""
+
+# General timeouts (seconds)
+DEFAULT_TIMEOUT = 30
+DEPLOY_TIMEOUT = 60
+DNS_TIMEOUT = 30
+
+# Long operations
+VPS_PROVISION_TIMEOUT = 300
+ADMIN_SETUP_TIMEOUT = 600
+
+# Retry configuration
+DEFAULT_RETRY_INTERVAL = 10
+DEFAULT_MAX_ATTEMPTS = 30
+
+# Tailscale
+TAILSCALE_WAIT_TIMEOUT = 30
+TAILSCALE_TOKEN_TIMEOUT = 3600

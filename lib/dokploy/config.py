@@ -6,6 +6,8 @@ from typing import Any
 
 import tomllib
 
+from .constants import DEFAULT_CONFIG_FILE, GITHUB_REPOSITORY_VAR
+
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Deep merge two dicts, override wins on conflicts."""
@@ -32,7 +34,7 @@ def load_toml(path: str | Path) -> dict[str, Any]:
 
 
 def load_merged_config(
-    project_config_path: str = "dokploy.toml",
+    project_config_path: str = DEFAULT_CONFIG_FILE,
     defaults_path: str = "",
 ) -> dict[str, Any]:
     """Load and merge project config with defaults.
@@ -66,7 +68,7 @@ def get_project_name(config: dict[str, Any]) -> str:
     if name:
         return name
 
-    github_repo = os.environ.get("GITHUB_REPOSITORY", "")
+    github_repo = os.environ.get(GITHUB_REPOSITORY_VAR, "")
     if github_repo:
         return github_repo.split("/")[-1]
 

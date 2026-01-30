@@ -1,47 +1,32 @@
-"""Shared Python utilities for Dokploy GitHub Actions.
+"""Constants and enums for Dokploy operations.
 
-This library provides reusable functions for:
-- Configuration loading and merging
-- Domain computation
-- Port detection
-- GitHub Actions output handling
-- Dokploy API client with consistent error handling
-- Constants and enums for Dokploy operations
+This package provides centralized constants organized by domain:
+- enums: Environment, SourceType, BuildType, etc.
+- infrastructure: Servers, registry, ports
+- files: Config filenames, env var names
+- domains: URL schemes, domain prefixes
+- timeouts: All timeout values
+- healthcheck: Health check configuration
+- resources: Memory, CPU limits
+- sablier: Scale-to-zero settings
+- http: Headers, status codes
+- api: Dokploy API endpoints
 """
 
-from .client import (
-    DokployAuthError,
-    DokployClient,
-    DokployError,
-    DokployNotFoundError,
+from .api import Endpoints
+from .domains import (
+    DEV_DOMAIN_PREFIX,
+    PREVIEW_DOMAIN_PREFIX,
+    URL_SCHEME_HTTPS,
 )
-from .config import (
-    deep_merge,
-    get_environment_config,
-    get_project_name,
-    load_merged_config,
-    load_toml,
-)
-from .constants import (
-    # Enums
+from .enums import (
     BuildType,
     CertificateType,
     ComposeType,
     Environment,
     SourceType,
-    # API
-    Endpoints,
-    # Infrastructure
-    DEFAULT_APP_PORT,
-    DEFAULT_SSH_PORT,
-    DEFAULT_SSH_USER,
-    DEV_SERVER,
-    PROD_SERVER,
-    REGISTRY_HOST,
-    REGISTRY_INTERNAL_HOST,
-    REGISTRY_PORT,
-    TRAEFIK_SERVER,
-    # Files
+)
+from .files import (
     APP_PORT_VAR,
     DEFAULT_COMPOSE_FILE,
     DEFAULT_CONFIG_FILE,
@@ -49,43 +34,16 @@ from .constants import (
     DEFAULT_ENV_FILE,
     GITHUB_OUTPUT_VAR,
     GITHUB_REPOSITORY_VAR,
-    # Domains
-    DEV_DOMAIN_PREFIX,
-    PREVIEW_DOMAIN_PREFIX,
-    URL_SCHEME_HTTPS,
-    # Timeouts
-    ADMIN_SETUP_TIMEOUT,
-    DEFAULT_MAX_ATTEMPTS,
-    DEFAULT_RETRY_INTERVAL,
-    DEFAULT_TIMEOUT,
-    DEPLOY_TIMEOUT,
-    DNS_TIMEOUT,
-    TAILSCALE_TOKEN_TIMEOUT,
-    TAILSCALE_WAIT_TIMEOUT,
-    VPS_PROVISION_TIMEOUT,
-    # Health check
+)
+from .healthcheck import (
     DEFAULT_HEALTH_INTERVAL,
     DEFAULT_HEALTH_PATH,
     DEFAULT_HEALTH_RETRIES,
     DEFAULT_HEALTH_START_PERIOD,
     DEFAULT_HEALTH_TIMEOUT,
     HEALTH_SUCCESS_CODES,
-    # Resources
-    DEFAULT_CPU,
-    DEFAULT_CPU_LIMIT,
-    DEFAULT_MEMORY,
-    DEFAULT_MEMORY_LIMIT,
-    DEFAULT_REPLICAS,
-    DEV_CPU,
-    DEV_CPU_LIMIT,
-    DEV_MEMORY,
-    DEV_MEMORY_LIMIT,
-    # Sablier
-    SABLIER_DEFAULT_THEME,
-    SABLIER_IDLE_TIMEOUT,
-    SABLIER_SESSION_DURATION,
-    SABLIER_STARTUP_TIMEOUT,
-    # HTTP
+)
+from .http import (
     CONTENT_TYPE_JSON,
     HEADER_API_KEY,
     HEADER_AUTHORIZATION,
@@ -101,39 +59,56 @@ from .constants import (
     HTTP_OK,
     HTTP_UNAUTHORIZED,
 )
-from .domain import (
-    compute_app_name,
-    compute_domain,
-    compute_url,
-    is_sub_subdomain,
+from .infrastructure import (
+    DEFAULT_APP_PORT,
+    DEFAULT_SSH_PORT,
+    DEFAULT_SSH_USER,
+    DEV_SERVER,
+    PROD_SERVER,
+    REGISTRY_HOST,
+    REGISTRY_INTERNAL_HOST,
+    REGISTRY_PORT,
+    TRAEFIK_SERVER,
 )
-from .output import output
-from .port import (
-    detect_port,
-    get_port,
-    read_env_file,
+from .resources import (
+    DEFAULT_CPU,
+    DEFAULT_CPU_LIMIT,
+    DEFAULT_MEMORY,
+    DEFAULT_MEMORY_LIMIT,
+    DEFAULT_REPLICAS,
+    DEV_CPU,
+    DEV_CPU_LIMIT,
+    DEV_MEMORY,
+    DEV_MEMORY_LIMIT,
+)
+from .sablier import (
+    SABLIER_DEFAULT_THEME,
+    SABLIER_IDLE_TIMEOUT,
+    SABLIER_SESSION_DURATION,
+    SABLIER_STARTUP_TIMEOUT,
+)
+from .timeouts import (
+    ADMIN_SETUP_TIMEOUT,
+    DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_RETRY_INTERVAL,
+    DEFAULT_TIMEOUT,
+    DEPLOY_TIMEOUT,
+    DNS_TIMEOUT,
+    TAILSCALE_TOKEN_TIMEOUT,
+    TAILSCALE_WAIT_TIMEOUT,
+    VPS_PROVISION_TIMEOUT,
 )
 
 __all__ = [
-    # client
-    "DokployClient",
-    "DokployError",
-    "DokployAuthError",
-    "DokployNotFoundError",
-    # config
-    "deep_merge",
-    "get_environment_config",
-    "get_project_name",
-    "load_merged_config",
-    "load_toml",
-    # constants - Enums
+    # Enums
     "Environment",
     "SourceType",
     "BuildType",
     "ComposeType",
     "CertificateType",
+    # API
     "Endpoints",
-    # constants - Infrastructure
+    # Infrastructure
     "TRAEFIK_SERVER",
     "DEV_SERVER",
     "PROD_SERVER",
@@ -143,7 +118,7 @@ __all__ = [
     "DEFAULT_APP_PORT",
     "DEFAULT_SSH_PORT",
     "DEFAULT_SSH_USER",
-    # constants - Files
+    # Files
     "DEFAULT_CONFIG_FILE",
     "DEFAULT_ENV_FILE",
     "DEFAULT_DOCKERFILE",
@@ -151,11 +126,11 @@ __all__ = [
     "APP_PORT_VAR",
     "GITHUB_REPOSITORY_VAR",
     "GITHUB_OUTPUT_VAR",
-    # constants - Domains
+    # Domains
     "URL_SCHEME_HTTPS",
     "DEV_DOMAIN_PREFIX",
     "PREVIEW_DOMAIN_PREFIX",
-    # constants - Timeouts
+    # Timeouts
     "DEFAULT_TIMEOUT",
     "DEPLOY_TIMEOUT",
     "DNS_TIMEOUT",
@@ -165,14 +140,14 @@ __all__ = [
     "DEFAULT_MAX_ATTEMPTS",
     "TAILSCALE_WAIT_TIMEOUT",
     "TAILSCALE_TOKEN_TIMEOUT",
-    # constants - Health check
+    # Health check
     "DEFAULT_HEALTH_PATH",
     "DEFAULT_HEALTH_INTERVAL",
     "DEFAULT_HEALTH_TIMEOUT",
     "DEFAULT_HEALTH_RETRIES",
     "DEFAULT_HEALTH_START_PERIOD",
     "HEALTH_SUCCESS_CODES",
-    # constants - Resources
+    # Resources
     "DEFAULT_MEMORY",
     "DEFAULT_MEMORY_LIMIT",
     "DEFAULT_CPU",
@@ -182,12 +157,12 @@ __all__ = [
     "DEV_CPU",
     "DEV_CPU_LIMIT",
     "DEFAULT_REPLICAS",
-    # constants - Sablier
+    # Sablier
     "SABLIER_IDLE_TIMEOUT",
     "SABLIER_SESSION_DURATION",
     "SABLIER_STARTUP_TIMEOUT",
     "SABLIER_DEFAULT_THEME",
-    # constants - HTTP
+    # HTTP
     "HEADER_API_KEY",
     "HEADER_CONTENT_TYPE",
     "HEADER_AUTHORIZATION",
@@ -202,15 +177,4 @@ __all__ = [
     "HTTP_FORBIDDEN",
     "HTTP_NOT_FOUND",
     "HTTP_INTERNAL_ERROR",
-    # domain
-    "compute_app_name",
-    "compute_domain",
-    "compute_url",
-    "is_sub_subdomain",
-    # output
-    "output",
-    # port
-    "detect_port",
-    "get_port",
-    "read_env_file",
 ]

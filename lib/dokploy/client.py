@@ -297,7 +297,7 @@ class DokployClient:
         Returns:
             Updated server object
         """
-        from lib.dokploy.constants import Endpoints
+        from .constants import Endpoints
 
         payload: dict[str, Any] = {"serverId": server_id}
         if ip_address is not None:

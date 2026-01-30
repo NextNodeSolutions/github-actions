@@ -1,0 +1,21 @@
+"""HTTP constants: headers, content types, status codes."""
+
+# Headers
+HEADER_API_KEY = "x-api-key"
+HEADER_CONTENT_TYPE = "Content-Type"
+HEADER_AUTHORIZATION = "Authorization"
+
+# Content types
+CONTENT_TYPE_JSON = "application/json"
+
+# Status codes
+HTTP_OK = 200
+HTTP_CREATED = 201
+HTTP_NO_CONTENT = 204
+HTTP_MOVED_PERMANENTLY = 301
+HTTP_FOUND = 302
+HTTP_BAD_REQUEST = 400
+HTTP_UNAUTHORIZED = 401
+HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
+HTTP_INTERNAL_ERROR = 500

@@ -1,5 +1,7 @@
 """Domain computation utilities."""
 
+from .constants import DEV_DOMAIN_PREFIX, PREVIEW_DOMAIN_PREFIX, URL_SCHEME_HTTPS
+
 
 def compute_domain(
     base_domain: str,
@@ -29,11 +31,11 @@ def compute_domain(
         return base_domain
 
     if environment == "development":
-        return f"dev.{base_domain}"
+        return f"{DEV_DOMAIN_PREFIX}{base_domain}"
 
     if environment == "preview":
         if pr_number:
-            return f"pr-{pr_number}.dev.{base_domain}"
+            return f"{PREVIEW_DOMAIN_PREFIX}{pr_number}.{DEV_DOMAIN_PREFIX}{base_domain}"
         return ""
 
     return f"{environment}.{base_domain}"
@@ -51,7 +53,7 @@ def compute_url(domain: str) -> str:
     if not domain:
         return ""
 
-    return f"https://{domain}"
+    return f"{URL_SCHEME_HTTPS}{domain}"
 
 
 def compute_app_name(
