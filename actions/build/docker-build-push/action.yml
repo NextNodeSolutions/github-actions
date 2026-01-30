@@ -64,12 +64,12 @@ runs:
           echo "Registry connection OK via HTTPS (${REGISTRY_HOST})"
           echo "use-fallback=false" >> $GITHUB_OUTPUT
           echo "registry-url=${REGISTRY_HOST}" >> $GITHUB_OUTPUT
-        # Fallback: Direct HTTP via Tailscale IP (only accessible from Tailscale network)
+        # Fallback: HTTP via Tailscale hostname (workers have admin-dokploy:5000 in insecure-registries)
         elif curl -sf "http://${REGISTRY_IP}:5000/v2/" --connect-timeout 10; then
-          echo "::warning::HTTPS failed, using Tailscale fallback (HTTP on ${REGISTRY_IP}:5000)"
-          echo "This is secure: only Tailscale nodes can reach this IP"
+          echo "::warning::HTTPS failed, using Tailscale fallback (admin-dokploy:5000)"
+          echo "All Tailscale nodes can resolve admin-dokploy and have it in insecure-registries"
           echo "use-fallback=true" >> $GITHUB_OUTPUT
-          echo "registry-url=${REGISTRY_IP}:5000" >> $GITHUB_OUTPUT
+          echo "registry-url=admin-dokploy:5000" >> $GITHUB_OUTPUT
         else
           echo "::error::Cannot connect to registry via HTTPS or Tailscale fallback"
           exit 1
@@ -83,7 +83,7 @@ runs:
         buildkitd-config-inline: |
           [registry."${{ inputs.registry-host }}"]
             insecure = true
-          [registry."${{ steps.registry.outputs.registry-ip }}:5000"]
+          [registry."admin-dokploy:5000"]
             http = true
             insecure = true
 
@@ -130,10 +130,14 @@ runs:
           done <<< "$BUILD_ARGS"
         fi
 
-        # Add --add-host for hostname resolution when using HTTPS mode
+        # Add --add-host for hostname resolution
         ADD_HOST_FLAG=""
         if [ "$USE_FALLBACK" = "false" ]; then
+          # HTTPS mode: resolve registry hostname to Tailscale IP
           ADD_HOST_FLAG="--add-host ${REGISTRY_HOST}:${REGISTRY_IP}"
+        else
+          # Fallback mode: resolve admin-dokploy to Tailscale IP for buildx
+          ADD_HOST_FLAG="--add-host admin-dokploy:${REGISTRY_IP}"
         fi
 
         docker buildx build \
