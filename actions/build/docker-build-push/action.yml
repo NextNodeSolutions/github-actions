@@ -48,41 +48,30 @@ runs:
       run: |
         echo "::group::Testing registry connection"
 
-        # Get admin-dokploy Tailscale IP (registry runs on this machine)
-        # This bypasses DNS resolution issues in GitHub Actions runners
+        # Get admin-dokploy Tailscale IP for DNS override
         REGISTRY_IP=$(tailscale status --json | jq -r '.Peer | to_entries[] | select(.value.HostName == "admin-dokploy") | .value.TailscaleIPs[0]')
 
         if [[ -z "$REGISTRY_IP" || "$REGISTRY_IP" == "null" ]]; then
           echo "::error::Failed to get admin-dokploy IP from Tailscale"
-          tailscale status --json | jq '.Peer | to_entries[] | {hostname: .value.HostName, ips: .value.TailscaleIPs}'
           exit 1
         fi
 
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Test registry connection (port 5000 direct, or 443 via Traefik)
-        if curl -sf --connect-timeout 10 "http://${REGISTRY_IP}:5000/v2/"; then
-          echo "Registry connection OK (port 5000)"
-          echo "registry-port=5000" >> $GITHUB_OUTPUT
-        elif curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk --connect-timeout 10; then
-          echo "Registry connection OK (Traefik HTTPS)"
-          echo "registry-port=443" >> $GITHUB_OUTPUT
+        # Test via Traefik (HTTPS) with --resolve for proper TLS SNI
+        if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk --connect-timeout 10; then
+          echo "Registry connection OK via Traefik (HTTPS)"
         else
-          echo "::error::Cannot connect to registry at ${REGISTRY_IP}"
+          echo "::error::Cannot connect to registry at ${REGISTRY_HOST}"
           exit 1
         fi
         echo "::endgroup::"
 
-    # Configure buildx for insecure registry (HTTP on port 5000)
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       with:
         driver-opts: network=host
-        buildkitd-config-inline: |
-          [registry."${{ steps.registry.outputs.registry-ip }}:5000"]
-            http = true
-            insecure = true
 
     - name: Generate Image Tag
       id: tag
@@ -90,8 +79,6 @@ runs:
       env:
         CUSTOM_TAGS: ${{ inputs.tags }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
-        REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
-        REGISTRY_PORT: ${{ steps.registry.outputs.registry-port }}
       run: |
         echo "::group::Generating image tag"
         REPO_NAME="${GITHUB_REPOSITORY#*/}"
@@ -103,20 +90,9 @@ runs:
           FIRST_TAG="${SHA_SHORT}"
         fi
 
-        # For Dokploy (uses hostname-based reference)
         IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-
-        # For push (use direct IP:port if available, otherwise hostname)
-        if [ "$REGISTRY_PORT" = "5000" ]; then
-          PUSH_IMAGE="${REGISTRY_IP}:5000/${REPO_NAME}:${FIRST_TAG}"
-        else
-          PUSH_IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
-        fi
-        echo "push-image=${PUSH_IMAGE}" >> $GITHUB_OUTPUT
-
-        echo "Dokploy image: ${IMAGE}"
-        echo "Push target: ${PUSH_IMAGE}"
+        echo "Generated image tag: ${IMAGE}"
         echo "::endgroup::"
 
     - name: Build and Push
@@ -127,10 +103,8 @@ runs:
         CONTEXT: ${{ inputs.context }}
         BUILD_ARGS: ${{ inputs.build-args }}
         IMAGE: ${{ steps.tag.outputs.image }}
-        PUSH_IMAGE: ${{ steps.tag.outputs.push-image }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
-        REGISTRY_PORT: ${{ steps.registry.outputs.registry-port }}
       run: |
         echo "::group::Building and pushing Docker image"
 
@@ -141,30 +115,16 @@ runs:
           done <<< "$BUILD_ARGS"
         fi
 
-        # Build with push target (direct IP:5000 or hostname via Traefik)
-        if [ "$REGISTRY_PORT" = "5000" ]; then
-          # Direct push to registry (HTTP, insecure)
-          docker buildx build \
-            --file "$DOCKERFILE" \
-            --tag "$PUSH_IMAGE" \
-            --push \
-            --network=host \
-            $BUILD_ARGS_FLAGS \
-            "$CONTEXT"
-        else
-          # Push via Traefik (HTTPS with --add-host for DNS)
-          docker buildx build \
-            --file "$DOCKERFILE" \
-            --tag "$PUSH_IMAGE" \
-            --add-host "${REGISTRY_HOST}:${REGISTRY_IP}" \
-            --push \
-            --network=host \
-            $BUILD_ARGS_FLAGS \
-            "$CONTEXT"
-        fi
+        # Build and push via Traefik using --add-host for DNS override
+        docker buildx build \
+          --file "$DOCKERFILE" \
+          --tag "$IMAGE" \
+          --add-host "${REGISTRY_HOST}:${REGISTRY_IP}" \
+          --push \
+          --network=host \
+          $BUILD_ARGS_FLAGS \
+          "$CONTEXT"
 
-        # Output hostname-based image for Dokploy
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-        echo "Pushed: ${PUSH_IMAGE}"
-        echo "Dokploy will pull: ${IMAGE}"
+        echo "Successfully pushed: ${IMAGE}"
         echo "::endgroup::"

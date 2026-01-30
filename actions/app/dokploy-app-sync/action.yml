@@ -91,7 +91,7 @@ runs:
     # Step 1: Create or find application
     - name: Create or find application
       id: app-create
-      uses: ./actions/app/dokploy-app-create
+      uses: nextnodesolutions/github-actions/actions/app/dokploy-app-create@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-token: ${{ inputs.dokploy-token }}
@@ -104,7 +104,7 @@ runs:
     # Step 2: Configure source (Docker or GitHub)
     - name: Configure Docker source
       if: inputs.docker-image != ''
-      uses: ./actions/app/dokploy-source-config
+      uses: nextnodesolutions/github-actions/actions/app/dokploy-source-config@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-token: ${{ inputs.dokploy-token }}
@@ -114,7 +114,7 @@ runs:
 
     - name: Configure GitHub source
       if: inputs.docker-image == '' && inputs.github-url != ''
-      uses: ./actions/app/dokploy-source-config
+      uses: nextnodesolutions/github-actions/actions/app/dokploy-source-config@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-token: ${{ inputs.dokploy-token }}
@@ -125,7 +125,7 @@ runs:
     # Step 3: Configure domain (if provided)
     - name: Configure domain
       if: inputs.domain != ''
-      uses: ./actions/app/dokploy-domain-config
+      uses: nextnodesolutions/github-actions/actions/app/dokploy-domain-config@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-token: ${{ inputs.dokploy-token }}
@@ -135,7 +135,7 @@ runs:
 
     # Step 4: Configure health check
     - name: Configure health check
-      uses: ./actions/app/dokploy-health-config
+      uses: nextnodesolutions/github-actions/actions/app/dokploy-health-config@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-token: ${{ inputs.dokploy-token }}
@@ -152,7 +152,7 @@ runs:
     - name: Trigger deployment
       id: deploy
       if: inputs.skip-deploy != 'true'
-      uses: ./actions/app/dokploy-deploy-trigger
+      uses: nextnodesolutions/github-actions/actions/app/dokploy-deploy-trigger@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-token: ${{ inputs.dokploy-token }}
