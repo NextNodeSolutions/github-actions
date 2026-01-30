@@ -161,17 +161,48 @@ jobs:
           fi
 
   # ==========================================================================
-  # BUILD (skip for compose or cleanup)
+  # DEPLOYMENT STARTED NOTIFICATION (before build)
   # ==========================================================================
-  build:
-    name: Build and Push Image
+  notify-started:
+    name: Notify Deployment Started
     runs-on: ubuntu-latest
     needs: [config]
     if: |
       inputs.action == 'deploy' &&
       needs.config.outputs.environment-enabled == 'true' &&
+      needs.config.outputs.slack-enabled == 'true'
+    steps:
+      - name: Checkout Shared Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nextnodesolutions/github-actions
+          path: .github-actions
+
+      - name: Send Started Notification
+        uses: ./.github-actions/actions/notifications/slack-deploy
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: started
+          project-name: ${{ needs.config.outputs.project-name }}
+          environment: ${{ inputs.environment }}
+          domain: ${{ needs.config.outputs.domain }}
+          url: ${{ needs.config.outputs.url }}
+          pr-number: ${{ inputs.pr-number }}
+
+  # ==========================================================================
+  # BUILD (skip for compose or cleanup)
+  # ==========================================================================
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    needs: [config, notify-started]
+    if: |
+      always() &&
+      inputs.action == 'deploy' &&
+      needs.config.outputs.environment-enabled == 'true' &&
       needs.config.outputs.is-compose == 'false' &&
-      inputs.compose-file == ''
+      inputs.compose-file == '' &&
+      (needs.notify-started.result == 'success' || needs.notify-started.result == 'skipped')
     outputs:
       image: ${{ steps.build.outputs.image }}
     steps:
@@ -328,21 +359,6 @@ jobs:
         with:
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-api-token: ${{ secrets.DOKPLOY_API_TOKEN }}
-
-      # ---------- DEPLOYMENT STARTED NOTIFICATION ----------
-      - name: Notify Deployment Started
-        if: inputs.action == 'deploy' && env.SLACK_ENABLED == 'true'
-        uses: ./.github-actions/actions/notifications/slack-deploy
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          status: started
-          project-name: ${{ needs.config.outputs.project-name }}
-          environment: ${{ inputs.environment }}
-          domain: ${{ needs.config.outputs.domain }}
-          url: ${{ needs.config.outputs.url }}
-          docker-image: ${{ needs.build.outputs.image }}
-          create-tag: ${{ inputs.create-tag }}
-          pr-number: ${{ inputs.pr-number }}
 
       # ---------- CLEANUP ----------
       - name: Cleanup Preview
