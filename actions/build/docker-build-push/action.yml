@@ -61,28 +61,24 @@ runs:
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Debug: test basic connectivity
-        echo "Testing TCP connectivity to ${REGISTRY_IP}:443..."
-        nc -zv -w5 "$REGISTRY_IP" 443 2>&1 || echo "TCP 443 failed"
-
-        echo "Testing TCP connectivity to ${REGISTRY_IP}:80..."
-        nc -zv -w5 "$REGISTRY_IP" 80 2>&1 || echo "TCP 80 failed"
-
-        # Test connection with verbose output
-        echo "Testing HTTPS with --resolve (verbose)..."
-        curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -vk 2>&1 || true
-
-        echo "Testing HTTP with --resolve..."
-        curl --resolve "${REGISTRY_HOST}:80:${REGISTRY_IP}" "http://${REGISTRY_HOST}/v2/" -vk 2>&1 || true
-
-        # Final test
-        if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk; then
-          echo "Registry connection successful (HTTPS)"
-        elif curl --resolve "${REGISTRY_HOST}:80:${REGISTRY_IP}" "http://${REGISTRY_HOST}/v2/" -sfL; then
-          echo "Registry connection successful (HTTP)"
+        # Try direct connection to registry port 5000 (bypasses Traefik)
+        # Registry is HTTP-only on port 5000, accessible via Tailscale
+        echo "Testing direct connection to registry on port 5000..."
+        if curl -sf "http://${REGISTRY_IP}:5000/v2/"; then
+          echo "Direct registry connection successful (port 5000)"
+          echo "registry-port=5000" >> $GITHUB_OUTPUT
+          echo "registry-url=http://${REGISTRY_IP}:5000" >> $GITHUB_OUTPUT
         else
-          echo "::error::Cannot connect to registry at ${REGISTRY_IP} (${REGISTRY_HOST})"
-          exit 1
+          echo "Port 5000 failed, trying Traefik (443)..."
+          if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk; then
+            echo "Traefik connection successful (HTTPS)"
+            echo "registry-port=443" >> $GITHUB_OUTPUT
+            echo "registry-url=https://${REGISTRY_HOST}" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Cannot connect to registry at ${REGISTRY_IP}"
+            echo "Tried: port 5000 (direct) and port 443 (Traefik)"
+            exit 1
+          fi
         fi
         echo "::endgroup::"
 
@@ -99,21 +95,33 @@ runs:
       env:
         CUSTOM_TAGS: ${{ inputs.tags }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
+        REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
+        REGISTRY_PORT: ${{ steps.registry.outputs.registry-port }}
       run: |
         echo "::group::Generating image tag"
         REPO_NAME="${GITHUB_REPOSITORY#*/}"
         SHA_SHORT="${GITHUB_SHA:0:7}"
 
         if [ -n "$CUSTOM_TAGS" ]; then
-          # Use first custom tag
           FIRST_TAG="${CUSTOM_TAGS%%,*}"
-          IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
         else
-          IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${SHA_SHORT}"
+          FIRST_TAG="${SHA_SHORT}"
         fi
 
+        # For Dokploy (uses hostname-based reference)
+        IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-        echo "Generated image tag: ${IMAGE}"
+
+        # For push (use direct IP:port if available, otherwise hostname)
+        if [ "$REGISTRY_PORT" = "5000" ]; then
+          PUSH_IMAGE="${REGISTRY_IP}:5000/${REPO_NAME}:${FIRST_TAG}"
+        else
+          PUSH_IMAGE="${REGISTRY_HOST}/${REPO_NAME}:${FIRST_TAG}"
+        fi
+        echo "push-image=${PUSH_IMAGE}" >> $GITHUB_OUTPUT
+
+        echo "Dokploy image: ${IMAGE}"
+        echo "Push target: ${PUSH_IMAGE}"
         echo "::endgroup::"
 
     - name: Build and Push
@@ -124,8 +132,10 @@ runs:
         CONTEXT: ${{ inputs.context }}
         BUILD_ARGS: ${{ inputs.build-args }}
         IMAGE: ${{ steps.tag.outputs.image }}
+        PUSH_IMAGE: ${{ steps.tag.outputs.push-image }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         REGISTRY_IP: ${{ steps.registry.outputs.registry-ip }}
+        REGISTRY_PORT: ${{ steps.registry.outputs.registry-port }}
       run: |
         echo "::group::Building and pushing Docker image"
 
@@ -136,17 +146,30 @@ runs:
           done <<< "$BUILD_ARGS"
         fi
 
-        # Build and push using hostname with --add-host for DNS override
-        # This properly handles TLS SNI (Server Name Indication) unlike IP-based push
-        docker buildx build \
-          --file "$DOCKERFILE" \
-          --tag "$IMAGE" \
-          --add-host "${REGISTRY_HOST}:${REGISTRY_IP}" \
-          --push \
-          --network=host \
-          $BUILD_ARGS_FLAGS \
-          "$CONTEXT"
+        # Build with push target (direct IP:5000 or hostname via Traefik)
+        if [ "$REGISTRY_PORT" = "5000" ]; then
+          # Direct push to registry (HTTP, insecure)
+          docker buildx build \
+            --file "$DOCKERFILE" \
+            --tag "$PUSH_IMAGE" \
+            --push \
+            --network=host \
+            $BUILD_ARGS_FLAGS \
+            "$CONTEXT"
+        else
+          # Push via Traefik (HTTPS with --add-host for DNS)
+          docker buildx build \
+            --file "$DOCKERFILE" \
+            --tag "$PUSH_IMAGE" \
+            --add-host "${REGISTRY_HOST}:${REGISTRY_IP}" \
+            --push \
+            --network=host \
+            $BUILD_ARGS_FLAGS \
+            "$CONTEXT"
+        fi
 
+        # Output hostname-based image for Dokploy
         echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-        echo "Successfully pushed image: ${IMAGE}"
+        echo "Pushed: ${PUSH_IMAGE}"
+        echo "Dokploy will pull: ${IMAGE}"
         echo "::endgroup::"
