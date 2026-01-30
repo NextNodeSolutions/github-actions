@@ -38,13 +38,14 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Publish port on Swarm manager
+    - name: Publish port on worker Swarm
       id: port
       uses: nextnodesolutions/github-actions/actions/deploy/publish-service-port@main
       with:
         app-name: ${{ inputs.app-name }}
         container-port: ${{ inputs.container-port }}
-        server-ip: ${{ inputs.admin-tailscale-ip }}
+        # Run on worker server where the service actually runs (each worker has its own Swarm)
+        server-ip: ${{ inputs.worker-tailscale-ip }}
         expected-image: ${{ inputs.expected-image }}
 
     - name: Deploy Traefik config
