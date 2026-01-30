@@ -94,6 +94,8 @@ class Endpoints:
 
     # Domains
     DOMAIN_CREATE = "/api/domain.create"
+    DOMAIN_BY_COMPOSE_ID = "/api/domain.byComposeId"
+    DOMAIN_BY_APPLICATION_ID = "/api/domain.byApplicationId"
 
     # Mounts
     MOUNT_CREATE = "/api/mounts.create"
