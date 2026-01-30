@@ -1,0 +1,228 @@
+name: 'Slack Deploy Notification'
+description: 'Send deployment notifications to Slack with rich formatting'
+author: 'NextNodeSolutions'
+
+inputs:
+  webhook-url:
+    description: 'Slack incoming webhook URL'
+    required: true
+  status:
+    description: 'Notification status: started, success, failure, pending-approval, cleanup'
+    required: true
+  project-name:
+    description: 'Project name'
+    required: true
+  environment:
+    description: 'Target environment (development, preview, production)'
+    required: true
+  domain:
+    description: 'Deployed domain (without https://)'
+    required: false
+    default: ''
+  url:
+    description: 'Full URL (https://domain)'
+    required: false
+    default: ''
+  docker-image:
+    description: 'Docker image reference'
+    required: false
+    default: ''
+  create-tag:
+    description: 'Tag being created (for info display)'
+    required: false
+    default: ''
+  pr-number:
+    description: 'PR number (for preview/cleanup)'
+    required: false
+    default: ''
+  cleanup-deleted:
+    description: 'Whether cleanup actually deleted something'
+    required: false
+    default: 'false'
+
+outputs:
+  success:
+    description: 'Whether notification was sent successfully'
+    value: ${{ steps.notify.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build and Send Notification
+      id: notify
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        STATUS: ${{ inputs.status }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        DOMAIN: ${{ inputs.domain }}
+        URL: ${{ inputs.url }}
+        DOCKER_IMAGE: ${{ inputs.docker-image }}
+        CREATE_TAG: ${{ inputs.create-tag }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        CLEANUP_DELETED: ${{ inputs.cleanup-deleted }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_ACTOR: ${{ github.actor }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+      run: |
+        echo "::group::Send Slack notification"
+
+        # Color codes by status
+        case "$STATUS" in
+          started)
+            COLOR="#3498db"  # Blue
+            TITLE="Deployment Started"
+            EMOJI=":rocket:"
+            ;;
+          success)
+            COLOR="#2ecc71"  # Green
+            TITLE="Deployment Successful"
+            EMOJI=":white_check_mark:"
+            ;;
+          failure)
+            COLOR="#e74c3c"  # Red
+            TITLE="Deployment Failed"
+            EMOJI=":x:"
+            ;;
+          pending-approval)
+            COLOR="#f39c12"  # Yellow/Orange
+            TITLE="Production Deployment Awaiting Approval"
+            EMOJI=":hourglass_flowing_sand:"
+            ;;
+          cleanup)
+            COLOR="#9b59b6"  # Purple
+            TITLE="Preview Environment Cleaned Up"
+            EMOJI=":broom:"
+            ;;
+          *)
+            COLOR="#95a5a6"  # Gray
+            TITLE="Deployment Notification"
+            EMOJI=":bell:"
+            ;;
+        esac
+
+        # Build workflow URL
+        WORKFLOW_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+        # Build approval URL (for pending-approval status)
+        APPROVAL_URL="${WORKFLOW_URL}"
+
+        # Short SHA
+        SHORT_SHA="${GITHUB_SHA:0:7}"
+
+        # Build fields array
+        FIELDS="[]"
+
+        # Add project field
+        FIELDS=$(echo "$FIELDS" | jq --arg name "Project" --arg value "$PROJECT_NAME" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+
+        # Add environment field
+        ENV_DISPLAY="$ENVIRONMENT"
+        if [[ -n "$PR_NUMBER" && "$ENVIRONMENT" == "preview" ]]; then
+          ENV_DISPLAY="preview (PR #$PR_NUMBER)"
+        fi
+        FIELDS=$(echo "$FIELDS" | jq --arg name "Environment" --arg value "$ENV_DISPLAY" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+
+        # Add commit field (not for cleanup)
+        if [[ "$STATUS" != "cleanup" ]]; then
+          COMMIT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Commit" --arg value "<$COMMIT_URL|$SHORT_SHA>" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add triggered by field
+        FIELDS=$(echo "$FIELDS" | jq --arg name "Triggered by" --arg value "$GITHUB_ACTOR" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+
+        # Add tag field if provided
+        if [[ -n "$CREATE_TAG" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Tag" --arg value "\`$CREATE_TAG\`" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add URL field for success
+        if [[ "$STATUS" == "success" && -n "$URL" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "URL" --arg value "<$URL|$DOMAIN>" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add cleanup status
+        if [[ "$STATUS" == "cleanup" ]]; then
+          if [[ "$CLEANUP_DELETED" == "true" ]]; then
+            CLEANUP_STATUS="Deleted"
+          else
+            CLEANUP_STATUS="Not found (already deleted)"
+          fi
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Status" --arg value "$CLEANUP_STATUS" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Build buttons
+        BUTTONS="[]"
+
+        # Add View Site button for success
+        if [[ "$STATUS" == "success" && -n "$URL" ]]; then
+          BUTTONS=$(echo "$BUTTONS" | jq --arg url "$URL" '. + [{"type": "button", "text": {"type": "plain_text", "text": "View Site", "emoji": true}, "url": $url, "style": "primary"}]')
+        fi
+
+        # Add Review & Approve button for pending-approval
+        if [[ "$STATUS" == "pending-approval" ]]; then
+          BUTTONS=$(echo "$BUTTONS" | jq --arg url "$APPROVAL_URL" '. + [{"type": "button", "text": {"type": "plain_text", "text": "Review & Approve", "emoji": true}, "url": $url, "style": "primary"}]')
+        fi
+
+        # Add View Workflow button
+        BUTTON_TEXT="View Workflow"
+        if [[ "$STATUS" == "failure" ]]; then
+          BUTTON_TEXT="View Logs"
+        fi
+        BUTTONS=$(echo "$BUTTONS" | jq --arg url "$WORKFLOW_URL" --arg text "$BUTTON_TEXT" '. + [{"type": "button", "text": {"type": "plain_text", "text": $text, "emoji": true}, "url": $url}]')
+
+        # Build the payload
+        PAYLOAD=$(jq -n \
+          --arg color "$COLOR" \
+          --arg title "$EMOJI $TITLE" \
+          --argjson fields "$FIELDS" \
+          --argjson buttons "$BUTTONS" \
+          '{
+            "attachments": [{
+              "color": $color,
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": $title,
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": $fields
+                },
+                {
+                  "type": "actions",
+                  "elements": $buttons
+                }
+              ]
+            }]
+          }')
+
+        # Send notification
+        echo "Sending $STATUS notification for $PROJECT_NAME ($ENVIRONMENT)"
+
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD" \
+          "$SLACK_WEBHOOK_URL")
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        BODY=$(echo "$RESPONSE" | sed '$d')
+
+        if [[ "$HTTP_CODE" == "200" ]]; then
+          echo "Notification sent successfully"
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::Failed to send Slack notification (HTTP $HTTP_CODE): $BODY"
+          echo "success=false" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"

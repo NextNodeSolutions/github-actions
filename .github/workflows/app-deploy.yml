@@ -46,6 +46,11 @@ on:
         required: false
         default: ''
         type: string
+      create-tag:
+        description: 'Tag to create after successful production deployment (e.g., v1.2.3)'
+        required: false
+        default: ''
+        type: string
     secrets:
       compose-env:
         description: 'Environment variables for compose deployments (newline-separated KEY=VALUE)'
@@ -74,6 +79,9 @@ on:
       NEXTNODE_APP_PRIVATE_KEY:
         description: 'GitHub App private key'
         required: false
+      SLACK_WEBHOOK_URL:
+        description: 'Slack incoming webhook URL for deployment notifications'
+        required: false
     outputs:
       project-id:
         description: 'Dokploy project ID'
@@ -93,6 +101,9 @@ on:
       docker-image:
         description: 'Docker image that was built'
         value: ${{ jobs.build.outputs.image }}
+      tag-created:
+        description: 'Tag that was created (if any)'
+        value: ${{ jobs.deploy.outputs.tag-created }}
 
 jobs:
   # ==========================================================================
@@ -118,6 +129,7 @@ jobs:
       vps-name: ${{ steps.config.outputs.vps-name }}
       vps-type: ${{ steps.config.outputs.vps-type }}
       exposure: ${{ steps.config.outputs.exposure }}
+      slack-enabled: ${{ steps.check-slack.outputs.enabled }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -136,6 +148,17 @@ jobs:
           defaults-file: .github-actions/config/dokploy-defaults.toml
           environment: ${{ inputs.environment }}
           pr-number: ${{ inputs.pr-number }}
+
+      - name: Check Slack Configuration
+        id: check-slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ -n "$SLACK_WEBHOOK_URL" ]]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
 
   # ==========================================================================
   # BUILD (skip for compose or cleanup)
@@ -172,6 +195,38 @@ jobs:
           build-args: |
             URL=${{ needs.config.outputs.url }}
             ${{ inputs.build-args }}
+
+  # ==========================================================================
+  # APPROVAL NOTIFICATION (production only)
+  # ==========================================================================
+  notify-approval-pending:
+    name: Notify Approval Pending
+    runs-on: ubuntu-latest
+    needs: [config, build]
+    if: |
+      inputs.action == 'deploy' &&
+      inputs.environment == 'production' &&
+      needs.config.outputs.environment-enabled == 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      needs.config.outputs.slack-enabled == 'true'
+    steps:
+      - name: Checkout Shared Actions
+        uses: actions/checkout@v4
+        with:
+          repository: nextnodesolutions/github-actions
+          path: .github-actions
+
+      - name: Send Approval Pending Notification
+        uses: ./.github-actions/actions/notifications/slack-deploy
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: pending-approval
+          project-name: ${{ needs.config.outputs.project-name }}
+          environment: ${{ inputs.environment }}
+          domain: ${{ needs.config.outputs.domain }}
+          url: ${{ needs.config.outputs.url }}
+          docker-image: ${{ needs.build.outputs.image }}
+          create-tag: ${{ inputs.create-tag }}
 
   # ==========================================================================
   # VPS PROVISIONING (if needed)
@@ -240,14 +295,19 @@ jobs:
   deploy:
     name: Deploy to Dokploy
     runs-on: ubuntu-latest
-    needs: [config, build, provision]
+    needs: [config, build, provision, notify-approval-pending]
+    # Use environment gate for production deployments (enables approval workflow)
+    environment: ${{ inputs.environment == 'production' && inputs.action == 'deploy' && 'production' || '' }}
     if: always() && needs.config.outputs.environment-enabled == 'true' && (inputs.action == 'cleanup' || needs.build.result == 'success' || needs.build.result == 'skipped')
+    env:
+      SLACK_ENABLED: ${{ needs.config.outputs.slack-enabled }}
     outputs:
       project-id: ${{ steps.project.outputs.project-id }}
       application-id: ${{ steps.app.outputs.application-id }}
       compose-id: ${{ steps.compose.outputs.compose-id }}
       domain: ${{ needs.config.outputs.domain }}
       success: ${{ steps.final.outputs.success }}
+      tag-created: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout Shared Actions
         uses: actions/checkout@v4
@@ -268,6 +328,21 @@ jobs:
         with:
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-api-token: ${{ secrets.DOKPLOY_API_TOKEN }}
+
+      # ---------- DEPLOYMENT STARTED NOTIFICATION ----------
+      - name: Notify Deployment Started
+        if: inputs.action == 'deploy' && env.SLACK_ENABLED == 'true'
+        uses: ./.github-actions/actions/notifications/slack-deploy
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: started
+          project-name: ${{ needs.config.outputs.project-name }}
+          environment: ${{ inputs.environment }}
+          domain: ${{ needs.config.outputs.domain }}
+          url: ${{ needs.config.outputs.url }}
+          docker-image: ${{ needs.build.outputs.image }}
+          create-tag: ${{ inputs.create-tag }}
+          pr-number: ${{ inputs.pr-number }}
 
       # ---------- CLEANUP ----------
       - name: Cleanup Preview
@@ -429,6 +504,36 @@ jobs:
             echo "success=${{ steps.app.outputs.success || steps.compose.outputs.success || 'true' }}" >> $GITHUB_OUTPUT
           fi
 
+      # ---------- TAG CREATION (production only) ----------
+      - name: Checkout Project for Tag
+        if: |
+          inputs.action == 'deploy' &&
+          inputs.environment == 'production' &&
+          inputs.create-tag != '' &&
+          steps.final.outputs.success == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: project-tag
+          fetch-depth: 0
+
+      - name: Create Tag
+        id: tag
+        if: |
+          inputs.action == 'deploy' &&
+          inputs.environment == 'production' &&
+          inputs.create-tag != '' &&
+          steps.final.outputs.success == 'true'
+        working-directory: project-tag
+        run: |
+          echo "::group::Create tag"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ inputs.create-tag }}" -m "Release ${{ inputs.create-tag }}"
+          git push origin "${{ inputs.create-tag }}"
+          echo "tag=${{ inputs.create-tag }}" >> $GITHUB_OUTPUT
+          echo "Created and pushed tag: ${{ inputs.create-tag }}"
+          echo "::endgroup::"
+
       - name: Deployment Summary
         if: inputs.action == 'deploy' && steps.final.outputs.success == 'true'
         run: |
@@ -455,3 +560,51 @@ jobs:
           else
             echo "No preview environment found for PR #${{ inputs.pr-number }}." >> $GITHUB_STEP_SUMMARY
           fi
+
+      # ---------- SLACK NOTIFICATIONS ----------
+      - name: Notify Deployment Success
+        if: |
+          always() &&
+          inputs.action == 'deploy' &&
+          steps.final.outputs.success == 'true' &&
+          env.SLACK_ENABLED == 'true'
+        uses: ./.github-actions/actions/notifications/slack-deploy
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: success
+          project-name: ${{ needs.config.outputs.project-name }}
+          environment: ${{ inputs.environment }}
+          domain: ${{ needs.config.outputs.domain }}
+          url: ${{ needs.config.outputs.url }}
+          docker-image: ${{ needs.build.outputs.image }}
+          create-tag: ${{ steps.tag.outputs.tag }}
+          pr-number: ${{ inputs.pr-number }}
+
+      - name: Notify Deployment Failure
+        if: |
+          always() &&
+          inputs.action == 'deploy' &&
+          steps.final.outputs.success != 'true' &&
+          env.SLACK_ENABLED == 'true'
+        uses: ./.github-actions/actions/notifications/slack-deploy
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: failure
+          project-name: ${{ needs.config.outputs.project-name }}
+          environment: ${{ inputs.environment }}
+          domain: ${{ needs.config.outputs.domain }}
+          pr-number: ${{ inputs.pr-number }}
+
+      - name: Notify Cleanup Complete
+        if: |
+          always() &&
+          inputs.action == 'cleanup' &&
+          env.SLACK_ENABLED == 'true'
+        uses: ./.github-actions/actions/notifications/slack-deploy
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: cleanup
+          project-name: ${{ needs.config.outputs.project-name }}
+          environment: preview
+          pr-number: ${{ inputs.pr-number }}
+          cleanup-deleted: ${{ steps.cleanup.outputs.deleted }}

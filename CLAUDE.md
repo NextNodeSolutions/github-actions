@@ -69,6 +69,8 @@ github-actions/
 │   │   └── cloudflare-ssl-setup/  # Cloudflare SSL/TLS mode configuration
 │   ├── monitoring/                # Monitoring domain
 │   │   └── check-job-results/     # Job result verification
+│   ├── notifications/             # Notifications domain
+│   │   └── slack-deploy/          # Slack deployment notifications
 │   ├── utilities/                 # Generic Utilities domain
 │   │   ├── log-step/              # Enhanced logging
 │   │   ├── run-command/           # Command wrapper
@@ -106,6 +108,7 @@ The actions are organized into logical domains to improve maintainability and di
 - **release/**: NPM package release management with changesets and provenance
 - **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks and job result verification
+- **notifications/**: Slack and other notification integrations for deployment events
 - **utilities/**: Generic helper actions used across domains
 - **Root level**: Only globally-used actions that external projects depend on
 
@@ -333,6 +336,7 @@ touch actions/utilities/my-new-action/action.yml
 - **release/**: NPM package release management, changesets, provenance
 - **ssl/**: SSL/TLS configuration and certificate management
 - **monitoring/**: Health checks, job verification
+- **notifications/**: Slack and other notification integrations
 - **utilities/**: Generic helpers and tools
 - **Global level**: Complete setups and externally-used actions
 
@@ -533,6 +537,7 @@ jobs:
 | `CHANGESET_GITHUB_TOKEN` | release | GitHub access (fallback: GITHUB_TOKEN) | No |
 | `NEXTNODE_APP_ID` | app-deploy, publish-release | GitHub App for cross-repo | Conditional |
 | `NEXTNODE_APP_PRIVATE_KEY` | app-deploy, publish-release | GitHub App private key | Conditional |
+| `SLACK_WEBHOOK_URL` | app-deploy | Slack notifications for deployments | No (optional) |
 
 ### Token Derivation Chains
 
