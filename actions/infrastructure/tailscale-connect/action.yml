@@ -1,0 +1,76 @@
+name: 'Tailscale Connect'
+description: 'Connect to Tailscale with proper DNS configuration'
+author: 'NextNodeSolutions'
+
+inputs:
+  oauth-client-id:
+    description: 'Tailscale OAuth client ID'
+    required: true
+  oauth-secret:
+    description: 'Tailscale OAuth secret'
+    required: true
+  tags:
+    description: 'Tailscale tags'
+    default: 'tag:ci'
+  accept-dns:
+    description: 'Accept Tailscale DNS (required for custom domain resolution)'
+    default: 'true'
+  wait-for-hostname:
+    description: 'Hostname to verify DNS resolution (e.g., admin-dokploy)'
+    default: 'admin-dokploy'
+  max-retries:
+    description: 'Max retries for DNS resolution'
+    default: '30'
+
+outputs:
+  success:
+    description: 'Whether connection succeeded'
+    value: ${{ steps.verify.outputs.success }}
+  tailscale-ip:
+    description: 'This node Tailscale IP'
+    value: ${{ steps.verify.outputs.tailscale-ip }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Connect to Tailscale
+      uses: tailscale/github-action@v3
+      with:
+        oauth-client-id: ${{ inputs.oauth-client-id }}
+        oauth-secret: ${{ inputs.oauth-secret }}
+        tags: ${{ inputs.tags }}
+
+    - name: Configure Tailscale DNS
+      if: inputs.accept-dns == 'true'
+      shell: bash
+      run: |
+        echo "::group::Configuring Tailscale DNS"
+        tailscale set --accept-dns=true
+        echo "DNS acceptance enabled"
+        echo "::endgroup::"
+
+    - name: Wait for MagicDNS
+      id: verify
+      if: inputs.wait-for-hostname != ''
+      shell: bash
+      env:
+        HOSTNAME: ${{ inputs.wait-for-hostname }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+      run: |
+        echo "::group::Waiting for MagicDNS ($HOSTNAME)"
+        for i in $(seq 1 $MAX_RETRIES); do
+          if getent hosts "$HOSTNAME" >/dev/null 2>&1; then
+            echo "MagicDNS resolved $HOSTNAME"
+            tailscale status
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "tailscale-ip=$(tailscale ip -4)" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+          echo "Attempt $i/$MAX_RETRIES: waiting for DNS..."
+          sleep 2
+        done
+        echo "::error::Failed to resolve $HOSTNAME after $MAX_RETRIES attempts"
+        echo "success=false" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 1

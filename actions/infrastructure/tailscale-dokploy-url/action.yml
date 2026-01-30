@@ -41,11 +41,12 @@ runs:
   using: 'composite'
   steps:
     - name: Connect to Tailscale
-      uses: tailscale/github-action@v3
+      uses: nextnodesolutions/github-actions/actions/infrastructure/tailscale-connect@main
       with:
         oauth-client-id: ${{ inputs.tailscale-oauth-client-id }}
         oauth-secret: ${{ inputs.tailscale-oauth-secret }}
-        tags: tag:ci
+        wait-for-hostname: ${{ inputs.hostname }}
+        max-retries: ${{ inputs.max-retries }}
 
     - name: Resolve Dokploy URL
       id: resolve
@@ -53,30 +54,20 @@ runs:
       env:
         HOSTNAME: ${{ inputs.hostname }}
         PORT: ${{ inputs.port }}
-        MAX_RETRIES: ${{ inputs.max-retries }}
-        RETRY_DELAY: ${{ inputs.retry-delay }}
       run: |
-        echo "::group::Resolving ${HOSTNAME} in Tailscale network"
+        echo "::group::Resolving ${HOSTNAME} IP address"
+        IP=$(tailscale status --json | jq -r ".Peer | to_entries[] | select(.value.HostName == \"${HOSTNAME}\") | .value.TailscaleIPs[0]" 2>/dev/null || echo "")
 
-        for i in $(seq 1 $MAX_RETRIES); do
-          IP=$(tailscale status --json | jq -r ".Peer | to_entries[] | select(.value.HostName == \"${HOSTNAME}\") | .value.TailscaleIPs[0]" 2>/dev/null || echo "")
-
-          if [[ -n "$IP" && "$IP" != "null" ]]; then
-            URL="http://${IP}:${PORT}"
-            echo "Found ${HOSTNAME} at: ${IP}"
-            echo "URL: ${URL}"
-            echo "url=${URL}" >> $GITHUB_OUTPUT
-            echo "ip=${IP}" >> $GITHUB_OUTPUT
-            echo "success=true" >> $GITHUB_OUTPUT
-            echo "::endgroup::"
-            exit 0
-          fi
-
-          echo "Attempt $i/$MAX_RETRIES: ${HOSTNAME} not found, waiting ${RETRY_DELAY}s..."
-          sleep "$RETRY_DELAY"
-        done
-
-        echo "::error::${HOSTNAME} not found in Tailscale network after ${MAX_RETRIES} attempts"
-        echo "success=false" >> $GITHUB_OUTPUT
+        if [[ -n "$IP" && "$IP" != "null" ]]; then
+          URL="http://${IP}:${PORT}"
+          echo "Found ${HOSTNAME} at: ${IP}"
+          echo "URL: ${URL}"
+          echo "url=${URL}" >> $GITHUB_OUTPUT
+          echo "ip=${IP}" >> $GITHUB_OUTPUT
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Failed to get IP for ${HOSTNAME}"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
         echo "::endgroup::"
-        exit 1

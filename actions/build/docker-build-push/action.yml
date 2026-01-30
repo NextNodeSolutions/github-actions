@@ -34,29 +34,11 @@ runs:
   using: 'composite'
   steps:
     - name: Connect to Tailscale
-      uses: tailscale/github-action@v3
+      uses: nextnodesolutions/github-actions/actions/infrastructure/tailscale-connect@main
       with:
         oauth-client-id: ${{ inputs.tailscale-oauth-client-id }}
         oauth-secret: ${{ inputs.tailscale-oauth-secret }}
-        tags: tag:ci
-
-    - name: Wait for MagicDNS
-      shell: bash
-      run: |
-        echo "::group::Waiting for Tailscale MagicDNS"
-        for i in {1..30}; do
-          if getent hosts admin-dokploy >/dev/null 2>&1; then
-            echo "MagicDNS resolved admin-dokploy"
-            tailscale status
-            echo "::endgroup::"
-            exit 0
-          fi
-          echo "Attempt $i/30: waiting for DNS resolution..."
-          sleep 2
-        done
-        echo "::error::Failed to resolve admin-dokploy via MagicDNS after 60 seconds"
-        echo "::endgroup::"
-        exit 1
+        wait-for-hostname: admin-dokploy
 
     - name: Test Registry Connection
       shell: bash
