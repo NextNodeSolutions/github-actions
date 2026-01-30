@@ -61,24 +61,35 @@ runs:
         echo "Registry IP: $REGISTRY_IP"
         echo "registry-ip=$REGISTRY_IP" >> $GITHUB_OUTPUT
 
-        # Try direct connection to registry port 5000 (bypasses Traefik)
-        # Registry is HTTP-only on port 5000, accessible via Tailscale
-        echo "Testing direct connection to registry on port 5000..."
-        if curl -sf "http://${REGISTRY_IP}:5000/v2/"; then
+        # Debug: check TCP connectivity
+        echo "=== TCP Connectivity Tests ==="
+        for port in 5000 443 80; do
+          if timeout 5 bash -c "echo >/dev/tcp/${REGISTRY_IP}/${port}" 2>/dev/null; then
+            echo "TCP ${port}: OPEN"
+          else
+            echo "TCP ${port}: CLOSED/TIMEOUT"
+          fi
+        done
+
+        # Debug: verbose curl tests
+        echo "=== Curl Tests (verbose) ==="
+        echo "--- Port 5000 ---"
+        curl -v --connect-timeout 5 "http://${REGISTRY_IP}:5000/v2/" 2>&1 || true
+
+        echo "--- Port 443 (Traefik) ---"
+        curl -vk --connect-timeout 5 --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" 2>&1 || true
+
+        # Try direct connection to registry port 5000
+        echo "=== Final Connection Test ==="
+        if curl -sf --connect-timeout 10 "http://${REGISTRY_IP}:5000/v2/"; then
           echo "Direct registry connection successful (port 5000)"
           echo "registry-port=5000" >> $GITHUB_OUTPUT
-          echo "registry-url=http://${REGISTRY_IP}:5000" >> $GITHUB_OUTPUT
+        elif curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk --connect-timeout 10; then
+          echo "Traefik connection successful (HTTPS)"
+          echo "registry-port=443" >> $GITHUB_OUTPUT
         else
-          echo "Port 5000 failed, trying Traefik (443)..."
-          if curl --resolve "${REGISTRY_HOST}:443:${REGISTRY_IP}" "https://${REGISTRY_HOST}/v2/" -sfLk; then
-            echo "Traefik connection successful (HTTPS)"
-            echo "registry-port=443" >> $GITHUB_OUTPUT
-            echo "registry-url=https://${REGISTRY_HOST}" >> $GITHUB_OUTPUT
-          else
-            echo "::error::Cannot connect to registry at ${REGISTRY_IP}"
-            echo "Tried: port 5000 (direct) and port 443 (Traefik)"
-            exit 1
-          fi
+          echo "::error::Cannot connect to registry at ${REGISTRY_IP}"
+          exit 1
         fi
         echo "::endgroup::"
 
