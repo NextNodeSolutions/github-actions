@@ -51,8 +51,7 @@ github-actions/
 │   │   ├── typecheck/             # TypeScript validation
 │   │   └── security-audit/        # Security scanning
 │   ├── deploy/                    # Deployment Infrastructure domain
-│   │   ├── cross-swarm-routing/   # Configure cross-swarm Traefik routing
-│   │   ├── publish-service-port/  # Publish service port via socat
+│   │   ├── compose-traefik-routing/ # Traefik routing for compose stacks
 │   │   └── vps-provision/         # Auto-provision Hetzner VPS
 │   ├── infrastructure/            # Infrastructure Integrations domain
 │   │   ├── cloudflare-dns-upsert/ # Create/update DNS records
@@ -102,7 +101,7 @@ The actions are organized into logical domains to improve maintainability and di
 - **app/**: Atomic actions for app deployment - config loading, Dokploy API interactions, server resolution
 - **build/**: Everything related to project setup, dependency installation, building, and Docker image creation
 - **quality/**: Code quality checks including linting, type checking, and security
-- **deploy/**: Deployment infrastructure - cross-swarm routing, port publishing, VPS provisioning
+- **deploy/**: Deployment infrastructure - VPS provisioning, compose Traefik routing
 - **infrastructure/**: Tailscale VPN, Cloudflare DNS, and other infrastructure integrations
 - **release/**: NPM package release management with changesets and provenance
 - **ssl/**: SSL/TLS configuration and certificate management
@@ -149,7 +148,7 @@ This repository is the CI/CD component of NextNode's self-hosted platform. It wo
 |-------------------|--------------------------|--------------------------|
 | Docker Registry | `build/docker-build-push` | NixOS Docker module |
 | VPS Provisioning | `deploy/vps-provision` | Terraform hetzner-vps module |
-| Cross-Swarm Routing | `deploy/cross-swarm-routing` | Traefik NixOS module |
+| Swarm Worker Join | N/A (automatic on boot) | NixOS swarm.nix module |
 | DNS Management | `infrastructure/cloudflare-dns-upsert` | Cloudflare Terraform provider |
 
 ### Registry-Only Mode (INT-149)
@@ -174,15 +173,26 @@ NextNode uses Dokploy (self-hosted PaaS) for application deployment:
 - **dokploy-sync**: Syncs `dokploy.toml` configuration to Dokploy API
 - **vps-provision**: Auto-provisions Hetzner VPS when project uses `server = "custom"`
 
-### Cross-Swarm Routing Pattern
+### Unified Swarm Architecture
 
-Apps deployed on worker nodes (dev-worker, prod-worker) need routing through Traefik on admin-dokploy:
+All nodes (admin-dokploy, dev-worker, prod-worker) are part of a single Docker Swarm cluster:
 
-1. **Port Publishing**: Container port exposed on worker via `socat`
-2. **Traefik Config**: TCP route from admin-dokploy to worker:port
-3. **DNS**: A record points to admin-dokploy (Traefik server)
+1. **admin-dokploy**: Swarm manager, runs Traefik and Dokploy
+2. **dev-worker**: Swarm worker node for development deployments
+3. **prod-worker**: Swarm worker node for production deployments
 
-This is handled automatically by `deploy/cross-swarm-routing` and `deploy/publish-service-port`.
+**Node Labels**: Each node has a `server=<hostname>` label for placement constraints:
+```bash
+docker node update --label-add server=admin-dokploy admin-dokploy
+docker node update --label-add server=dev-worker dev-worker
+docker node update --label-add server=prod-worker prod-worker
+```
+
+**Config compatibility**: `dokploy.toml` uses the `server` field unchanged - the value maps to Swarm placement constraints.
+
+**Routing**: Since all nodes are in the same Swarm, Traefik routes to services on any node directly via the overlay network. No cross-swarm port publishing is needed.
+
+**Worker auto-join**: Workers join the Swarm automatically on boot via the NixOS `swarm.nix` module in the infrastructure repo. This eliminates the need for manual registration.
 
 ### Scale-to-Zero (Sablier)
 
@@ -318,7 +328,7 @@ touch actions/utilities/my-new-action/action.yml
 ### Domain Selection Guide
 - **build/**: Installation, building, caching, Docker image creation
 - **quality/**: Linting, type checking, testing, security audits
-- **deploy/**: Dokploy deployment, VPS provisioning, cross-swarm routing
+- **deploy/**: VPS provisioning, compose Traefik routing
 - **infrastructure/**: Tailscale, Cloudflare DNS, worker initialization
 - **release/**: NPM package release management, changesets, provenance
 - **ssl/**: SSL/TLS configuration and certificate management
@@ -344,7 +354,16 @@ act workflow_dispatch -W .github/workflows/internal-tests.yml
 
 ## Migration Notes
 
-### Latest Migration: Internal Tests Optimization (2025-01)
+### Latest Migration: Unified Swarm Architecture (2025-01)
+Converted from multi-Swarm (Remote Server mode) to unified Swarm cluster:
+- **Problem**: Cross-swarm routing required complex port publishing via socat and Traefik TCP routes
+- **Solution**: Workers now join admin-dokploy's Swarm directly via NixOS `swarm.nix` module
+- **Node Labels**: `server=<hostname>` labels used for placement constraints
+- **Removed**: `deploy/cross-swarm-routing`, `deploy/publish-service-port` actions, `cross-swarm` output from `server-resolve`
+- **Modified**: `dokploy-init-workers` no longer registers workers (Swarm handles this)
+- **Benefit**: Simplified routing via Swarm overlay network, no port publishing needed
+
+### Previous Migration: Internal Tests Optimization (2025-01)
 Replaced inefficient 53-job matrix system with single actionlint job:
 - **Problem**: `internal-tests.yml` consumed 1953 minutes/month (71% of total) with 53 parallel jobs per push
 - **Root Cause**: Static validation tests running as matrix jobs, billed as 53+ minutes minimum per run
