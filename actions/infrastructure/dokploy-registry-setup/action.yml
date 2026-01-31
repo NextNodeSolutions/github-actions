@@ -73,22 +73,28 @@ runs:
           -H "Content-Type: application/json" \
           -d "$WRAPPED_DATA" > /dev/null
 
-        # Verify registry was created
-        sleep 1
-        VERIFY_REGISTRIES=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/registry.all" \
-          -H "Content-Type: application/json")
+        # Verify registry was created with retries
+        echo "Verifying registry creation..."
+        for i in 1 2 3; do
+          sleep 3
+          VERIFY_REGISTRIES=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/registry.all" \
+            -H "Content-Type: application/json")
 
-        REGISTRY_ID=$(echo "$VERIFY_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
+          REGISTRY_ID=$(echo "$VERIFY_REGISTRIES" | jq -r '.[] | select(.registryName == "Internal Registry") | .registryId' 2>/dev/null || echo "")
 
-        if [[ -n "$REGISTRY_ID" ]]; then
-          echo "Registry configured: $REGISTRY_ID"
-          echo "registry-configured=true" >> $GITHUB_OUTPUT
-          echo "registry-id=$REGISTRY_ID" >> $GITHUB_OUTPUT
-          echo "success=true" >> $GITHUB_OUTPUT
-        else
-          echo "::warning::Failed to verify registry creation"
-          echo "registry-configured=false" >> $GITHUB_OUTPUT
-          echo "success=false" >> $GITHUB_OUTPUT
-        fi
+          if [[ -n "$REGISTRY_ID" && "$REGISTRY_ID" != "null" ]]; then
+            echo "Registry configured: $REGISTRY_ID"
+            echo "registry-configured=true" >> $GITHUB_OUTPUT
+            echo "registry-id=$REGISTRY_ID" >> $GITHUB_OUTPUT
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+          echo "Registry not found yet, retry $i/3..."
+        done
+
+        echo "::warning::Failed to verify registry creation after 3 attempts"
+        echo "registry-configured=false" >> $GITHUB_OUTPUT
+        echo "success=false" >> $GITHUB_OUTPUT
 
         echo "::endgroup::"
