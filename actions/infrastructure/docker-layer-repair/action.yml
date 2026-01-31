@@ -1,0 +1,124 @@
+name: 'Docker Layer Repair'
+description: 'Detect and repair corrupted Docker image layers. Run BEFORE services that depend on these images. Fixes issues when Docker starts before volume is properly mounted.'
+author: 'NextNodeSolutions'
+
+inputs:
+  images:
+    description: 'Space-separated list of images to check, or "all" for all local images'
+    required: false
+    default: 'dokploy/dokploy:v0.25.11 postgres:16 redis:7'
+  host:
+    description: 'Target host (Tailscale hostname or IP)'
+    required: false
+    default: 'admin-dokploy'
+  force-service-update:
+    description: 'Service name to force update after repair (e.g., dokploy_dokploy)'
+    required: false
+    default: ''
+
+outputs:
+  repaired:
+    description: 'Number of images that were repaired'
+    value: ${{ steps.repair.outputs.repaired }}
+  success:
+    description: 'Whether all images are now healthy'
+    value: ${{ steps.repair.outputs.success }}
+  repaired-images:
+    description: 'Space-separated list of images that were repaired'
+    value: ${{ steps.repair.outputs.repaired-images }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check and Repair Docker Image Layers
+      id: repair
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        HOST: ${{ inputs.host }}
+        FORCE_SERVICE: ${{ inputs.force-service-update }}
+      run: |
+        echo "::group::Docker Image Layer Health Check"
+
+        REPAIRED=0
+        FAILED=0
+        REPAIRED_LIST=""
+
+        # Handle "all" case - get all local images
+        if [[ "$IMAGES" == "all" ]]; then
+          echo "Fetching all local images from $HOST..."
+          IMAGES=$(tailscale ssh root@${HOST} "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'")
+        fi
+
+        for image in $IMAGES; do
+          echo "Checking $image..."
+
+          # Try to create a container from the image to verify layers are valid
+          CONTAINER_NAME="layer-check-$(date +%s)-$$"
+
+          CHECK_OUTPUT=$(tailscale ssh root@${HOST} "docker create --name ${CONTAINER_NAME} '${image}' true 2>&1" || true)
+
+          if echo "$CHECK_OUTPUT" | grep -q "layer does not exist\|missing layer\|invalid layer"; then
+            echo "::warning::Corrupted layers detected for $image, re-pulling..."
+
+            # Remove corrupted image
+            tailscale ssh root@${HOST} "docker image rm '${image}' -f 2>/dev/null || true"
+
+            # Pull fresh copy
+            if tailscale ssh root@${HOST} "docker pull '${image}'"; then
+              echo "Successfully re-pulled $image"
+              REPAIRED=$((REPAIRED + 1))
+              REPAIRED_LIST="${REPAIRED_LIST} ${image}"
+            else
+              echo "::error::Failed to pull $image"
+              FAILED=$((FAILED + 1))
+            fi
+          else
+            # Check if container was created successfully
+            if tailscale ssh root@${HOST} "docker inspect ${CONTAINER_NAME} >/dev/null 2>&1"; then
+              # Cleanup the test container
+              tailscale ssh root@${HOST} "docker rm ${CONTAINER_NAME} 2>/dev/null || true"
+              echo "$image: OK"
+            else
+              # Container creation failed for other reason - might be corrupted
+              echo "::warning::Container creation failed for $image, attempting repair..."
+              tailscale ssh root@${HOST} "docker image rm '${image}' -f 2>/dev/null || true"
+
+              if tailscale ssh root@${HOST} "docker pull '${image}'"; then
+                echo "Successfully re-pulled $image"
+                REPAIRED=$((REPAIRED + 1))
+                REPAIRED_LIST="${REPAIRED_LIST} ${image}"
+              else
+                echo "::error::Failed to pull $image"
+                FAILED=$((FAILED + 1))
+              fi
+            fi
+          fi
+        done
+
+        echo "repaired=${REPAIRED}" >> $GITHUB_OUTPUT
+        echo "repaired-images=${REPAIRED_LIST}" >> $GITHUB_OUTPUT
+
+        if [ $FAILED -gt 0 ]; then
+          echo "::error::Failed to repair $FAILED image(s)"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        if [ $REPAIRED -gt 0 ]; then
+          echo "Repaired $REPAIRED corrupted image(s):${REPAIRED_LIST}"
+
+          # Force update service if specified
+          if [[ -n "$FORCE_SERVICE" ]]; then
+            echo "Forcing service update: $FORCE_SERVICE"
+            tailscale ssh root@${HOST} "docker service update --force ${FORCE_SERVICE} 2>/dev/null || true"
+            echo "Waiting for service to stabilize..."
+            sleep 10
+          fi
+        else
+          echo "All images healthy"
+        fi
+
+        echo "success=true" >> $GITHUB_OUTPUT
+        echo "::endgroup::"

@@ -1,5 +1,5 @@
 name: 'Dokploy Initialize'
-description: 'Auto-setup Dokploy: create admin account (first-time), configure registry, import SSH keys. NOTE: Workers join Swarm via infrastructure (NixOS swarm.nix), not via this action.'
+description: 'Auto-setup Dokploy: create admin account (first-time), configure registry, import SSH keys. NOTE: Run docker-layer-repair BEFORE waiting for Dokploy to ensure images are healthy.'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -38,43 +38,8 @@ runs:
         echo "::add-mask::${{ inputs.dokploy-admin-password }}"
         echo "::add-mask::${{ inputs.dokploy-ssh-private-key }}"
 
-    # Step 0: Check and repair corrupted Docker image layers
-    # This can happen if Docker started before volume was properly mounted
-    - name: Check and Repair Docker Image Layers
-      shell: bash
-      run: |
-        echo "::group::Docker Image Layer Health Check"
-
-        IMAGES="dokploy/dokploy:v0.25.11 postgres:16 redis:7"
-        REPAIRED=0
-
-        for image in $IMAGES; do
-          echo "Checking $image..."
-
-          # Try to create a container from the image to verify layers are valid
-          if ! tailscale ssh root@admin-dokploy "docker create --name layer-check-\$\$ '$image' true" 2>/dev/null; then
-            echo "::warning::Corrupted layers detected for $image, re-pulling..."
-            tailscale ssh root@admin-dokploy "docker image rm '$image' -f 2>/dev/null || true"
-            tailscale ssh root@admin-dokploy "docker pull '$image'"
-            REPAIRED=$((REPAIRED + 1))
-          else
-            # Cleanup the test container
-            tailscale ssh root@admin-dokploy "docker rm layer-check-\$\$ 2>/dev/null || true"
-            echo "$image: OK"
-          fi
-        done
-
-        if [ $REPAIRED -gt 0 ]; then
-          echo "Repaired $REPAIRED corrupted image(s)"
-          # Force update services to use fresh images
-          tailscale ssh root@admin-dokploy "docker service update --force dokploy_dokploy 2>/dev/null || true"
-        else
-          echo "All images healthy"
-        fi
-
-        echo "::endgroup::"
-
     # Step 1: Admin setup (waits for Dokploy, creates admin if first time)
+    # NOTE: docker-layer-repair action should be run BEFORE this action
     - name: Setup Dokploy Admin
       id: admin-setup
       uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-admin-setup@main
