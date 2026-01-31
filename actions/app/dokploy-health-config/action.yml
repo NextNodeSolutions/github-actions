@@ -81,7 +81,7 @@ runs:
             DEFAULT_HEALTH_RETRIES,
             DEFAULT_HEALTH_START_PERIOD,
             DEFAULT_HEALTH_TIMEOUT,
-            DEFAULT_PORT,
+            DEFAULT_APP_PORT,
             DokployClient,
             DokployError,
             Endpoints,
@@ -89,7 +89,7 @@ runs:
         )
 
         APP_ID = os.environ['APP_ID']
-        PORT = int(os.environ.get('PORT', str(DEFAULT_PORT)))
+        PORT = int(os.environ.get('PORT', str(DEFAULT_APP_PORT)))
         HEALTH_PATH = os.environ.get('HEALTH_PATH', DEFAULT_HEALTH_PATH)
         HEALTH_INTERVAL = int(os.environ.get('HEALTH_INTERVAL', str(DEFAULT_HEALTH_INTERVAL)))
         HEALTH_TIMEOUT = int(os.environ.get('HEALTH_TIMEOUT', str(DEFAULT_HEALTH_TIMEOUT)))
