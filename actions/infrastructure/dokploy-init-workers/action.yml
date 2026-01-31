@@ -1,5 +1,5 @@
-name: 'Dokploy Initialize Workers'
-description: 'Auto-setup Dokploy and register remote servers as workers. Composes atomic actions: dokploy-admin-setup, dokploy-registry-setup, dokploy-ssh-key-import, dokploy-server-register'
+name: 'Dokploy Initialize'
+description: 'Auto-setup Dokploy: create admin account (first-time), configure registry, import SSH keys. NOTE: Workers join Swarm via infrastructure (NixOS swarm.nix), not via this action.'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -15,21 +15,6 @@ inputs:
   dokploy-ssh-private-key:
     description: 'SSH private key to import into Dokploy for worker access'
     required: true
-  tailscale-api-token:
-    description: 'Tailscale API token for worker IP resolution'
-    required: true
-  target:
-    description: 'Target server(s) to initialize: all, dev-worker, prod-worker'
-    required: false
-    default: 'all'
-  max-retries:
-    description: 'Max retries for Tailscale IP resolution'
-    required: false
-    default: '12'
-  retry-delay:
-    description: 'Delay between retries in seconds'
-    required: false
-    default: '10'
 
 outputs:
   success:
@@ -52,6 +37,42 @@ runs:
       run: |
         echo "::add-mask::${{ inputs.dokploy-admin-password }}"
         echo "::add-mask::${{ inputs.dokploy-ssh-private-key }}"
+
+    # Step 0: Check and repair corrupted Docker image layers
+    # This can happen if Docker started before volume was properly mounted
+    - name: Check and Repair Docker Image Layers
+      shell: bash
+      run: |
+        echo "::group::Docker Image Layer Health Check"
+
+        IMAGES="dokploy/dokploy:v0.25.11 postgres:16 redis:7"
+        REPAIRED=0
+
+        for image in $IMAGES; do
+          echo "Checking $image..."
+
+          # Try to create a container from the image to verify layers are valid
+          if ! tailscale ssh root@admin-dokploy "docker create --name layer-check-\$\$ '$image' true" 2>/dev/null; then
+            echo "::warning::Corrupted layers detected for $image, re-pulling..."
+            tailscale ssh root@admin-dokploy "docker image rm '$image' -f 2>/dev/null || true"
+            tailscale ssh root@admin-dokploy "docker pull '$image'"
+            REPAIRED=$((REPAIRED + 1))
+          else
+            # Cleanup the test container
+            tailscale ssh root@admin-dokploy "docker rm layer-check-\$\$ 2>/dev/null || true"
+            echo "$image: OK"
+          fi
+        done
+
+        if [ $REPAIRED -gt 0 ]; then
+          echo "Repaired $REPAIRED corrupted image(s)"
+          # Force update services to use fresh images
+          tailscale ssh root@admin-dokploy "docker service update --force dokploy_dokploy 2>/dev/null || true"
+        else
+          echo "All images healthy"
+        fi
+
+        echo "::endgroup::"
 
     # Step 1: Admin setup (waits for Dokploy, creates admin if first time)
     - name: Setup Dokploy Admin
@@ -137,94 +158,27 @@ runs:
         ssh-private-key: ${{ inputs.dokploy-ssh-private-key }}
         organization-id: ${{ steps.auth.outputs.organization-id }}
 
-    # Step 5: Lookup dev-worker in Tailscale
-    - name: Lookup dev-worker
-      id: dev-worker-lookup
-      if: inputs.target == 'all' || inputs.target == 'dev-worker'
-      uses: nextnodesolutions/github-actions/actions/utilities/tailscale-device-lookup@main
-      with:
-        hostname: 'dev-worker'
-        tailscale-api-key: ${{ inputs.tailscale-api-token }}
-        max-retries: ${{ inputs.max-retries }}
-        retry-delay: ${{ inputs.retry-delay }}
+    # NOTE: Worker registration removed - unified Swarm architecture
+    # Workers now join admin-dokploy's Swarm via infrastructure (NixOS swarm.nix)
+    # instead of being registered as separate "Remote Servers" in Dokploy
+    # The Swarm node labels (server=hostname) handle placement constraints
 
-    # Step 6: Lookup prod-worker in Tailscale
-    - name: Lookup prod-worker
-      id: prod-worker-lookup
-      if: inputs.target == 'all' || inputs.target == 'prod-worker'
-      uses: nextnodesolutions/github-actions/actions/utilities/tailscale-device-lookup@main
-      with:
-        hostname: 'prod-worker'
-        tailscale-api-key: ${{ inputs.tailscale-api-token }}
-        max-retries: ${{ inputs.max-retries }}
-        retry-delay: ${{ inputs.retry-delay }}
-
-    # Step 7: Register dev-worker
-    - name: Register dev-worker
-      id: dev-worker-register
-      if: (inputs.target == 'all' || inputs.target == 'dev-worker') && steps.dev-worker-lookup.outputs.exists == 'true'
-      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-server-register@main
-      with:
-        dokploy-url: ${{ inputs.dokploy-url }}
-        cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
-        server-name: dev-worker
-        server-ip: ${{ steps.dev-worker-lookup.outputs.ip-address }}
-        ssh-key-id: ${{ steps.ssh-key.outputs.ssh-key-id }}
-
-    # Step 8: Register prod-worker
-    - name: Register prod-worker
-      id: prod-worker-register
-      if: (inputs.target == 'all' || inputs.target == 'prod-worker') && steps.prod-worker-lookup.outputs.exists == 'true'
-      uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-server-register@main
-      with:
-        dokploy-url: ${{ inputs.dokploy-url }}
-        cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
-        server-name: prod-worker
-        server-ip: ${{ steps.prod-worker-lookup.outputs.ip-address }}
-        ssh-key-id: ${{ steps.ssh-key.outputs.ssh-key-id }}
-
-    # Step 9: Collect results
+    # Step 5: Collect results
     - name: Collect Results
       id: result
       shell: bash
       run: |
-        echo "::group::Worker Registration Results"
+        echo "::group::Dokploy Initialization Results"
 
-        INITIALIZED=""
-
-        # Check dev-worker result
-        if [[ "${{ steps.dev-worker-register.outputs.success }}" == "true" ]]; then
-          echo "dev-worker: success (server-id: ${{ steps.dev-worker-register.outputs.server-id }})"
-          INITIALIZED="dev-worker"
-        elif [[ "${{ inputs.target }}" == "all" || "${{ inputs.target }}" == "dev-worker" ]]; then
-          if [[ "${{ steps.dev-worker-lookup.outputs.exists }}" != "true" ]]; then
-            echo "::warning::dev-worker not found in Tailscale, skipping"
-          else
-            echo "::warning::dev-worker registration did not complete"
-          fi
-        fi
-
-        # Check prod-worker result
-        if [[ "${{ steps.prod-worker-register.outputs.success }}" == "true" ]]; then
-          echo "prod-worker: success (server-id: ${{ steps.prod-worker-register.outputs.server-id }})"
-          if [[ -n "$INITIALIZED" ]]; then
-            INITIALIZED="${INITIALIZED},prod-worker"
-          else
-            INITIALIZED="prod-worker"
-          fi
-        elif [[ "${{ inputs.target }}" == "all" || "${{ inputs.target }}" == "prod-worker" ]]; then
-          if [[ "${{ steps.prod-worker-lookup.outputs.exists }}" != "true" ]]; then
-            echo "::warning::prod-worker not found in Tailscale, skipping"
-          else
-            echo "::warning::prod-worker registration did not complete"
-          fi
-        fi
+        echo "Admin setup: ${{ steps.admin-setup.outputs.setup-completed == 'true' && 'completed' || 'skipped (already configured)' }}"
+        echo "Registry: ${{ steps.registry.outputs.success == 'true' && 'configured' || 'failed' }}"
+        echo "SSH key: ${{ steps.ssh-key.outputs.success == 'true' && 'imported' || 'failed' }}"
 
         echo ""
         echo "=== Initialization complete ==="
-        echo "Initialized workers: ${INITIALIZED:-none}"
+        echo "NOTE: Workers join Swarm via infrastructure (NixOS swarm.nix), not via Dokploy registration"
 
         echo "success=true" >> $GITHUB_OUTPUT
-        echo "initialized-workers=${INITIALIZED}" >> $GITHUB_OUTPUT
+        echo "initialized-workers=" >> $GITHUB_OUTPUT
 
         echo "::endgroup::"
