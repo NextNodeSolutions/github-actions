@@ -109,6 +109,10 @@ runs:
         if [ $REPAIRED -gt 0 ]; then
           echo "Repaired $REPAIRED corrupted image(s):${REPAIRED_LIST}"
 
+          # Cleanup dangling images (orphaned layers from corrupted images)
+          echo "Cleaning up dangling images..."
+          tailscale ssh root@${HOST} "docker image prune -f" || true
+
           # Force update service if specified
           if [[ -n "$FORCE_SERVICE" ]]; then
             echo "Forcing service update: $FORCE_SERVICE"
