@@ -22,3 +22,5 @@ __pycache__/
 
 # Claude AI
 .claude
+**/CLAUDE.md
+!/CLAUDE.md
