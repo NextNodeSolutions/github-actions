@@ -17,6 +17,10 @@ on:
         description: 'Override datacenter location'
         required: false
         type: string
+      server-type-override:
+        description: 'Override server type for build'
+        required: false
+        type: string
     secrets:
       HETZNER_TOKEN:
         description: 'Hetzner Cloud API token for image building'
@@ -71,9 +75,15 @@ jobs:
             LOCATION="${{ steps.config.outputs.location }}"
           fi
 
+          SERVER_TYPE="${{ inputs.server-type-override }}"
+          if [ -z "${SERVER_TYPE}" ]; then
+            SERVER_TYPE="${{ steps.config.outputs.server_type }}"
+          fi
+
           packer validate \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
             -var "location=${LOCATION}" \
+            -var "server_type=${SERVER_TYPE}" \
             nixos-dokploy.pkr.hcl
 
       - name: Packer Build
@@ -89,11 +99,17 @@ jobs:
             LOCATION="${{ steps.config.outputs.location }}"
           fi
 
-          echo "Building with location: ${LOCATION}"
+          SERVER_TYPE="${{ inputs.server-type-override }}"
+          if [ -z "${SERVER_TYPE}" ]; then
+            SERVER_TYPE="${{ steps.config.outputs.server_type }}"
+          fi
+
+          echo "Building with location: ${LOCATION}, server_type: ${SERVER_TYPE}"
 
           packer build \
             -var "hcloud_token=${HCLOUD_TOKEN}" \
             -var "location=${LOCATION}" \
+            -var "server_type=${SERVER_TYPE}" \
             nixos-dokploy.pkr.hcl 2>&1 | tee build.log
 
           # Extract snapshot info from output
@@ -120,5 +136,6 @@ jobs:
           echo "| Snapshot Name | \`${{ steps.build.outputs.snapshot-name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Snapshot ID | \`${{ steps.build.outputs.snapshot-id }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Location | \`${{ inputs.location-override || steps.config.outputs.location }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Server Type | \`${{ inputs.server-type-override || steps.config.outputs.server_type }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The snapshot is now available for Terraform provisioning." >> $GITHUB_STEP_SUMMARY
