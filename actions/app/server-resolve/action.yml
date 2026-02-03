@@ -28,6 +28,14 @@ inputs:
     description: 'Tailscale API token'
     required: false
     default: ''
+  server-id-override:
+    description: 'Pre-resolved server ID (skip Dokploy lookup if provided)'
+    required: false
+    default: ''
+  server-tailscale-ip-override:
+    description: 'Pre-resolved server Tailscale IP (skip lookup if provided)'
+    required: false
+    default: ''
 outputs:
   server-id:
     description: 'Dokploy server ID'
@@ -69,7 +77,9 @@ runs:
         TRAEFIK_SERVER: ${{ inputs.traefik-server }}
         EXPOSURE: ${{ inputs.exposure }}
         HCLOUD_TOKEN: ${{ inputs.hcloud-token }}
-        TAILSCALE_API_KEY: ${{ inputs.tailscale-api-token }}
+        TAILSCALE_API_TOKEN: ${{ inputs.tailscale-api-token }}
+        SERVER_ID_OVERRIDE: ${{ inputs.server-id-override }}
+        SERVER_TAILSCALE_IP_OVERRIDE: ${{ inputs.server-tailscale-ip-override }}
         GITHUB_OUTPUT: ${{ github.output }}
       run: |
         import os
@@ -84,7 +94,9 @@ runs:
         TRAEFIK_SERVER = os.environ.get('TRAEFIK_SERVER', DEFAULT_TRAEFIK_SERVER)
         EXPOSURE = os.environ.get('EXPOSURE', 'external')
         HCLOUD_TOKEN = os.environ.get('HCLOUD_TOKEN', '')
-        TAILSCALE_API_KEY = os.environ.get('TAILSCALE_API_KEY', '')
+        TAILSCALE_API_TOKEN = os.environ.get('TAILSCALE_API_TOKEN', '')
+        SERVER_ID_OVERRIDE = os.environ.get('SERVER_ID_OVERRIDE', '')
+        SERVER_TAILSCALE_IP_OVERRIDE = os.environ.get('SERVER_TAILSCALE_IP_OVERRIDE', '')
         GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT', '')
 
         def output(key, value):
@@ -128,12 +140,12 @@ runs:
 
         # Get Tailscale IP
         def get_tailscale_ip(name):
-            if not TAILSCALE_API_KEY:
+            if not TAILSCALE_API_TOKEN:
                 return None
             try:
                 resp = requests.get(
                     "https://api.tailscale.com/api/v2/tailnet/-/devices",
-                    headers={"Authorization": f"Bearer {TAILSCALE_API_KEY}"},
+                    headers={"Authorization": f"Bearer {TAILSCALE_API_TOKEN}"},
                     timeout=30
                 )
                 if resp.ok:
@@ -149,50 +161,61 @@ runs:
             return None
 
         try:
+            # Check for overrides from provision job (avoids race conditions)
+            if SERVER_ID_OVERRIDE:
+                server_id = SERVER_ID_OVERRIDE
+                print(f"Using pre-resolved server ID: {server_id}")
+            if SERVER_TAILSCALE_IP_OVERRIDE:
+                server_tailscale_ip = SERVER_TAILSCALE_IP_OVERRIDE
+                print(f"Using pre-resolved server Tailscale IP: {server_tailscale_ip}")
+
             # Step 1: Get server public IP from Hetzner
             server_public_ip = get_hetzner_ip(SERVER_NAME)
             if server_public_ip:
                 print(f"Server public IP (Hetzner): {server_public_ip}")
 
-            # Step 2: Get server ID from Dokploy
-            servers_resp = requests.get(
-                f"{DOKPLOY_URL}/api/server.all",
-                headers=headers,
-                timeout=30
-            )
-            servers = servers_resp.json() if servers_resp.ok else []
+            # Step 2: Get server ID from Dokploy (skip if override provided)
+            if not server_id:
+                servers_resp = requests.get(
+                    f"{DOKPLOY_URL}/api/server.all",
+                    headers=headers,
+                    timeout=30
+                )
+                servers = servers_resp.json() if servers_resp.ok else []
 
-            for s in servers:
-                if s.get('name') == SERVER_NAME:
-                    server_id = s.get('serverId')
-                    print(f"Dokploy server ID: {server_id}")
+                for s in servers:
+                    if s.get('name') == SERVER_NAME:
+                        server_id = s.get('serverId')
+                        print(f"Dokploy server ID: {server_id}")
 
-                    # Fallback: get IP from Dokploy if Hetzner failed
-                    if not server_public_ip:
-                        try:
-                            ip_resp = requests.get(
-                                f"{DOKPLOY_URL}/api/server.publicIp",
-                                params={"serverId": server_id},
-                                headers=headers,
-                                timeout=30
-                            )
-                            if ip_resp.ok:
-                                ip_data = ip_resp.json()
-                                if isinstance(ip_data, str):
-                                    server_public_ip = ip_data if ip_data else None
-                                elif isinstance(ip_data, dict):
-                                    server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
-                                if server_public_ip:
-                                    print(f"Server public IP (Dokploy fallback): {server_public_ip}")
-                        except Exception as e:
-                            print(f"::warning::Failed to get IP from Dokploy: {e}")
-                    break
+                        # Fallback: get IP from Dokploy if Hetzner failed
+                        if not server_public_ip:
+                            try:
+                                ip_resp = requests.get(
+                                    f"{DOKPLOY_URL}/api/server.publicIp",
+                                    params={"serverId": server_id},
+                                    headers=headers,
+                                    timeout=30
+                                )
+                                if ip_resp.ok:
+                                    ip_data = ip_resp.json()
+                                    if isinstance(ip_data, str):
+                                        server_public_ip = ip_data if ip_data else None
+                                    elif isinstance(ip_data, dict):
+                                        server_public_ip = ip_data.get('public_ip') or ip_data.get('publicIp') or ip_data.get('ip')
+                                    if server_public_ip:
+                                        print(f"Server public IP (Dokploy fallback): {server_public_ip}")
+                            except Exception as e:
+                                print(f"::warning::Failed to get IP from Dokploy: {e}")
+                        break
 
             if not server_id:
                 if SERVER_NAME == TRAEFIK_SERVER:
                     print(f"Using admin server (no remote server-id needed)")
                 else:
-                    print(f"::warning::Server {SERVER_NAME} not found in Dokploy")
+                    print(f"::error::Server '{SERVER_NAME}' not found in Dokploy")
+                    output('success', 'false')
+                    sys.exit(1)
 
             # Step 3: Get Traefik server public IP
             traefik_public_ip = get_hetzner_ip(TRAEFIK_SERVER)
@@ -205,7 +228,8 @@ runs:
                     print(f"Traefik IP (fallback to worker): {traefik_public_ip}")
 
             # Step 4: Get server Tailscale IP (for compose routing and SSH access)
-            if SERVER_NAME != TRAEFIK_SERVER:
+            # Skip if override was provided
+            if SERVER_NAME != TRAEFIK_SERVER and not server_tailscale_ip:
                 server_tailscale_ip = get_tailscale_ip(SERVER_NAME)
                 if server_tailscale_ip:
                     print(f"Server Tailscale IP: {server_tailscale_ip}")

@@ -53,7 +53,7 @@ on:
         type: string
     secrets:
       compose-env:
-        description: 'Environment variables for compose deployments (newline-separated KEY=VALUE)'
+        description: 'Environment variables for compose deployments (newline-separated KEY=VALUE, e.g., "DB_HOST=localhost\nDB_PORT=5432")'
         required: false
       TAILSCALE_OAUTH_CLIENT_ID:
         description: 'Tailscale OAuth client ID'
@@ -271,7 +271,32 @@ jobs:
       needs.config.outputs.environment-enabled == 'true' &&
       needs.config.outputs.vps-enabled == 'true' &&
       inputs.environment == 'production'
+    outputs:
+      server-ip: ${{ steps.provision.outputs.server-ip }}
+      tailscale-ip: ${{ steps.provision.outputs.tailscale-ip }}
+      server-id: ${{ steps.provision.outputs.server-id }}
+      provisioned: ${{ steps.provision.outputs.provisioned }}
+      success: ${{ steps.provision.outputs.success }}
     steps:
+      - name: Validate VPS Secrets
+        shell: bash
+        env:
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          NEXTNODE_APP_ID: ${{ secrets.NEXTNODE_APP_ID }}
+          NEXTNODE_APP_PRIVATE_KEY: ${{ secrets.NEXTNODE_APP_PRIVATE_KEY }}
+        run: |
+          MISSING=""
+          [[ -z "$HETZNER_TOKEN" ]] && MISSING="$MISSING HETZNER_TOKEN"
+          [[ -z "$TF_API_TOKEN" ]] && MISSING="$MISSING TF_API_TOKEN"
+          [[ -z "$NEXTNODE_APP_ID" ]] && MISSING="$MISSING NEXTNODE_APP_ID"
+          [[ -z "$NEXTNODE_APP_PRIVATE_KEY" ]] && MISSING="$MISSING NEXTNODE_APP_PRIVATE_KEY"
+          if [[ -n "$MISSING" ]]; then
+            echo "::error::Missing required secrets for VPS provisioning:$MISSING"
+            exit 1
+          fi
+          echo "All required VPS secrets are present"
+
       - name: Checkout Shared Actions
         uses: actions/checkout@v4
         with:
@@ -293,7 +318,7 @@ jobs:
           oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
           generate-auth-key: 'true'
           auth-key-tags: 'tag:server'
-          auth-key-expiry: '3600'
+          auth-key-expiry: '7200'
 
       - name: Generate GitHub App Token
         id: app-token
@@ -304,7 +329,15 @@ jobs:
           owner: nextnodesolutions
           repositories: infrastructure
 
+      - name: Cleanup Stale Tailscale Device
+        uses: ./.github-actions/actions/infrastructure/tailscale-device-cleanup
+        with:
+          tailscale-api-token: ${{ steps.tailscale.outputs.api-token }}
+          target: ${{ needs.config.outputs.vps-name }}
+        continue-on-error: true
+
       - name: Provision Custom VPS
+        id: provision
         uses: ./.github-actions/actions/deploy/vps-provision
         with:
           vps-name: ${{ needs.config.outputs.vps-name }}
@@ -412,6 +445,8 @@ jobs:
           exposure: ${{ needs.config.outputs.exposure }}
           hcloud-token: ${{ secrets.HETZNER_TOKEN }}
           tailscale-api-token: ${{ steps.tailscale.outputs.api-token }}
+          server-id-override: ${{ needs.provision.outputs.server-id }}
+          server-tailscale-ip-override: ${{ needs.provision.outputs.tailscale-ip }}
 
       # Deploy application (if not compose)
       - name: Sync Application
@@ -484,10 +519,14 @@ jobs:
           traefik-tailscale-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
           same-server: ${{ needs.config.outputs.server == needs.config.outputs.traefik-server }}
 
-      # DNS Configuration
+      # DNS Configuration (only if app or compose deployment succeeded)
       - name: Configure DNS
         id: dns
-        if: inputs.action == 'deploy' && needs.config.outputs.domain != '' && steps.server.outputs.dns-ip != ''
+        if: |
+          inputs.action == 'deploy' &&
+          needs.config.outputs.domain != '' &&
+          steps.server.outputs.dns-ip != '' &&
+          (steps.app.outputs.success == 'true' || steps.compose.outputs.success == 'true')
         uses: ./.github-actions/actions/infrastructure/cloudflare-dns-upsert
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -495,13 +534,14 @@ jobs:
           content: ${{ steps.server.outputs.dns-ip }}
           proxied: ${{ needs.config.outputs.exposure == 'external' && !contains(needs.config.outputs.domain, '.dev.') }}
 
-      # Wildcard Certificate Configuration
+      # Wildcard Certificate Configuration (only if app or compose deployment succeeded)
       - name: Configure Wildcard Certificate
         id: wildcard
         if: |
           inputs.action == 'deploy' &&
           needs.config.outputs.domain != '' &&
-          steps.server.outputs.traefik-tailscale-ip != ''
+          steps.server.outputs.traefik-tailscale-ip != '' &&
+          (steps.app.outputs.success == 'true' || steps.compose.outputs.success == 'true')
         uses: ./.github-actions/actions/ssl/traefik-wildcard-config
         with:
           domain: ${{ needs.config.outputs.domain }}

@@ -1,0 +1,125 @@
+name: 'VPS Node Label'
+description: 'Apply Docker Swarm node label to VPS for placement constraints'
+author: 'NextNodeSolutions'
+
+inputs:
+  manager-ip:
+    description: 'Swarm manager Tailscale IP (admin-dokploy)'
+    required: true
+  node-name:
+    description: 'Node name to label (matches Docker Swarm node name)'
+    required: true
+  label-key:
+    description: 'Label key for placement constraint'
+    required: false
+    default: 'server'
+  label-value:
+    description: 'Label value (defaults to node-name if not provided)'
+    required: false
+    default: ''
+  max-retries:
+    description: 'Maximum retry attempts for labeling'
+    required: false
+    default: '5'
+  retry-delay:
+    description: 'Delay between retries in seconds'
+    required: false
+    default: '10'
+
+outputs:
+  success:
+    description: 'Whether node label was applied successfully'
+    value: ${{ steps.label.outputs.success }}
+  label-applied:
+    description: 'The full label that was applied (key=value)'
+    value: ${{ steps.label.outputs.label-applied }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Apply Node Label
+      id: label
+      shell: bash
+      env:
+        MANAGER_IP: ${{ inputs.manager-ip }}
+        NODE_NAME: ${{ inputs.node-name }}
+        LABEL_KEY: ${{ inputs.label-key }}
+        LABEL_VALUE: ${{ inputs.label-value }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
+      run: |
+        echo "::group::Apply Swarm Node Label"
+
+        # Use node-name as label value if not explicitly provided
+        if [[ -z "$LABEL_VALUE" ]]; then
+          LABEL_VALUE="$NODE_NAME"
+        fi
+
+        FULL_LABEL="${LABEL_KEY}=${LABEL_VALUE}"
+        echo "Target: $NODE_NAME"
+        echo "Label: $FULL_LABEL"
+        echo "Manager: $MANAGER_IP"
+
+        # Retry logic - node may take time to join Swarm
+        ATTEMPT=1
+        while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
+          echo ""
+          echo "Attempt $ATTEMPT/$MAX_RETRIES..."
+
+          # Check if node exists in Swarm
+          NODE_EXISTS=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            root@"$MANAGER_IP" \
+            "docker node ls --format '{{.Hostname}}' 2>/dev/null | grep -c '^${NODE_NAME}$' || true")
+
+          if [[ "$NODE_EXISTS" == "0" ]]; then
+            echo "Node '$NODE_NAME' not yet visible in Swarm"
+            if [[ $ATTEMPT -lt $MAX_RETRIES ]]; then
+              echo "Waiting ${RETRY_DELAY}s before retry..."
+              sleep "$RETRY_DELAY"
+              ATTEMPT=$((ATTEMPT + 1))
+              continue
+            else
+              echo "::error::Node '$NODE_NAME' not found in Swarm after $MAX_RETRIES attempts"
+              echo "success=false" >> $GITHUB_OUTPUT
+              echo "label-applied=" >> $GITHUB_OUTPUT
+              echo "::endgroup::"
+              exit 1
+            fi
+          fi
+
+          # Apply the label
+          echo "Applying label to node..."
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            root@"$MANAGER_IP" \
+            "docker node update --label-add '${FULL_LABEL}' '${NODE_NAME}'" 2>&1; then
+
+            # Verify label was applied
+            VERIFY=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+              root@"$MANAGER_IP" \
+              "docker node inspect '${NODE_NAME}' --format '{{index .Spec.Labels \"${LABEL_KEY}\"}}'" 2>/dev/null || true)
+
+            if [[ "$VERIFY" == "$LABEL_VALUE" ]]; then
+              echo "Label applied and verified: $FULL_LABEL"
+              echo "success=true" >> $GITHUB_OUTPUT
+              echo "label-applied=$FULL_LABEL" >> $GITHUB_OUTPUT
+              echo "::endgroup::"
+              exit 0
+            else
+              echo "::warning::Label command succeeded but verification failed (got: $VERIFY)"
+            fi
+          else
+            echo "::warning::Failed to apply label on attempt $ATTEMPT"
+          fi
+
+          if [[ $ATTEMPT -lt $MAX_RETRIES ]]; then
+            echo "Waiting ${RETRY_DELAY}s before retry..."
+            sleep "$RETRY_DELAY"
+          fi
+          ATTEMPT=$((ATTEMPT + 1))
+        done
+
+        echo "::error::Failed to apply node label after $MAX_RETRIES attempts"
+        echo "success=false" >> $GITHUB_OUTPUT
+        echo "label-applied=" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 1

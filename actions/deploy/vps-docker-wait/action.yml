@@ -1,0 +1,85 @@
+name: 'VPS Docker Wait'
+description: 'Wait for Docker to be ready on a newly provisioned VPS'
+author: 'NextNodeSolutions'
+
+inputs:
+  server-ip:
+    description: 'Server Tailscale IP address'
+    required: true
+  timeout-seconds:
+    description: 'Maximum time to wait for Docker (default: 300s / 5 minutes)'
+    required: false
+    default: '300'
+  check-interval:
+    description: 'Interval between checks in seconds'
+    required: false
+    default: '15'
+
+outputs:
+  success:
+    description: 'Whether Docker is ready'
+    value: ${{ steps.wait.outputs.success }}
+  docker-version:
+    description: 'Docker version running on the server'
+    value: ${{ steps.wait.outputs.docker-version }}
+  swarm-status:
+    description: 'Docker Swarm status (active/inactive/pending)'
+    value: ${{ steps.wait.outputs.swarm-status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Wait for Docker
+      id: wait
+      shell: bash
+      env:
+        SERVER_IP: ${{ inputs.server-ip }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+        INTERVAL: ${{ inputs.check-interval }}
+      run: |
+        echo "::group::Waiting for Docker on $SERVER_IP"
+
+        START_TIME=$(date +%s)
+        ELAPSED=0
+
+        while [[ $ELAPSED -lt $TIMEOUT ]]; do
+          echo "Checking Docker status... (${ELAPSED}s elapsed)"
+
+          # Try SSH connection and docker info
+          DOCKER_INFO=$(ssh -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            -o BatchMode=yes \
+            root@"$SERVER_IP" \
+            "docker info --format '{{.ServerVersion}}|{{.Swarm.LocalNodeState}}'" 2>/dev/null || true)
+
+          if [[ -n "$DOCKER_INFO" ]]; then
+            DOCKER_VERSION=$(echo "$DOCKER_INFO" | cut -d'|' -f1)
+            SWARM_STATUS=$(echo "$DOCKER_INFO" | cut -d'|' -f2)
+
+            if [[ -n "$DOCKER_VERSION" ]]; then
+              echo ""
+              echo "Docker is ready!"
+              echo "  Version: $DOCKER_VERSION"
+              echo "  Swarm: $SWARM_STATUS"
+
+              echo "success=true" >> $GITHUB_OUTPUT
+              echo "docker-version=$DOCKER_VERSION" >> $GITHUB_OUTPUT
+              echo "swarm-status=$SWARM_STATUS" >> $GITHUB_OUTPUT
+              echo "::endgroup::"
+              exit 0
+            fi
+          fi
+
+          # SSH connection failed or docker not ready - wait and retry
+          sleep "$INTERVAL"
+          CURRENT_TIME=$(date +%s)
+          ELAPSED=$((CURRENT_TIME - START_TIME))
+        done
+
+        echo ""
+        echo "::error::Docker not ready after ${TIMEOUT}s on $SERVER_IP"
+        echo "success=false" >> $GITHUB_OUTPUT
+        echo "docker-version=" >> $GITHUB_OUTPUT
+        echo "swarm-status=" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 1

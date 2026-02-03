@@ -16,3 +16,4 @@ DEFAULT_SSH_PORT = 22
 
 # SSH
 DEFAULT_SSH_USER = "root"
+DEFAULT_SSH_KEY_NAME = "nextnode-dokploy-ci"

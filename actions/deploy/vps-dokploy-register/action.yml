@@ -62,11 +62,12 @@ runs:
         import time
 
         from lib.dokploy import DokployAuthError, DokployClient, DokployError, output
+        from lib.dokploy.constants import DEFAULT_SSH_KEY_NAME
 
         SERVER_NAME = os.environ['SERVER_NAME']
         SERVER_IP = os.environ['SERVER_IP']
         SSH_KEY_ID = os.environ.get('SSH_KEY_ID', '')
-        SSH_KEY_NAME = os.environ.get('SSH_KEY_NAME', 'nextnode-dokploy-ci')
+        SSH_KEY_NAME = os.environ.get('SSH_KEY_NAME', '') or DEFAULT_SSH_KEY_NAME
 
         print("::group::Dokploy Registration")
 

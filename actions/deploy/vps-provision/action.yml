@@ -1,5 +1,5 @@
 name: 'VPS Provision'
-description: 'Provision and register a custom VPS for Dokploy deployments. Composes atomic actions: vps-status-check, vps-terraform-apply, vps-tailscale-wait, vps-dokploy-register'
+description: 'Provision and register a custom VPS for Dokploy deployments. Composes atomic actions: vps-status-check, vps-terraform-apply, vps-tailscale-wait, vps-dokploy-register, vps-docker-wait, vps-node-label'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -55,9 +55,15 @@ outputs:
   server-id:
     description: 'Dokploy server ID'
     value: ${{ steps.register.outputs.server-id }}
+  docker-ready:
+    description: 'Whether Docker is ready on the VPS'
+    value: ${{ steps.docker-wait.outputs.success }}
+  node-labeled:
+    description: 'Whether Swarm node label was applied'
+    value: ${{ steps.node-label.outputs.success }}
   success:
-    description: 'Whether provisioning succeeded'
-    value: ${{ steps.register.outputs.success }}
+    description: 'Whether provisioning succeeded (includes Docker ready and node labeled for new VPS)'
+    value: ${{ steps.final-status.outputs.success }}
 
 runs:
   using: 'composite'
@@ -138,3 +144,72 @@ runs:
         dokploy-api-token: ${{ inputs.dokploy-api-token }}
         server-name: ${{ inputs.vps-name }}
         server-ip: ${{ steps.set-outputs.outputs.tailscale-ip }}
+
+    # Step 6: Wait for Docker to be ready (if newly provisioned)
+    - name: Wait for Docker
+      id: docker-wait
+      if: steps.check.outputs.needs-provision == 'true' || steps.register.outputs.registered == 'true'
+      uses: nextnodesolutions/github-actions/actions/deploy/vps-docker-wait@main
+      with:
+        server-ip: ${{ steps.set-outputs.outputs.tailscale-ip }}
+        timeout-seconds: '300'
+
+    # Step 7: Get Traefik server Tailscale IP for node labeling
+    - name: Lookup Manager IP
+      id: manager-lookup
+      if: steps.check.outputs.needs-provision == 'true' || steps.register.outputs.registered == 'true'
+      uses: nextnodesolutions/github-actions/actions/utilities/tailscale-device-lookup@main
+      with:
+        device-name: 'admin-dokploy'
+        tailscale-api-key: ${{ inputs.tailscale-api-token }}
+
+    # Step 8: Apply Swarm node label for placement constraints
+    - name: Apply Node Label
+      id: node-label
+      if: (steps.check.outputs.needs-provision == 'true' || steps.register.outputs.registered == 'true') && steps.manager-lookup.outputs.tailscale-ip != ''
+      uses: nextnodesolutions/github-actions/actions/deploy/vps-node-label@main
+      with:
+        manager-ip: ${{ steps.manager-lookup.outputs.tailscale-ip }}
+        node-name: ${{ inputs.vps-name }}
+        label-key: 'server'
+        label-value: ${{ inputs.vps-name }}
+
+    # Step 9: Final status check
+    - name: Final Status
+      id: final-status
+      shell: bash
+      env:
+        REGISTER_SUCCESS: ${{ steps.register.outputs.success }}
+        DOCKER_WAIT_SUCCESS: ${{ steps.docker-wait.outputs.success }}
+        NODE_LABEL_SUCCESS: ${{ steps.node-label.outputs.success }}
+        NEEDS_PROVISION: ${{ steps.check.outputs.needs-provision }}
+        NEWLY_REGISTERED: ${{ steps.register.outputs.registered }}
+      run: |
+        echo "::group::Final Status Check"
+
+        # Registration must succeed
+        if [[ "$REGISTER_SUCCESS" != "true" ]]; then
+          echo "::error::VPS registration failed"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # For newly provisioned or registered VPS, Docker must be ready
+        if [[ "$NEEDS_PROVISION" == "true" || "$NEWLY_REGISTERED" == "true" ]]; then
+          if [[ "$DOCKER_WAIT_SUCCESS" != "true" ]]; then
+            echo "::error::Docker is not ready on VPS"
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          if [[ "$NODE_LABEL_SUCCESS" != "true" ]]; then
+            echo "::warning::Node label not applied (deployment may fail placement constraints)"
+            # Don't fail - label can be applied manually if needed
+          fi
+        fi
+
+        echo "VPS provisioning complete"
+        echo "success=true" >> $GITHUB_OUTPUT
+        echo "::endgroup::"

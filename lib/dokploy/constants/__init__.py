@@ -61,6 +61,7 @@ from .http import (
 )
 from .infrastructure import (
     DEFAULT_APP_PORT,
+    DEFAULT_SSH_KEY_NAME,
     DEFAULT_SSH_PORT,
     DEFAULT_SSH_USER,
     DEV_SERVER,
@@ -118,6 +119,7 @@ __all__ = [
     "DEFAULT_APP_PORT",
     "DEFAULT_SSH_PORT",
     "DEFAULT_SSH_USER",
+    "DEFAULT_SSH_KEY_NAME",
     # Files
     "DEFAULT_CONFIG_FILE",
     "DEFAULT_ENV_FILE",
