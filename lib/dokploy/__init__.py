@@ -105,6 +105,8 @@ from .domain import (
     compute_app_name,
     compute_domain,
     compute_url,
+    get_root_domain,
+    is_preview_domain,
     is_sub_subdomain,
 )
 from .output import output
@@ -206,6 +208,8 @@ __all__ = [
     "compute_app_name",
     "compute_domain",
     "compute_url",
+    "get_root_domain",
+    "is_preview_domain",
     "is_sub_subdomain",
     # output
     "output",

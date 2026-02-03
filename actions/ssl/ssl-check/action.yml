@@ -1,0 +1,74 @@
+name: 'SSL Check'
+description: 'Pre-deployment verification of SSL strategy for a domain (dry-run mode)'
+author: 'NextNodeSolutions'
+
+inputs:
+  domain:
+    description: 'Domain to check SSL strategy for'
+    required: true
+  environment:
+    description: 'Target environment (development, preview, production)'
+    required: false
+    default: ''
+
+outputs:
+  ssl_method:
+    description: 'Determined SSL method (wildcard, http_only, auto_cert)'
+    value: ${{ steps.check.outputs.ssl_type }}
+  summary:
+    description: 'Human-readable explanation of SSL strategy'
+    value: ${{ steps.check.outputs.summary }}
+  warnings:
+    description: 'Any warnings about the SSL configuration'
+    value: ${{ steps.check.outputs.warnings }}
+  use_https:
+    description: 'Whether HTTPS will be configured'
+    value: ${{ steps.check.outputs.use_https }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check SSL Strategy
+      id: check
+      uses: ./actions/ssl/ssl-strategy
+      with:
+        domain: ${{ inputs.domain }}
+        dry-run: 'true'
+
+    - name: Display Results
+      shell: bash
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        SSL_TYPE: ${{ steps.check.outputs.ssl_type }}
+        USE_HTTPS: ${{ steps.check.outputs.use_https }}
+        SUMMARY: ${{ steps.check.outputs.summary }}
+        WARNINGS: ${{ steps.check.outputs.warnings }}
+      run: |
+        echo "::group::SSL Check Results"
+        echo ""
+        echo "Domain: $DOMAIN"
+        if [[ -n "$ENVIRONMENT" ]]; then
+          echo "Environment: $ENVIRONMENT"
+        fi
+        echo ""
+        echo "SSL Method: $SSL_TYPE"
+        echo "HTTPS Enabled: $USE_HTTPS"
+        echo "Summary: $SUMMARY"
+        echo ""
+
+        if [[ -n "$WARNINGS" && "$WARNINGS" != "[]" ]]; then
+          echo "Warnings:"
+          echo "$WARNINGS" | jq -r '.[]' 2>/dev/null | while read -r warning; do
+            echo "  - $warning"
+          done
+        fi
+
+        echo "::endgroup::"
+
+        # Output warning annotations if needed
+        if [[ "$SSL_TYPE" == "http_only" ]]; then
+          echo "::warning::SSL Check: $DOMAIN will use HTTP-only (preview environment)"
+        elif [[ "$SSL_TYPE" == "auto_cert" ]]; then
+          echo "::warning::SSL Check: $DOMAIN will use per-host auto-cert (sub-subdomain not covered by wildcard)"
+        fi

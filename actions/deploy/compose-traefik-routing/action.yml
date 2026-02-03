@@ -22,6 +22,10 @@ inputs:
     description: 'Whether compose runs on the same server as Traefik'
     required: false
     default: 'false'
+  use-https:
+    description: 'Whether to configure HTTPS (false for preview environments)'
+    required: false
+    default: 'true'
 
 outputs:
   config-path:
@@ -41,6 +45,7 @@ runs:
         SERVER_IP="${{ inputs.server-tailscale-ip }}"
         TRAEFIK_IP="${{ inputs.traefik-tailscale-ip }}"
         SAME_SERVER="${{ inputs.same-server }}"
+        USE_HTTPS="${{ inputs.use-https }}"
 
         # Backend URL: localhost if same server, Tailscale IP otherwise
         if [[ "$SAME_SERVER" == "true" ]]; then
@@ -54,10 +59,12 @@ runs:
 
         echo "::group::Generating Traefik config for compose: $NAME"
         echo "Domain: $DOMAIN -> $BACKEND"
+        echo "HTTPS enabled: $USE_HTTPS"
 
-        # Generate Traefik configuration
-        # Note: heredoc content has leading spaces to satisfy yamllint, but Traefik tolerates this
-        cat > /tmp/traefik-compose.yml <<EOF
+        # Generate Traefik configuration based on HTTPS setting
+        if [[ "$USE_HTTPS" == "true" ]]; then
+          # HTTPS configuration with TLS and redirect
+          cat > /tmp/traefik-compose.yml <<EOF
         # Auto-generated for compose: $NAME
         http:
           routers:
@@ -81,6 +88,25 @@ runs:
                 servers:
                   - url: "$BACKEND"
         EOF
+        else
+          # HTTP-only configuration (for preview environments)
+          echo "Configuring HTTP-only mode (preview environment)"
+          cat > /tmp/traefik-compose.yml <<EOF
+        # Auto-generated for compose: $NAME (HTTP-only, preview environment)
+        http:
+          routers:
+            $NAME:
+              rule: "Host(\`$DOMAIN\`)"
+              service: "$NAME"
+              entryPoints:
+                - web
+          services:
+            $NAME:
+              loadBalancer:
+                servers:
+                  - url: "$BACKEND"
+        EOF
+        fi
 
         echo "Generated config:"
         cat /tmp/traefik-compose.yml

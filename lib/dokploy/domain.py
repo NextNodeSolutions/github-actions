@@ -99,3 +99,40 @@ def is_sub_subdomain(domain: str) -> bool:
         True if domain has 2+ dots (sub-subdomain)
     """
     return domain.count(".") >= 2
+
+
+def is_preview_domain(domain: str) -> bool:
+    """Check if domain is a preview environment (pr-X.dev.domain.com).
+
+    Preview domains follow the pattern pr-{number}.dev.{base_domain}.
+    These are sub-subdomains used for PR preview deployments.
+
+    Args:
+        domain: Domain to check
+
+    Returns:
+        True if domain matches preview pattern
+    """
+    import re
+
+    return bool(re.match(r"^pr-\d+\.dev\.", domain))
+
+
+def get_root_domain(domain: str) -> str:
+    """Extract root domain from any subdomain level.
+
+    Examples:
+        dev.nextnode.fr -> nextnode.fr
+        pr-42.dev.nextnode.fr -> nextnode.fr
+        app.client.com -> client.com
+
+    Args:
+        domain: Full domain string
+
+    Returns:
+        Root domain (last 2 parts)
+    """
+    parts = domain.split(".")
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return domain

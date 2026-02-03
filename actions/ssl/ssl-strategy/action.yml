@@ -1,0 +1,127 @@
+name: 'SSL Strategy'
+description: 'Determine SSL strategy for a domain (wildcard, http-only for previews, auto-cert for sub-subdomains)'
+author: 'NextNodeSolutions'
+
+inputs:
+  domain:
+    description: 'Full domain to analyze (e.g., dev.nextnode.fr, pr-42.dev.nextnode.fr)'
+    required: true
+  dry-run:
+    description: 'Only report strategy, do not modify anything'
+    required: false
+    default: 'false'
+
+outputs:
+  ssl_type:
+    description: 'SSL type: wildcard, new_wildcard, http_only, auto_cert'
+    value: ${{ steps.strategy.outputs.ssl_type }}
+  root_domain:
+    description: 'Extracted root domain (e.g., nextnode.fr)'
+    value: ${{ steps.strategy.outputs.root_domain }}
+  wildcard_domain:
+    description: 'Wildcard that covers this domain (e.g., *.nextnode.fr)'
+    value: ${{ steps.strategy.outputs.wildcard_domain }}
+  is_preview:
+    description: 'Boolean, true for pr-X.dev.domain.com patterns'
+    value: ${{ steps.strategy.outputs.is_preview }}
+  is_covered:
+    description: 'Boolean, true if existing wildcard covers this domain'
+    value: ${{ steps.strategy.outputs.is_covered }}
+  use_https:
+    description: 'Boolean, false only for preview environments'
+    value: ${{ steps.strategy.outputs.use_https }}
+  warnings:
+    description: 'JSON array of warning messages'
+    value: ${{ steps.strategy.outputs.warnings }}
+  summary:
+    description: 'Human-readable explanation of the SSL strategy'
+    value: ${{ steps.strategy.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine SSL Strategy
+      id: strategy
+      shell: bash
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        echo "::group::Determining SSL strategy for $DOMAIN"
+
+        # Initialize outputs
+        WARNINGS="[]"
+        IS_PREVIEW="false"
+        IS_COVERED="true"
+        USE_HTTPS="true"
+        SSL_TYPE="wildcard"
+        SUMMARY=""
+
+        # Extract root domain (last 2 parts)
+        # dev.kicked.dev -> kicked.dev
+        # pr-123.dev.nextnode.fr -> nextnode.fr
+        ROOT_DOMAIN=$(echo "$DOMAIN" | awk -F. '{if(NF>=2) print $(NF-1)"."$NF; else print $0}')
+        WILDCARD_DOMAIN="*.${ROOT_DOMAIN}"
+
+        echo "Domain: $DOMAIN"
+        echo "Root domain: $ROOT_DOMAIN"
+        echo "Wildcard: $WILDCARD_DOMAIN"
+
+        # Count domain parts
+        PART_COUNT=$(echo "$DOMAIN" | awk -F. '{print NF}')
+        echo "Domain parts: $PART_COUNT"
+
+        # Check if preview pattern (pr-\d+\.dev\.)
+        if echo "$DOMAIN" | grep -qE '^pr-[0-9]+\.dev\.'; then
+          IS_PREVIEW="true"
+          SSL_TYPE="http_only"
+          USE_HTTPS="false"
+          IS_COVERED="false"
+          WARNINGS='["Preview environment uses HTTP only to avoid Let'\''s Encrypt rate limits"]'
+          SUMMARY="Preview environment (${DOMAIN}) - using HTTP only"
+          echo "Detected: Preview environment"
+        # Check if sub-subdomain (more than 3 parts, e.g., a.b.c.com)
+        elif [[ "$PART_COUNT" -gt 3 ]]; then
+          SSL_TYPE="auto_cert"
+          IS_COVERED="false"
+          WARNINGS='["Sub-subdomain not covered by wildcard certificate"]'
+          SUMMARY="Sub-subdomain (${DOMAIN}) - using per-host auto-cert"
+          echo "Detected: Sub-subdomain (not covered by wildcard)"
+        # Standard subdomain (covered by wildcard)
+        elif [[ "$PART_COUNT" -eq 3 ]]; then
+          SSL_TYPE="wildcard"
+          IS_COVERED="true"
+          SUMMARY="Standard subdomain (${DOMAIN}) - covered by ${WILDCARD_DOMAIN}"
+          echo "Detected: Standard subdomain (covered by wildcard)"
+        # Root domain or single subdomain
+        else
+          SSL_TYPE="wildcard"
+          IS_COVERED="true"
+          SUMMARY="Root or single subdomain (${DOMAIN}) - covered by ${WILDCARD_DOMAIN}"
+          echo "Detected: Root or single subdomain"
+        fi
+
+        # Output results
+        echo "root_domain=$ROOT_DOMAIN" >> $GITHUB_OUTPUT
+        echo "wildcard_domain=$WILDCARD_DOMAIN" >> $GITHUB_OUTPUT
+        echo "is_preview=$IS_PREVIEW" >> $GITHUB_OUTPUT
+        echo "is_covered=$IS_COVERED" >> $GITHUB_OUTPUT
+        echo "use_https=$USE_HTTPS" >> $GITHUB_OUTPUT
+        echo "ssl_type=$SSL_TYPE" >> $GITHUB_OUTPUT
+        echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+        echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+
+        echo ""
+        echo "SSL Strategy Results:"
+        echo "  Type: $SSL_TYPE"
+        echo "  Use HTTPS: $USE_HTTPS"
+        echo "  Is Preview: $IS_PREVIEW"
+        echo "  Is Covered: $IS_COVERED"
+        echo "  Summary: $SUMMARY"
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+          echo ""
+          echo "[DRY-RUN] No changes will be made"
+        fi
+
+        echo "::endgroup::"

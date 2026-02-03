@@ -503,6 +503,16 @@ jobs:
           port: ${{ needs.config.outputs.port }}
           service-name: ${{ needs.config.outputs.service-name }}
 
+      # SSL Strategy Determination
+      - name: Determine SSL Strategy
+        id: ssl-strategy
+        if: |
+          inputs.action == 'deploy' &&
+          needs.config.outputs.domain != ''
+        uses: ./.github-actions/actions/ssl/ssl-strategy
+        with:
+          domain: ${{ needs.config.outputs.domain }}
+
       # File-based Traefik routing for compose (NixOS servers with file provider)
       - name: Configure Compose Traefik Routing
         if: |
@@ -518,6 +528,7 @@ jobs:
           server-tailscale-ip: ${{ steps.server.outputs.server-tailscale-ip }}
           traefik-tailscale-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
           same-server: ${{ needs.config.outputs.server == needs.config.outputs.traefik-server }}
+          use-https: ${{ steps.ssl-strategy.outputs.use_https }}
 
       # DNS Configuration (only if app or compose deployment succeeded)
       - name: Configure DNS
@@ -534,13 +545,14 @@ jobs:
           content: ${{ steps.server.outputs.dns-ip }}
           proxied: ${{ needs.config.outputs.exposure == 'external' && !contains(needs.config.outputs.domain, '.dev.') }}
 
-      # Wildcard Certificate Configuration (only if app or compose deployment succeeded)
+      # Wildcard Certificate Configuration (skip for HTTP-only environments like previews)
       - name: Configure Wildcard Certificate
         id: wildcard
         if: |
           inputs.action == 'deploy' &&
           needs.config.outputs.domain != '' &&
           steps.server.outputs.traefik-tailscale-ip != '' &&
+          steps.ssl-strategy.outputs.ssl_type != 'http_only' &&
           (steps.app.outputs.success == 'true' || steps.compose.outputs.success == 'true')
         uses: ./.github-actions/actions/ssl/traefik-wildcard-config
         with:
@@ -600,18 +612,62 @@ jobs:
 
       - name: Deployment Summary
         if: inputs.action == 'deploy' && steps.final.outputs.success == 'true'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DOMAIN: ${{ needs.config.outputs.domain }}
+          PROJECT_NAME: ${{ needs.config.outputs.project-name }}
+          DOCKER_IMAGE: ${{ needs.build.outputs.image }}
+          SSL_TYPE: ${{ steps.ssl-strategy.outputs.ssl_type }}
+          WILDCARD_DOMAIN: ${{ steps.ssl-strategy.outputs.wildcard_domain }}
+          USE_HTTPS: ${{ steps.ssl-strategy.outputs.use_https }}
+          SSL_WARNINGS: ${{ steps.ssl-strategy.outputs.warnings }}
         run: |
           echo "## Deployment Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
-          if [[ -n "${{ needs.config.outputs.domain }}" ]]; then
-            echo "| Domain | https://${{ needs.config.outputs.domain }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`$ENVIRONMENT\` |" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "$DOMAIN" ]]; then
+            if [[ "$USE_HTTPS" == "true" ]]; then
+              echo "| Domain | https://$DOMAIN |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Domain | http://$DOMAIN |" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
-          echo "| Project | \`${{ needs.config.outputs.project-name }}\` |" >> $GITHUB_STEP_SUMMARY
-          if [[ -n "${{ needs.build.outputs.image }}" ]]; then
-            echo "| Image | \`${{ needs.build.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Project | \`$PROJECT_NAME\` |" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "$DOCKER_IMAGE" ]]; then
+            echo "| Image | \`$DOCKER_IMAGE\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # SSL Configuration status
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### SSL Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          case "$SSL_TYPE" in
+            wildcard)
+              echo "| SSL | Wildcard (\`$WILDCARD_DOMAIN\`) |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            new_wildcard)
+              echo "| SSL | New Wildcard (DNS-01 challenge) |" >> $GITHUB_STEP_SUMMARY
+              ;;
+            http_only)
+              echo "| SSL | HTTP Only (preview environment) |" >> $GITHUB_STEP_SUMMARY
+              echo "::warning::SSL: Preview environment runs HTTP-only to avoid Let's Encrypt rate limits"
+              ;;
+            auto_cert)
+              echo "| SSL | Auto-cert (sub-subdomain not covered by wildcard) |" >> $GITHUB_STEP_SUMMARY
+              echo "::warning::SSL: Using per-host certificate - consider restructuring domain"
+              ;;
+          esac
+
+          # Output any warnings from SSL strategy
+          if [[ -n "$SSL_WARNINGS" && "$SSL_WARNINGS" != "[]" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**SSL Warnings:**" >> $GITHUB_STEP_SUMMARY
+            echo "$SSL_WARNINGS" | jq -r '.[]' 2>/dev/null | while read -r warning; do
+              echo "- $warning" >> $GITHUB_STEP_SUMMARY
+            done
           fi
 
       - name: Cleanup Summary

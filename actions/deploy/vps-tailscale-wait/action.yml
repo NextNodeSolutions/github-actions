@@ -1,5 +1,5 @@
 name: 'VPS Tailscale Wait'
-description: 'Wait for VPS to join Tailscale network'
+description: 'Wait for VPS to join Tailscale network with robust error handling'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -41,19 +41,78 @@ runs:
         echo "::group::Waiting for Tailscale"
         echo "VPS: $VPS_NAME"
         echo "Timeout: ${TIMEOUT_SECONDS}s"
+        echo "Poll interval: ${POLL_INTERVAL}s"
 
         VPS_NAME_LOWER=$(echo "$VPS_NAME" | tr '[:upper:]' '[:lower:]')
-        TAILSCALE_IP=""
-        ELAPSED=0
         MAX_ATTEMPTS=$((TIMEOUT_SECONDS / POLL_INTERVAL))
+        CONSECUTIVE_API_ERRORS=0
+        MAX_CONSECUTIVE_ERRORS=3
+        RESPONSE_FILE=$(mktemp)
 
-        for i in $(seq 1 $MAX_ATTEMPTS); do
-          RESPONSE=$(curl -sf -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
-            "https://api.tailscale.com/api/v2/tailnet/-/devices" 2>/dev/null || echo '{"devices":[]}')
+        # Cleanup on exit
+        trap "rm -f $RESPONSE_FILE" EXIT
 
-          TAILSCALE_IP=$(echo "$RESPONSE" | \
-            jq -r --arg name "$VPS_NAME_LOWER" \
-            '.devices[] | select((.hostname | ascii_downcase) == $name or ((.hostname | ascii_downcase) | startswith($name + "-"))) | .addresses[0]' 2>/dev/null | head -1)
+        for attempt in $(seq 1 $MAX_ATTEMPTS); do
+          # Get HTTP status code separately from response body
+          HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
+            -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+            "https://api.tailscale.com/api/v2/tailnet/-/devices" 2>/dev/null || echo "000")
+
+          # Fail fast on authentication errors
+          if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
+            echo "::error::Tailscale API authentication failed (HTTP $HTTP_CODE)"
+            echo "::error::Check that TAILSCALE_API_KEY is valid and has device read permissions"
+            echo "tailscale-ip=" >> $GITHUB_OUTPUT
+            echo "online=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          # Handle rate limiting with backoff
+          if [[ "$HTTP_CODE" == "429" ]]; then
+            BACKOFF=$((POLL_INTERVAL * attempt))
+            echo "::warning::Rate limited (HTTP 429), backing off for ${BACKOFF}s"
+            sleep $BACKOFF
+            continue
+          fi
+
+          # Handle server errors with retry limit
+          if [[ "$HTTP_CODE" =~ ^5 || "$HTTP_CODE" == "000" ]]; then
+            CONSECUTIVE_API_ERRORS=$((CONSECUTIVE_API_ERRORS + 1))
+            if [[ $CONSECUTIVE_API_ERRORS -ge $MAX_CONSECUTIVE_ERRORS ]]; then
+              echo "::error::Tailscale API unavailable after $MAX_CONSECUTIVE_ERRORS consecutive failures (HTTP $HTTP_CODE)"
+              echo "tailscale-ip=" >> $GITHUB_OUTPUT
+              echo "online=false" >> $GITHUB_OUTPUT
+              echo "::endgroup::"
+              exit 1
+            fi
+            BACKOFF=$((POLL_INTERVAL * CONSECUTIVE_API_ERRORS))
+            echo "::warning::Tailscale API error (HTTP $HTTP_CODE), attempt $CONSECUTIVE_API_ERRORS/$MAX_CONSECUTIVE_ERRORS, backing off ${BACKOFF}s"
+            sleep $BACKOFF
+            continue
+          fi
+
+          # Reset error counter on successful API call
+          CONSECUTIVE_API_ERRORS=0
+
+          # Validate response structure
+          if ! jq -e '.devices' "$RESPONSE_FILE" > /dev/null 2>&1; then
+            echo "::error::Invalid API response - missing .devices array"
+            echo "Response body:"
+            cat "$RESPONSE_FILE"
+            echo "tailscale-ip=" >> $GITHUB_OUTPUT
+            echo "online=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          # Get device count for diagnostics
+          DEVICE_COUNT=$(jq '.devices | length' "$RESPONSE_FILE")
+
+          # Find device by hostname (case-insensitive) and extract 100.x Tailscale IP
+          TAILSCALE_IP=$(jq -r --arg name "$VPS_NAME_LOWER" \
+            '.devices[] | select((.hostname | ascii_downcase) == $name or ((.hostname | ascii_downcase) | startswith($name + "-"))) | .addresses[] | select(startswith("100."))' \
+            "$RESPONSE_FILE" 2>/dev/null | head -1)
 
           if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "null" ]]; then
             echo "VPS joined Tailscale: $TAILSCALE_IP"
@@ -63,12 +122,19 @@ runs:
             exit 0
           fi
 
-          ELAPSED=$((i * POLL_INTERVAL))
-          echo "Attempt $i/$MAX_ATTEMPTS: waiting ${POLL_INTERVAL}s... (${ELAPSED}s elapsed)"
+          ELAPSED=$((attempt * POLL_INTERVAL))
+          echo "Attempt $attempt/$MAX_ATTEMPTS: '$VPS_NAME' not found ($DEVICE_COUNT devices in tailnet, ${ELAPSED}s elapsed)"
           sleep $POLL_INTERVAL
         done
 
+        # Final diagnostic output on timeout
         echo "::error::VPS did not join Tailscale after ${TIMEOUT_SECONDS} seconds"
+
+        # Show available hostnames for debugging
+        HOSTNAMES=$(jq -r '.devices[].hostname' "$RESPONSE_FILE" 2>/dev/null | sort | tr '\n' ', ' | sed 's/,$//')
+        echo "::error::Available devices ($DEVICE_COUNT): $HOSTNAMES"
+        echo "::error::Looking for: '$VPS_NAME' (case-insensitive)"
+
         echo "tailscale-ip=" >> $GITHUB_OUTPUT
         echo "online=false" >> $GITHUB_OUTPUT
         echo "::endgroup::"
