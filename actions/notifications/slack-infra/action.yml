@@ -1,0 +1,202 @@
+name: 'Slack Infrastructure Notification'
+description: 'Send infrastructure deployment notifications to Slack with rich formatting'
+author: 'NextNodeSolutions'
+
+inputs:
+  webhook-url:
+    description: 'Slack incoming webhook URL'
+    required: true
+  status:
+    description: 'Notification status: started, success, failure, destroyed'
+    required: true
+  workflow:
+    description: 'Workflow name for display'
+    required: true
+  action:
+    description: 'Infrastructure action (plan, apply, destroy)'
+    required: false
+    default: ''
+  target:
+    description: 'Target server(s) (all, admin-dokploy, dev-worker, prod-worker)'
+    required: false
+    default: ''
+  hostname:
+    description: 'Server hostname (for single VPS operations)'
+    required: false
+    default: ''
+  server-type:
+    description: 'Hetzner server type'
+    required: false
+    default: ''
+  server-ips:
+    description: 'Server IPs as JSON object (e.g., {"admin":"x.x.x.x","dev":"x.x.x.x"})'
+    required: false
+    default: ''
+  project:
+    description: 'Project name (for dynamic workers)'
+    required: false
+    default: ''
+
+outputs:
+  success:
+    description: 'Whether notification was sent successfully'
+    value: ${{ steps.notify.outputs.success }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build and Send Notification
+      id: notify
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        STATUS: ${{ inputs.status }}
+        WORKFLOW: ${{ inputs.workflow }}
+        ACTION: ${{ inputs.action }}
+        TARGET: ${{ inputs.target }}
+        HOSTNAME: ${{ inputs.hostname }}
+        SERVER_TYPE: ${{ inputs.server-type }}
+        SERVER_IPS: ${{ inputs.server-ips }}
+        PROJECT: ${{ inputs.project }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_ACTOR: ${{ github.actor }}
+      run: |
+        echo "::group::Send Slack infrastructure notification"
+
+        # Color codes and titles by status
+        case "$STATUS" in
+          started)
+            COLOR="#3498db"  # Blue
+            TITLE="Infrastructure Deployment Started"
+            EMOJI=":rocket:"
+            ;;
+          success)
+            COLOR="#2ecc71"  # Green
+            TITLE="Infrastructure Deployment Successful"
+            EMOJI=":white_check_mark:"
+            ;;
+          failure)
+            COLOR="#e74c3c"  # Red
+            TITLE="Infrastructure Deployment Failed"
+            EMOJI=":x:"
+            ;;
+          destroyed)
+            COLOR="#9b59b6"  # Purple
+            TITLE="Infrastructure Destroyed"
+            EMOJI=":wastebasket:"
+            ;;
+          *)
+            COLOR="#95a5a6"  # Gray
+            TITLE="Infrastructure Notification"
+            EMOJI=":bell:"
+            ;;
+        esac
+
+        # Build workflow URL
+        WORKFLOW_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+        # Build fields array
+        FIELDS="[]"
+
+        # Add workflow field
+        FIELDS=$(echo "$FIELDS" | jq --arg name "Workflow" --arg value "$WORKFLOW" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+
+        # Add action field if provided
+        if [[ -n "$ACTION" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Action" --arg value "$ACTION" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add target field if provided
+        if [[ -n "$TARGET" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Target" --arg value "$TARGET" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add hostname field if provided (for single VPS operations)
+        if [[ -n "$HOSTNAME" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Hostname" --arg value "\`$HOSTNAME\`" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add project field if provided (for dynamic workers)
+        if [[ -n "$PROJECT" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Project" --arg value "$PROJECT" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add server type field if provided
+        if [[ -n "$SERVER_TYPE" ]]; then
+          FIELDS=$(echo "$FIELDS" | jq --arg name "Server Type" --arg value "\`$SERVER_TYPE\`" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+        fi
+
+        # Add triggered by field
+        FIELDS=$(echo "$FIELDS" | jq --arg name "Triggered by" --arg value "$GITHUB_ACTOR" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+
+        # Add server IPs if provided (for success status)
+        if [[ -n "$SERVER_IPS" && "$STATUS" == "success" ]]; then
+          # Parse JSON and format as IP list
+          IP_TEXT=$(echo "$SERVER_IPS" | jq -r 'to_entries | map("\(.key): \(.value)") | join("\n")' 2>/dev/null || echo "")
+          if [[ -n "$IP_TEXT" ]]; then
+            FIELDS=$(echo "$FIELDS" | jq --arg name "Server IPs" --arg value "$IP_TEXT" '. + [{"type": "mrkdwn", "text": "*\($name):*\n\($value)"}]')
+          fi
+        fi
+
+        # Build buttons
+        BUTTONS="[]"
+
+        # Add View Workflow/Logs button
+        BUTTON_TEXT="View Workflow"
+        if [[ "$STATUS" == "failure" ]]; then
+          BUTTON_TEXT="View Logs"
+        fi
+        BUTTONS=$(echo "$BUTTONS" | jq --arg url "$WORKFLOW_URL" --arg text "$BUTTON_TEXT" '. + [{"type": "button", "text": {"type": "plain_text", "text": $text, "emoji": true}, "url": $url}]')
+
+        # Build the payload
+        PAYLOAD=$(jq -n \
+          --arg color "$COLOR" \
+          --arg title "$EMOJI $TITLE" \
+          --argjson fields "$FIELDS" \
+          --argjson buttons "$BUTTONS" \
+          '{
+            "attachments": [{
+              "color": $color,
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": $title,
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": $fields
+                },
+                {
+                  "type": "actions",
+                  "elements": $buttons
+                }
+              ]
+            }]
+          }')
+
+        # Send notification
+        echo "Sending $STATUS notification for $WORKFLOW"
+
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD" \
+          "$SLACK_WEBHOOK_URL")
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        BODY=$(echo "$RESPONSE" | sed '$d')
+
+        if [[ "$HTTP_CODE" == "200" ]]; then
+          echo "Notification sent successfully"
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::Failed to send Slack notification (HTTP $HTTP_CODE): $BODY"
+          echo "success=false" >> $GITHUB_OUTPUT
+        fi
+
+        echo "::endgroup::"
