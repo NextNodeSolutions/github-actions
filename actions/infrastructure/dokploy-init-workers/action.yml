@@ -6,6 +6,10 @@ inputs:
   dokploy-url:
     description: 'Dokploy instance URL (e.g., https://admin.nextnode.fr)'
     required: true
+  internal-url:
+    description: 'Internal Tailscale URL (e.g., http://admin-dokploy:3000). If provided, skips waiting for public URL.'
+    required: false
+    default: ''
   dokploy-admin-email:
     description: 'Dokploy admin email (for first-time setup only)'
     required: true
@@ -45,6 +49,7 @@ runs:
       uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-admin-setup@main
       with:
         dokploy-url: ${{ inputs.dokploy-url }}
+        internal-url: ${{ inputs.internal-url }}
         admin-email: ${{ inputs.dokploy-admin-email }}
         admin-password: ${{ inputs.dokploy-admin-password }}
 
@@ -54,6 +59,7 @@ runs:
       shell: bash
       env:
         DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        INTERNAL_URL: ${{ inputs.internal-url }}
         ADMIN_EMAIL: ${{ inputs.dokploy-admin-email }}
         ADMIN_PASSWORD: ${{ inputs.dokploy-admin-password }}
       run: |
@@ -62,10 +68,14 @@ runs:
         # SEC-002: Ensure password is masked
         echo "::add-mask::${ADMIN_PASSWORD}"
 
+        # Use internal URL if provided
+        API_URL="${INTERNAL_URL:-$DOKPLOY_URL}"
+        echo "api-url=$API_URL" >> $GITHUB_OUTPUT
+
         COOKIE_JAR="/tmp/dokploy_cookies_$$.txt"
         echo "cookie-jar=$COOKIE_JAR" >> $GITHUB_OUTPUT
 
-        LOGIN_RESPONSE=$(curl -s -c "$COOKIE_JAR" -X POST "${DOKPLOY_URL}/api/auth/sign-in/email" \
+        LOGIN_RESPONSE=$(curl -s -c "$COOKIE_JAR" -X POST "${API_URL}/api/auth/sign-in/email" \
           -H "Content-Type: application/json" \
           -d "{\"email\": \"${ADMIN_EMAIL}\", \"password\": \"${ADMIN_PASSWORD}\"}")
 
@@ -84,11 +94,11 @@ runs:
           ORGANIZATION_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.user.organizationId // empty')
         fi
         if [[ -z "$ORGANIZATION_ID" ]]; then
-          SESSION_RESPONSE=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/auth/get-session")
+          SESSION_RESPONSE=$(curl -s -b "$COOKIE_JAR" "${API_URL}/api/auth/get-session")
           ORGANIZATION_ID=$(echo "$SESSION_RESPONSE" | jq -r '.session.activeOrganizationId // .user.activeOrganizationId // empty')
         fi
         if [[ -z "$ORGANIZATION_ID" ]]; then
-          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" "${DOKPLOY_URL}/api/organization.all")
+          ORG_RESPONSE=$(curl -s -b "$COOKIE_JAR" "${API_URL}/api/organization.all")
           ORGANIZATION_ID=$(echo "$ORG_RESPONSE" | jq -r '.[0].organizationId // .[0].id // empty')
         fi
 
@@ -110,7 +120,7 @@ runs:
       id: registry
       uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-registry-setup@main
       with:
-        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-url: ${{ steps.auth.outputs.api-url }}
         cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
 
     # Step 4: Import SSH key
@@ -118,7 +128,7 @@ runs:
       id: ssh-key
       uses: nextnodesolutions/github-actions/actions/infrastructure/dokploy-ssh-key-import@main
       with:
-        dokploy-url: ${{ inputs.dokploy-url }}
+        dokploy-url: ${{ steps.auth.outputs.api-url }}
         cookie-jar: ${{ steps.auth.outputs.cookie-jar }}
         ssh-private-key: ${{ inputs.dokploy-ssh-private-key }}
         organization-id: ${{ steps.auth.outputs.organization-id }}
