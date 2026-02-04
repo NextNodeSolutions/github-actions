@@ -1,5 +1,5 @@
 name: 'VPS Provision'
-description: 'Provision and register a custom VPS for Dokploy deployments. Composes atomic actions: vps-status-check, vps-terraform-apply, vps-tailscale-wait, vps-dokploy-register, vps-docker-wait, vps-node-label'
+description: 'Provision and register a custom VPS for Dokploy deployments. Composes atomic actions: vps-status-check, terraform apply, vps-tailscale-wait, vps-dokploy-register, vps-docker-wait, vps-node-label'
 author: 'NextNodeSolutions'
 
 inputs:
@@ -13,6 +13,10 @@ inputs:
     description: 'Hetzner server type (e.g., cx33)'
     required: false
     default: 'cx33'
+  location:
+    description: 'Hetzner datacenter location'
+    required: false
+    default: 'nbg1'
   environment:
     description: 'Environment name'
     required: false
@@ -41,6 +45,14 @@ inputs:
   dokploy-api-token:
     description: 'Dokploy API token (from Settings > Profile > API/CLI)'
     required: true
+  orchestration-secret:
+    description: 'Orchestration secret for worker registration'
+    required: false
+    default: ''
+  manager-host:
+    description: 'Hostname of the Swarm manager'
+    required: false
+    default: 'admin-dokploy'
 
 outputs:
   provisioned:
@@ -77,22 +89,59 @@ runs:
         hcloud-token: ${{ inputs.hetzner-token }}
         tailscale-api-key: ${{ inputs.tailscale-api-token }}
 
-    # Step 2: Provision VPS with Terraform if needed
-    - name: Provision VPS
+    # Step 2: Checkout infrastructure repo for Terraform
+    - name: Checkout Infrastructure
+      if: steps.check.outputs.needs-provision == 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: nextnodesolutions/infrastructure
+        path: .infrastructure
+        token: ${{ inputs.github-token }}
+
+    # Step 3: Setup Terraform
+    - name: Setup Terraform
+      if: steps.check.outputs.needs-provision == 'true'
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.7'
+        cli_config_credentials_token: ${{ inputs.tf-api-token }}
+        terraform_wrapper: false
+
+    # Step 4: Provision VPS with Terraform
+    - name: Terraform Apply
       id: provision
       if: steps.check.outputs.needs-provision == 'true'
-      uses: nextnodesolutions/github-actions/actions/deploy/vps-terraform-apply@main
-      with:
-        vps-name: ${{ inputs.vps-name }}
-        project-name: ${{ inputs.project-name }}
-        server-type: ${{ inputs.server-type }}
-        hcloud-token: ${{ inputs.hetzner-token }}
-        tailscale-auth-key: ${{ inputs.tailscale-auth-key }}
-        cloudflare-api-token: ${{ inputs.cloudflare-api-token }}
-        tf-api-token: ${{ inputs.tf-api-token }}
-        github-token: ${{ inputs.github-token }}
+      shell: bash
+      working-directory: .infrastructure/terraform/single-vps
+      env:
+        TF_VAR_hetzner_token: ${{ inputs.hetzner-token }}
+        TF_VAR_vps_name: ${{ inputs.vps-name }}
+        TF_VAR_project_name: ${{ inputs.project-name }}
+        TF_VAR_server_type: ${{ inputs.server-type }}
+        TF_VAR_location: ${{ inputs.location }}
+        TF_VAR_environment: ${{ inputs.environment }}
+        TF_VAR_tailscale_auth_key: ${{ inputs.tailscale-auth-key }}
+        TF_VAR_cloudflare_dns_token: ${{ inputs.cloudflare-api-token }}
+        TF_VAR_manager_host: ${{ inputs.manager-host }}
+        TF_VAR_orchestration_secret: ${{ inputs.orchestration-secret }}
+      run: |
+        echo "::group::Terraform Apply"
+        echo "Creating VPS: $TF_VAR_vps_name ($TF_VAR_server_type) in $TF_VAR_location"
 
-    # Step 3: Wait for Tailscale if VPS was just provisioned or not yet in Tailscale
+        terraform init
+        terraform apply -auto-approve
+
+        # Get outputs
+        SERVER_ID=$(terraform output -raw server_id 2>/dev/null)
+        IPV4=$(terraform output -raw ipv4_address 2>/dev/null)
+
+        echo "server-id=$SERVER_ID" >> $GITHUB_OUTPUT
+        echo "server-ip=$IPV4" >> $GITHUB_OUTPUT
+
+        echo "VPS provisioned: $TF_VAR_vps_name ($IPV4)"
+        echo "::endgroup::"
+
+    # Step 5: Wait for Tailscale if VPS was just provisioned or not yet in Tailscale
     - name: Wait for Tailscale
       id: wait-tailscale
       if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-wait == 'true'
@@ -102,7 +151,7 @@ runs:
         tailscale-api-key: ${{ inputs.tailscale-api-token }}
         timeout-seconds: '300'
 
-    # Step 4: Consolidate outputs
+    # Step 6: Consolidate outputs
     - name: Set Outputs
       id: set-outputs
       shell: bash
@@ -135,7 +184,7 @@ runs:
 
         echo "::endgroup::"
 
-    # Step 5: Register VPS in Dokploy
+    # Step 7: Register VPS in Dokploy
     - name: Register in Dokploy
       id: register
       uses: nextnodesolutions/github-actions/actions/deploy/vps-dokploy-register@main
@@ -145,7 +194,7 @@ runs:
         server-name: ${{ inputs.vps-name }}
         server-ip: ${{ steps.set-outputs.outputs.tailscale-ip }}
 
-    # Step 6: Wait for Docker to be ready (if newly provisioned)
+    # Step 8: Wait for Docker to be ready (if newly provisioned)
     - name: Wait for Docker
       id: docker-wait
       if: steps.check.outputs.needs-provision == 'true' || steps.register.outputs.registered == 'true'
@@ -154,7 +203,7 @@ runs:
         server-ip: ${{ steps.set-outputs.outputs.tailscale-ip }}
         timeout-seconds: '300'
 
-    # Step 7: Get Traefik server Tailscale IP for node labeling
+    # Step 9: Get Traefik server Tailscale IP for node labeling
     - name: Lookup Manager IP
       id: manager-lookup
       if: steps.check.outputs.needs-provision == 'true' || steps.register.outputs.registered == 'true'
@@ -163,7 +212,7 @@ runs:
         device-name: 'admin-dokploy'
         tailscale-api-key: ${{ inputs.tailscale-api-token }}
 
-    # Step 8: Apply Swarm node label for placement constraints
+    # Step 10: Apply Swarm node label for placement constraints
     - name: Apply Node Label
       id: node-label
       if: (steps.check.outputs.needs-provision == 'true' || steps.register.outputs.registered == 'true') && steps.manager-lookup.outputs.tailscale-ip != ''
@@ -174,7 +223,7 @@ runs:
         label-key: 'server'
         label-value: ${{ inputs.vps-name }}
 
-    # Step 9: Final status check
+    # Step 11: Final status check
     - name: Final Status
       id: final-status
       shell: bash

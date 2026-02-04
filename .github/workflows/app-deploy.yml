@@ -82,6 +82,9 @@ on:
       SLACK_WEBHOOK_URL:
         description: 'Slack incoming webhook URL for deployment notifications'
         required: false
+      ORCHESTRATION_SECRET:
+        description: 'Orchestration secret for worker registration'
+        required: false
     outputs:
       project-id:
         description: 'Dokploy project ID'
@@ -128,6 +131,7 @@ jobs:
       vps-enabled: ${{ steps.config.outputs.vps-enabled }}
       vps-name: ${{ steps.config.outputs.vps-name }}
       vps-type: ${{ steps.config.outputs.vps-type }}
+      vps-location: ${{ steps.config.outputs.vps-location }}
       exposure: ${{ steps.config.outputs.exposure }}
       slack-enabled: ${{ steps.check-slack.outputs.enabled }}
     steps:
@@ -343,6 +347,7 @@ jobs:
           vps-name: ${{ needs.config.outputs.vps-name }}
           project-name: ${{ needs.config.outputs.project-name }}
           server-type: ${{ needs.config.outputs.vps-type }}
+          location: ${{ needs.config.outputs.vps-location }}
           environment: production
           hetzner-token: ${{ secrets.HETZNER_TOKEN }}
           tailscale-auth-key: ${{ steps.tailscale.outputs.auth-key }}
@@ -352,6 +357,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-api-token: ${{ secrets.DOKPLOY_API_TOKEN }}
+          orchestration-secret: ${{ secrets.ORCHESTRATION_SECRET }}
 
   # ==========================================================================
   # DEPLOY

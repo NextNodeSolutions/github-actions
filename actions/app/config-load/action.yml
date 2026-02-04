@@ -68,6 +68,9 @@ outputs:
   vps-type:
     description: 'Hetzner server type for VPS'
     value: ${{ steps.load.outputs.vps-type }}
+  vps-location:
+    description: 'Hetzner datacenter location for VPS'
+    value: ${{ steps.load.outputs.vps-location }}
   exposure:
     description: 'App exposure type: external (Hetzner IP) or internal (Tailscale IP)'
     value: ${{ steps.load.outputs.exposure }}
@@ -167,6 +170,7 @@ runs:
         vps_config = config.get('vps', {})
         vps_enabled = vps_config.get('enabled', False)
         vps_type = vps_config.get('type', 'cx23')
+        vps_location = vps_config.get('location', 'nbg1')
         vps_name = ''
 
         # Scenario 1: Global [vps] -> PROVISION new VPS, all envs deploy on it
@@ -220,6 +224,7 @@ runs:
         output('vps-enabled', 'true' if vps_enabled else 'false')
         output('vps-name', vps_name)
         output('vps-type', vps_type)
+        output('vps-location', vps_location)
         output('exposure', exposure)
         output('success', 'true')
 
