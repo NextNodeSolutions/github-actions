@@ -61,6 +61,14 @@ inputs:
     description: 'Size of persistent volume in GB'
     required: false
     default: '10'
+  force-replace:
+    description: 'Force replace VPS using terraform apply -replace (atomic destroy+create)'
+    required: false
+    default: 'false'
+  force-destroy-recreate:
+    description: 'Force full destroy then recreate VPS (non-atomic, use when -replace fails)'
+    required: false
+    default: 'false'
 
 outputs:
   provisioned:
@@ -89,17 +97,17 @@ runs:
   using: 'composite'
   steps:
     # Step 0: Compute config hash for change detection
+    # Only include immutable infrastructure properties - environment changes should NOT trigger VPS recreation
     - name: Compute Config Hash
       id: config-hash
       shell: bash
       env:
         SERVER_TYPE: ${{ inputs.server-type }}
         LOCATION: ${{ inputs.location }}
-        ENVIRONMENT: ${{ inputs.environment }}
         HAS_VOLUME: ${{ inputs.has-volume }}
         VOLUME_SIZE: ${{ inputs.volume-size }}
       run: |
-        CONFIG="${SERVER_TYPE}|${LOCATION}|${ENVIRONMENT}|${HAS_VOLUME}|${VOLUME_SIZE}"
+        CONFIG="${SERVER_TYPE}|${LOCATION}|${HAS_VOLUME}|${VOLUME_SIZE}"
         HASH=$(echo -n "$CONFIG" | sha256sum | cut -c1-12)
         echo "hash=$HASH" >> $GITHUB_OUTPUT
         echo "Config: $CONFIG -> Hash: $HASH"
@@ -113,49 +121,12 @@ runs:
         hcloud-token: ${{ inputs.hetzner-token }}
         tailscale-api-key: ${{ inputs.tailscale-api-token }}
         expected-config-hash: ${{ steps.config-hash.outputs.hash }}
-
-    # Step 1.5: Destroy outdated/broken VPS if needed
-    - name: Destroy Outdated VPS
-      id: destroy
-      if: steps.check.outputs.needs-destroy == 'true'
-      shell: bash
-      env:
-        HCLOUD_TOKEN: ${{ inputs.hetzner-token }}
-        VPS_NAME: ${{ inputs.vps-name }}
-      run: |
-        echo "::group::Destroy VPS"
-        echo "Destroying VPS: $VPS_NAME (broken state or config changed)"
-
-        # Get server ID
-        RESPONSE=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-          "https://api.hetzner.cloud/v1/servers?name=${VPS_NAME}")
-        SERVER_ID=$(echo "$RESPONSE" | jq -r '.servers[0].id // empty')
-
-        if [[ -n "$SERVER_ID" ]]; then
-          # Delete via API
-          curl -s -X DELETE -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            "https://api.hetzner.cloud/v1/servers/${SERVER_ID}"
-          echo "Deleted server ID: $SERVER_ID"
-
-          # Wait for deletion
-          for i in {1..30}; do
-            sleep 2
-            CHECK=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-              "https://api.hetzner.cloud/v1/servers/${SERVER_ID}" | jq -r '.server.id // empty')
-            if [[ -z "$CHECK" ]]; then
-              echo "Server deleted successfully"
-              break
-            fi
-          done
-        else
-          echo "Server not found, skipping deletion"
-        fi
-
-        echo "::endgroup::"
+        force-replace: ${{ inputs.force-replace }}
+        force-destroy-recreate: ${{ inputs.force-destroy-recreate }}
 
     # Step 2: Checkout infrastructure repo for Terraform
     - name: Checkout Infrastructure
-      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true' || steps.check.outputs.needs-destroy-recreate == 'true'
       uses: actions/checkout@v4
       with:
         repository: nextnodesolutions/infrastructure
@@ -164,17 +135,17 @@ runs:
 
     # Step 3: Setup Terraform
     - name: Setup Terraform
-      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true' || steps.check.outputs.needs-destroy-recreate == 'true'
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: '1.5.7'
         cli_config_credentials_token: ${{ inputs.tf-api-token }}
         terraform_wrapper: false
 
-    # Step 4: Provision VPS with Terraform
-    - name: Terraform Apply
-      id: provision
-      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
+    # Step 4a: Terraform Destroy (only for force-destroy-recreate)
+    - name: Terraform Destroy
+      id: destroy
+      if: steps.check.outputs.needs-destroy-recreate == 'true'
       shell: bash
       working-directory: .infrastructure/terraform/single-vps
       env:
@@ -192,13 +163,57 @@ runs:
         TF_VAR_has_volume: ${{ inputs.has-volume }}
         TF_VAR_volume_size: ${{ inputs.volume-size }}
       run: |
-        echo "::group::Terraform Apply"
-        echo "Creating VPS: $TF_VAR_vps_name ($TF_VAR_server_type) in $TF_VAR_location"
-        echo "Config hash: $TF_VAR_config_hash"
-        echo "Volume: ${TF_VAR_has_volume} (${TF_VAR_volume_size}GB)"
+        echo "::group::Terraform Destroy (force-destroy-recreate)"
+        echo "Destroying VPS: $TF_VAR_vps_name"
+        echo "This is a non-atomic operation - VPS will be fully destroyed before recreation"
 
         terraform init
-        terraform apply -auto-approve
+        terraform destroy -auto-approve
+
+        echo "VPS destroyed successfully"
+        echo "::endgroup::"
+
+    # Step 4b: Provision VPS with Terraform
+    # Uses -replace flag for atomic destroy+create when replacing existing VPS
+    - name: Terraform Apply
+      id: provision
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true' || steps.check.outputs.needs-destroy-recreate == 'true'
+      shell: bash
+      working-directory: .infrastructure/terraform/single-vps
+      env:
+        TF_VAR_hetzner_token: ${{ inputs.hetzner-token }}
+        TF_VAR_vps_name: ${{ inputs.vps-name }}
+        TF_VAR_project_name: ${{ inputs.project-name }}
+        TF_VAR_server_type: ${{ inputs.server-type }}
+        TF_VAR_location: ${{ inputs.location }}
+        TF_VAR_environment: ${{ inputs.environment }}
+        TF_VAR_tailscale_auth_key: ${{ inputs.tailscale-auth-key }}
+        TF_VAR_cloudflare_dns_token: ${{ inputs.cloudflare-api-token }}
+        TF_VAR_manager_host: ${{ inputs.manager-host }}
+        TF_VAR_orchestration_secret: ${{ inputs.orchestration-secret }}
+        TF_VAR_config_hash: ${{ steps.config-hash.outputs.hash }}
+        TF_VAR_has_volume: ${{ inputs.has-volume }}
+        TF_VAR_volume_size: ${{ inputs.volume-size }}
+        NEEDS_REPLACE: ${{ steps.check.outputs.needs-destroy }}
+      run: |
+        echo "::group::Terraform Apply"
+        echo "VPS: $TF_VAR_vps_name ($TF_VAR_server_type) in $TF_VAR_location"
+        echo "Config hash: $TF_VAR_config_hash"
+        echo "Volume: ${TF_VAR_has_volume} (${TF_VAR_volume_size}GB)"
+        echo "Replace mode: $NEEDS_REPLACE"
+
+        terraform init
+
+        if [[ "$NEEDS_REPLACE" == "true" ]]; then
+          # Atomic destroy+create via -replace flag
+          # Maintains state consistency and provides rollback if creation fails
+          echo "Using terraform apply -replace for atomic VPS replacement"
+          terraform apply -auto-approve -replace="module.vps.hcloud_server.this"
+        else
+          # Normal apply for new VPS (or after destroy-recreate)
+          echo "Creating new VPS"
+          terraform apply -auto-approve
+        fi
 
         # Get outputs
         SERVER_ID=$(terraform output -raw server_id 2>/dev/null)
@@ -213,7 +228,7 @@ runs:
     # Step 5: Wait for Tailscale if VPS was just provisioned or recreated
     - name: Wait for Tailscale
       id: wait-tailscale
-      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true' || steps.check.outputs.needs-destroy-recreate == 'true'
       uses: nextnodesolutions/github-actions/actions/deploy/vps-tailscale-wait@main
       with:
         vps-name: ${{ inputs.vps-name }}

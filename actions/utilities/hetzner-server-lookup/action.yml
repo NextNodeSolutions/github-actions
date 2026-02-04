@@ -32,6 +32,9 @@ outputs:
   config-hash:
     description: 'Config hash label value (if present)'
     value: ${{ steps.lookup.outputs.config-hash }}
+  created:
+    description: 'Server creation timestamp (ISO 8601)'
+    value: ${{ steps.lookup.outputs.created }}
 
 runs:
   using: 'composite'
@@ -57,7 +60,7 @@ runs:
 
         if [ -z "$SERVER" ] || [ "$SERVER" = "null" ]; then
           echo "Server not found: $SERVER_NAME"
-          { echo "server-id="; echo "ipv4-address="; echo "ipv6-address="; echo "status="; echo "exists=false"; echo "labels={}"; echo "config-hash="; } >> $GITHUB_OUTPUT
+          { echo "server-id="; echo "ipv4-address="; echo "ipv6-address="; echo "status="; echo "exists=false"; echo "labels={}"; echo "config-hash="; echo "created="; } >> $GITHUB_OUTPUT
           echo "::endgroup::" && exit 0
         fi
 
@@ -67,8 +70,9 @@ runs:
         STATUS=$(echo "$SERVER" | jq -r '.status')
         LABELS=$(echo "$SERVER" | jq -c '.labels // {}')
         CONFIG_HASH=$(echo "$SERVER" | jq -r '.labels.config_hash // ""')
-        echo "Found: ID=$SERVER_ID IPv4=$IPV4 IPv6=$IPV6 Status=$STATUS"
+        CREATED=$(echo "$SERVER" | jq -r '.created // ""')
+        echo "Found: ID=$SERVER_ID IPv4=$IPV4 IPv6=$IPV6 Status=$STATUS Created=$CREATED"
         echo "Labels: $LABELS"
 
-        { echo "server-id=$SERVER_ID"; echo "ipv4-address=$IPV4"; echo "ipv6-address=$IPV6"; echo "status=$STATUS"; echo "exists=true"; echo "labels=$LABELS"; echo "config-hash=$CONFIG_HASH"; } >> $GITHUB_OUTPUT
+        { echo "server-id=$SERVER_ID"; echo "ipv4-address=$IPV4"; echo "ipv6-address=$IPV6"; echo "status=$STATUS"; echo "exists=true"; echo "labels=$LABELS"; echo "config-hash=$CONFIG_HASH"; echo "created=$CREATED"; } >> $GITHUB_OUTPUT
         echo "::endgroup::"

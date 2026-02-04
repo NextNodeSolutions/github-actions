@@ -16,6 +16,18 @@ inputs:
     description: 'Expected config hash for change detection'
     required: false
     default: ''
+  force-replace:
+    description: 'Force replace VPS regardless of current status (atomic -replace)'
+    required: false
+    default: 'false'
+  force-destroy-recreate:
+    description: 'Force full destroy then recreate VPS (non-atomic)'
+    required: false
+    default: 'false'
+  tailscale-grace-minutes:
+    description: 'Grace period in minutes to wait for Tailscale before flagging as broken'
+    required: false
+    default: '10'
 
 outputs:
   hetzner-exists:
@@ -34,17 +46,26 @@ outputs:
     description: 'Whether VPS needs to be provisioned (not in Hetzner)'
     value: ${{ steps.decide.outputs.needs-provision }}
   needs-wait:
-    description: 'Whether we need to wait for Tailscale (in Hetzner but not in Tailscale)'
+    description: 'Whether we need to wait for Tailscale (in Hetzner but not in Tailscale, within grace period)'
     value: ${{ steps.decide.outputs.needs-wait }}
   config-mismatch:
     description: 'Whether VPS config has changed'
     value: ${{ steps.decide.outputs.config-mismatch }}
   needs-destroy:
-    description: 'Whether VPS needs destruction (broken or config changed)'
+    description: 'Whether VPS needs replacement (broken, config changed, or force-replace)'
     value: ${{ steps.decide.outputs.needs-destroy }}
+  needs-destroy-recreate:
+    description: 'Whether VPS needs full destroy then recreate (non-atomic)'
+    value: ${{ steps.decide.outputs.needs-destroy-recreate }}
   actual-config-hash:
     description: 'Current config hash from server labels'
     value: ${{ steps.hetzner.outputs.config-hash }}
+  server-created:
+    description: 'Server creation timestamp (ISO 8601)'
+    value: ${{ steps.hetzner.outputs.created }}
+  server-age-minutes:
+    description: 'Server age in minutes'
+    value: ${{ steps.decide.outputs.age-minutes }}
 
 runs:
   using: 'composite'
@@ -72,6 +93,10 @@ runs:
         VPS_NAME: ${{ inputs.vps-name }}
         EXPECTED_HASH: ${{ inputs.expected-config-hash }}
         ACTUAL_HASH: ${{ steps.hetzner.outputs.config-hash }}
+        SERVER_CREATED: ${{ steps.hetzner.outputs.created }}
+        FORCE_REPLACE: ${{ inputs.force-replace }}
+        FORCE_DESTROY_RECREATE: ${{ inputs.force-destroy-recreate }}
+        GRACE_MINUTES: ${{ inputs.tailscale-grace-minutes }}
       run: |
         echo "::group::VPS Status Summary"
         echo "VPS: $VPS_NAME"
@@ -79,31 +104,82 @@ runs:
         echo "  Tailscale: $TAILSCALE_EXISTS"
         echo "  Expected config hash: $EXPECTED_HASH"
         echo "  Actual config hash: $ACTUAL_HASH"
+        echo "  Force replace (atomic): $FORCE_REPLACE"
+        echo "  Force destroy+recreate: $FORCE_DESTROY_RECREATE"
+        echo "  Grace period: ${GRACE_MINUTES} minutes"
+
+        # Calculate server age in minutes
+        AGE_MINUTES=999  # Default to "old" if unknown
+        if [[ -n "$SERVER_CREATED" && "$SERVER_CREATED" != "null" ]]; then
+          # Parse ISO 8601 timestamp (works on both Linux and macOS)
+          if command -v gdate &> /dev/null; then
+            CREATED_EPOCH=$(gdate -d "$SERVER_CREATED" +%s 2>/dev/null || echo "0")
+          else
+            CREATED_EPOCH=$(date -d "$SERVER_CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S" "${SERVER_CREATED%%+*}" +%s 2>/dev/null || echo "0")
+          fi
+          NOW_EPOCH=$(date +%s)
+          if [[ "$CREATED_EPOCH" != "0" ]]; then
+            AGE_SECONDS=$((NOW_EPOCH - CREATED_EPOCH))
+            AGE_MINUTES=$((AGE_SECONDS / 60))
+          fi
+          echo "  Server created: $SERVER_CREATED"
+          echo "  Server age: ${AGE_MINUTES} minutes"
+        fi
 
         NEEDS_PROVISION="false"
         NEEDS_WAIT="false"
         NEEDS_DESTROY="false"
+        NEEDS_DESTROY_RECREATE="false"
         CONFIG_MISMATCH="false"
 
-        if [[ "$HETZNER_EXISTS" == "false" ]]; then
+        # Decision logic with priority order
+        # force-destroy-recreate takes priority over force-replace
+        if [[ "$FORCE_DESTROY_RECREATE" == "true" ]]; then
+          # Full destroy + recreate (non-atomic)
+          if [[ "$HETZNER_EXISTS" == "true" ]]; then
+            NEEDS_DESTROY_RECREATE="true"
+            echo "  Action: FORCED destroy + recreate (non-atomic)"
+          else
+            NEEDS_PROVISION="true"
+            echo "  Action: FORCED provision (VPS doesn't exist)"
+          fi
+        elif [[ "$FORCE_REPLACE" == "true" ]]; then
+          # Atomic replace via -replace flag
+          if [[ "$HETZNER_EXISTS" == "true" ]]; then
+            NEEDS_DESTROY="true"
+            echo "  Action: FORCED replace via terraform apply -replace (atomic)"
+          else
+            NEEDS_PROVISION="true"
+            echo "  Action: FORCED provision (VPS doesn't exist)"
+          fi
+        elif [[ "$HETZNER_EXISTS" == "false" ]]; then
           NEEDS_PROVISION="true"
-          echo "  Action: Needs provisioning"
+          echo "  Action: Needs provisioning (not in Hetzner)"
         elif [[ "$TAILSCALE_EXISTS" == "false" ]]; then
-          # VPS exists but not in Tailscale = BROKEN STATE
-          NEEDS_DESTROY="true"
-          echo "  Action: VPS in broken state (not in Tailscale) - will destroy and recreate"
+          # VPS exists in Hetzner but not in Tailscale
+          if [[ $AGE_MINUTES -lt $GRACE_MINUTES ]]; then
+            # Within grace period - wait for Tailscale to register
+            NEEDS_WAIT="true"
+            echo "  Action: VPS young (${AGE_MINUTES}m < ${GRACE_MINUTES}m grace) - will wait for Tailscale"
+          else
+            # Past grace period - VPS is in broken state, use atomic replace
+            NEEDS_DESTROY="true"
+            echo "  Action: VPS broken (${AGE_MINUTES}m > ${GRACE_MINUTES}m, no Tailscale) - will replace"
+          fi
         elif [[ -n "$EXPECTED_HASH" && "$ACTUAL_HASH" != "$EXPECTED_HASH" ]]; then
-          # Config changed
+          # Config changed - use atomic replace
           CONFIG_MISMATCH="true"
           NEEDS_DESTROY="true"
-          echo "  Action: Config mismatch ($ACTUAL_HASH != $EXPECTED_HASH) - will destroy and recreate"
+          echo "  Action: Config mismatch ($ACTUAL_HASH != $EXPECTED_HASH) - will replace"
         else
-          echo "  Action: Ready"
+          echo "  Action: Ready (healthy VPS)"
         fi
 
         echo "needs-provision=$NEEDS_PROVISION" >> $GITHUB_OUTPUT
         echo "needs-wait=$NEEDS_WAIT" >> $GITHUB_OUTPUT
         echo "needs-destroy=$NEEDS_DESTROY" >> $GITHUB_OUTPUT
+        echo "needs-destroy-recreate=$NEEDS_DESTROY_RECREATE" >> $GITHUB_OUTPUT
         echo "config-mismatch=$CONFIG_MISMATCH" >> $GITHUB_OUTPUT
+        echo "age-minutes=$AGE_MINUTES" >> $GITHUB_OUTPUT
 
         echo "::endgroup::"

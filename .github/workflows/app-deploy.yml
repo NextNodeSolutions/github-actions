@@ -51,6 +51,16 @@ on:
         required: false
         default: ''
         type: string
+      force-replace-vps:
+        description: 'Force replace VPS using terraform apply -replace (atomic destroy+create)'
+        required: false
+        default: false
+        type: boolean
+      force-destroy-recreate-vps:
+        description: 'Force full destroy then recreate VPS (non-atomic, use when -replace fails)'
+        required: false
+        default: false
+        type: boolean
     secrets:
       compose-env:
         description: 'Environment variables for compose deployments (newline-separated KEY=VALUE, e.g., "DB_HOST=localhost\nDB_PORT=5432")'
@@ -362,6 +372,8 @@ jobs:
           orchestration-secret: ${{ secrets.ORCHESTRATION_SECRET }}
           has-volume: ${{ needs.config.outputs.vps-has-volume }}
           volume-size: ${{ needs.config.outputs.vps-volume-size }}
+          force-replace: ${{ inputs.force-replace-vps }}
+          force-destroy-recreate: ${{ inputs.force-destroy-recreate-vps }}
 
   # ==========================================================================
   # DEPLOY
