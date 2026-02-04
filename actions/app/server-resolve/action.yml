@@ -241,11 +241,15 @@ runs:
 
             # Step 6: Determine DNS IP based on exposure type
             if EXPOSURE == 'internal':
-                # Internal app: use Traefik's Tailscale IP for DNS
-                # All traffic routes through Traefik on admin-dokploy (unified Swarm)
-                if traefik_tailscale_ip:
+                # VPS deployment: app runs on dedicated server with its own Traefik
+                # DNS should point to the worker's Tailscale IP
+                if SERVER_NAME != TRAEFIK_SERVER and server_tailscale_ip:
+                    dns_ip = server_tailscale_ip
+                    print(f"DNS IP (VPS Tailscale for internal): {dns_ip}")
+                # Swarm deployment: app routes through central Traefik on admin-dokploy
+                elif traefik_tailscale_ip:
                     dns_ip = traefik_tailscale_ip
-                    print(f"DNS IP (Tailscale for internal): {dns_ip}")
+                    print(f"DNS IP (Traefik Tailscale for internal): {dns_ip}")
                 else:
                     print("::error::Failed to resolve Tailscale IP for internal app")
             else:
