@@ -442,6 +442,8 @@ replicas = 1
 enabled = true                # Request dedicated VPS
 type = "cpx21"                # Hetzner: cpx11, cpx21, cpx31, cpx41, cpx51
 location = "fsn1"             # fsn1, nbg1, hel1
+has_volume = true             # Create persistent volume (default: true)
+volume_size = 20              # Volume size in GB (default: 10)
 
 # When [vps] is enabled for production, set:
 [environments.production]
@@ -643,6 +645,7 @@ Projects can request a dedicated VPS by configuring `dokploy.toml`:
 [vps]
 enabled = true
 type = "cpx21"
+volume_size = 20  # Optional: persistent volume in GB (default: 10)
 
 [environments.production]
 server = "custom"
@@ -653,6 +656,7 @@ When `server = "custom"` is set, the workflow automatically provisions a Hetzner
 - Configured with NixOS and Docker
 - Joined to Tailscale network
 - Registered as a Dokploy worker
+- Attached with a persistent Hetzner volume (configurable size, protected against destroy)
 
 ### NPM Release Workflow
 **File:** `.github/workflows/release.yml`

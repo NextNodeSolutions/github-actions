@@ -53,6 +53,14 @@ inputs:
     description: 'Hostname of the Swarm manager'
     required: false
     default: 'admin-dokploy'
+  has-volume:
+    description: 'Whether to create a persistent volume'
+    required: false
+    default: 'true'
+  volume-size:
+    description: 'Size of persistent volume in GB'
+    required: false
+    default: '10'
 
 outputs:
   provisioned:
@@ -88,8 +96,10 @@ runs:
         SERVER_TYPE: ${{ inputs.server-type }}
         LOCATION: ${{ inputs.location }}
         ENVIRONMENT: ${{ inputs.environment }}
+        HAS_VOLUME: ${{ inputs.has-volume }}
+        VOLUME_SIZE: ${{ inputs.volume-size }}
       run: |
-        CONFIG="${SERVER_TYPE}|${LOCATION}|${ENVIRONMENT}"
+        CONFIG="${SERVER_TYPE}|${LOCATION}|${ENVIRONMENT}|${HAS_VOLUME}|${VOLUME_SIZE}"
         HASH=$(echo -n "$CONFIG" | sha256sum | cut -c1-12)
         echo "hash=$HASH" >> $GITHUB_OUTPUT
         echo "Config: $CONFIG -> Hash: $HASH"
@@ -179,10 +189,13 @@ runs:
         TF_VAR_manager_host: ${{ inputs.manager-host }}
         TF_VAR_orchestration_secret: ${{ inputs.orchestration-secret }}
         TF_VAR_config_hash: ${{ steps.config-hash.outputs.hash }}
+        TF_VAR_has_volume: ${{ inputs.has-volume }}
+        TF_VAR_volume_size: ${{ inputs.volume-size }}
       run: |
         echo "::group::Terraform Apply"
         echo "Creating VPS: $TF_VAR_vps_name ($TF_VAR_server_type) in $TF_VAR_location"
         echo "Config hash: $TF_VAR_config_hash"
+        echo "Volume: ${TF_VAR_has_volume} (${TF_VAR_volume_size}GB)"
 
         terraform init
         terraform apply -auto-approve

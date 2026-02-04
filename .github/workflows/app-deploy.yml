@@ -132,6 +132,8 @@ jobs:
       vps-name: ${{ steps.config.outputs.vps-name }}
       vps-type: ${{ steps.config.outputs.vps-type }}
       vps-location: ${{ steps.config.outputs.vps-location }}
+      vps-has-volume: ${{ steps.config.outputs.vps-has-volume }}
+      vps-volume-size: ${{ steps.config.outputs.vps-volume-size }}
       exposure: ${{ steps.config.outputs.exposure }}
       slack-enabled: ${{ steps.check-slack.outputs.enabled }}
     steps:
@@ -358,6 +360,8 @@ jobs:
           dokploy-url: ${{ steps.dokploy-url.outputs.url }}
           dokploy-api-token: ${{ secrets.DOKPLOY_API_TOKEN }}
           orchestration-secret: ${{ secrets.ORCHESTRATION_SECRET }}
+          has-volume: ${{ needs.config.outputs.vps-has-volume }}
+          volume-size: ${{ needs.config.outputs.vps-volume-size }}
 
   # ==========================================================================
   # DEPLOY

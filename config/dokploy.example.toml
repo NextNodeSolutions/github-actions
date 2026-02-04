@@ -77,6 +77,8 @@ domain = "my-project.com"
 # name = "my-project-worker"    # VPS name (default: {project-name}-worker)
 # type = "cx23"                 # Hetzner: cx23, cx33, cx43, cx53, cax11, cax21...
 # location = "fsn1"             # fsn1, nbg1, hel1, ash, hil, sin
+# has_volume = true             # Create persistent volume (default: true)
+# volume_size = 10              # Volume size in GB (default: 10)
 
 # =============================================================================
 # COMPOSE DEPLOYMENT (optional)
