@@ -120,7 +120,12 @@ The `lib/dokploy/` directory contains shared Python utilities used by multiple a
 - **domain.py**: `compute_domain()`, `compute_url()`, `compute_app_name()`, `is_sub_subdomain()`
 - **port.py**: `read_env_file()`, `detect_port()`, `get_port()`
 - **output.py**: `output()` helper for GitHub Actions output
-- **docs/api-quirks.md**: Critical API behavior documentation (read before modifying client.py)
+
+## Documentation
+
+Critical implementation details and API quirks are documented in `doc/`:
+
+- **doc/dokploy-api-quirks.md**: Dokploy server.update API requires ALL 8 fields (PUT semantics)
 
 ## Infrastructure Integration
 
