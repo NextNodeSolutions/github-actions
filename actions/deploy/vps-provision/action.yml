@@ -80,6 +80,20 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # Step 0: Compute config hash for change detection
+    - name: Compute Config Hash
+      id: config-hash
+      shell: bash
+      env:
+        SERVER_TYPE: ${{ inputs.server-type }}
+        LOCATION: ${{ inputs.location }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: |
+        CONFIG="${SERVER_TYPE}|${LOCATION}|${ENVIRONMENT}"
+        HASH=$(echo -n "$CONFIG" | sha256sum | cut -c1-12)
+        echo "hash=$HASH" >> $GITHUB_OUTPUT
+        echo "Config: $CONFIG -> Hash: $HASH"
+
     # Step 1: Check VPS status in Hetzner and Tailscale
     - name: Check VPS Status
       id: check
@@ -88,10 +102,50 @@ runs:
         vps-name: ${{ inputs.vps-name }}
         hcloud-token: ${{ inputs.hetzner-token }}
         tailscale-api-key: ${{ inputs.tailscale-api-token }}
+        expected-config-hash: ${{ steps.config-hash.outputs.hash }}
+
+    # Step 1.5: Destroy outdated/broken VPS if needed
+    - name: Destroy Outdated VPS
+      id: destroy
+      if: steps.check.outputs.needs-destroy == 'true'
+      shell: bash
+      env:
+        HCLOUD_TOKEN: ${{ inputs.hetzner-token }}
+        VPS_NAME: ${{ inputs.vps-name }}
+      run: |
+        echo "::group::Destroy VPS"
+        echo "Destroying VPS: $VPS_NAME (broken state or config changed)"
+
+        # Get server ID
+        RESPONSE=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+          "https://api.hetzner.cloud/v1/servers?name=${VPS_NAME}")
+        SERVER_ID=$(echo "$RESPONSE" | jq -r '.servers[0].id // empty')
+
+        if [[ -n "$SERVER_ID" ]]; then
+          # Delete via API
+          curl -s -X DELETE -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            "https://api.hetzner.cloud/v1/servers/${SERVER_ID}"
+          echo "Deleted server ID: $SERVER_ID"
+
+          # Wait for deletion
+          for i in {1..30}; do
+            sleep 2
+            CHECK=$(curl -s -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+              "https://api.hetzner.cloud/v1/servers/${SERVER_ID}" | jq -r '.server.id // empty')
+            if [[ -z "$CHECK" ]]; then
+              echo "Server deleted successfully"
+              break
+            fi
+          done
+        else
+          echo "Server not found, skipping deletion"
+        fi
+
+        echo "::endgroup::"
 
     # Step 2: Checkout infrastructure repo for Terraform
     - name: Checkout Infrastructure
-      if: steps.check.outputs.needs-provision == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
       uses: actions/checkout@v4
       with:
         repository: nextnodesolutions/infrastructure
@@ -100,7 +154,7 @@ runs:
 
     # Step 3: Setup Terraform
     - name: Setup Terraform
-      if: steps.check.outputs.needs-provision == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: '1.5.7'
@@ -110,7 +164,7 @@ runs:
     # Step 4: Provision VPS with Terraform
     - name: Terraform Apply
       id: provision
-      if: steps.check.outputs.needs-provision == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
       shell: bash
       working-directory: .infrastructure/terraform/single-vps
       env:
@@ -124,9 +178,11 @@ runs:
         TF_VAR_cloudflare_dns_token: ${{ inputs.cloudflare-api-token }}
         TF_VAR_manager_host: ${{ inputs.manager-host }}
         TF_VAR_orchestration_secret: ${{ inputs.orchestration-secret }}
+        TF_VAR_config_hash: ${{ steps.config-hash.outputs.hash }}
       run: |
         echo "::group::Terraform Apply"
         echo "Creating VPS: $TF_VAR_vps_name ($TF_VAR_server_type) in $TF_VAR_location"
+        echo "Config hash: $TF_VAR_config_hash"
 
         terraform init
         terraform apply -auto-approve
@@ -141,10 +197,10 @@ runs:
         echo "VPS provisioned: $TF_VAR_vps_name ($IPV4)"
         echo "::endgroup::"
 
-    # Step 5: Wait for Tailscale if VPS was just provisioned or not yet in Tailscale
+    # Step 5: Wait for Tailscale if VPS was just provisioned or recreated
     - name: Wait for Tailscale
       id: wait-tailscale
-      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-wait == 'true'
+      if: steps.check.outputs.needs-provision == 'true' || steps.check.outputs.needs-destroy == 'true'
       uses: nextnodesolutions/github-actions/actions/deploy/vps-tailscale-wait@main
       with:
         vps-name: ${{ inputs.vps-name }}

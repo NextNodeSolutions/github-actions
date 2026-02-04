@@ -12,6 +12,10 @@ inputs:
   tailscale-api-key:
     description: 'Tailscale API key for status checks'
     required: true
+  expected-config-hash:
+    description: 'Expected config hash for change detection'
+    required: false
+    default: ''
 
 outputs:
   hetzner-exists:
@@ -32,6 +36,15 @@ outputs:
   needs-wait:
     description: 'Whether we need to wait for Tailscale (in Hetzner but not in Tailscale)'
     value: ${{ steps.decide.outputs.needs-wait }}
+  config-mismatch:
+    description: 'Whether VPS config has changed'
+    value: ${{ steps.decide.outputs.config-mismatch }}
+  needs-destroy:
+    description: 'Whether VPS needs destruction (broken or config changed)'
+    value: ${{ steps.decide.outputs.needs-destroy }}
+  actual-config-hash:
+    description: 'Current config hash from server labels'
+    value: ${{ steps.hetzner.outputs.config-hash }}
 
 runs:
   using: 'composite'
@@ -57,26 +70,40 @@ runs:
         HETZNER_EXISTS: ${{ steps.hetzner.outputs.exists }}
         TAILSCALE_EXISTS: ${{ steps.tailscale.outputs.exists }}
         VPS_NAME: ${{ inputs.vps-name }}
+        EXPECTED_HASH: ${{ inputs.expected-config-hash }}
+        ACTUAL_HASH: ${{ steps.hetzner.outputs.config-hash }}
       run: |
         echo "::group::VPS Status Summary"
         echo "VPS: $VPS_NAME"
         echo "  Hetzner: $HETZNER_EXISTS"
         echo "  Tailscale: $TAILSCALE_EXISTS"
+        echo "  Expected config hash: $EXPECTED_HASH"
+        echo "  Actual config hash: $ACTUAL_HASH"
 
         NEEDS_PROVISION="false"
         NEEDS_WAIT="false"
+        NEEDS_DESTROY="false"
+        CONFIG_MISMATCH="false"
 
         if [[ "$HETZNER_EXISTS" == "false" ]]; then
           NEEDS_PROVISION="true"
           echo "  Action: Needs provisioning"
         elif [[ "$TAILSCALE_EXISTS" == "false" ]]; then
-          NEEDS_WAIT="true"
-          echo "  Action: Wait for Tailscale"
+          # VPS exists but not in Tailscale = BROKEN STATE
+          NEEDS_DESTROY="true"
+          echo "  Action: VPS in broken state (not in Tailscale) - will destroy and recreate"
+        elif [[ -n "$EXPECTED_HASH" && "$ACTUAL_HASH" != "$EXPECTED_HASH" ]]; then
+          # Config changed
+          CONFIG_MISMATCH="true"
+          NEEDS_DESTROY="true"
+          echo "  Action: Config mismatch ($ACTUAL_HASH != $EXPECTED_HASH) - will destroy and recreate"
         else
           echo "  Action: Ready"
         fi
 
         echo "needs-provision=$NEEDS_PROVISION" >> $GITHUB_OUTPUT
         echo "needs-wait=$NEEDS_WAIT" >> $GITHUB_OUTPUT
+        echo "needs-destroy=$NEEDS_DESTROY" >> $GITHUB_OUTPUT
+        echo "config-mismatch=$CONFIG_MISMATCH" >> $GITHUB_OUTPUT
 
         echo "::endgroup::"

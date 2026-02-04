@@ -26,6 +26,12 @@ outputs:
   exists:
     description: 'Whether the server exists (true/false)'
     value: ${{ steps.lookup.outputs.exists }}
+  labels:
+    description: 'Server labels as JSON string'
+    value: ${{ steps.lookup.outputs.labels }}
+  config-hash:
+    description: 'Config hash label value (if present)'
+    value: ${{ steps.lookup.outputs.config-hash }}
 
 runs:
   using: 'composite'
@@ -51,7 +57,7 @@ runs:
 
         if [ -z "$SERVER" ] || [ "$SERVER" = "null" ]; then
           echo "Server not found: $SERVER_NAME"
-          { echo "server-id="; echo "ipv4-address="; echo "ipv6-address="; echo "status="; echo "exists=false"; } >> $GITHUB_OUTPUT
+          { echo "server-id="; echo "ipv4-address="; echo "ipv6-address="; echo "status="; echo "exists=false"; echo "labels={}"; echo "config-hash="; } >> $GITHUB_OUTPUT
           echo "::endgroup::" && exit 0
         fi
 
@@ -59,7 +65,10 @@ runs:
         IPV4=$(echo "$SERVER" | jq -r '.public_net.ipv4.ip // ""')
         IPV6=$(echo "$SERVER" | jq -r '.public_net.ipv6.ip // ""')
         STATUS=$(echo "$SERVER" | jq -r '.status')
+        LABELS=$(echo "$SERVER" | jq -c '.labels // {}')
+        CONFIG_HASH=$(echo "$SERVER" | jq -r '.labels.config_hash // ""')
         echo "Found: ID=$SERVER_ID IPv4=$IPV4 IPv6=$IPV6 Status=$STATUS"
+        echo "Labels: $LABELS"
 
-        { echo "server-id=$SERVER_ID"; echo "ipv4-address=$IPV4"; echo "ipv6-address=$IPV6"; echo "status=$STATUS"; echo "exists=true"; } >> $GITHUB_OUTPUT
+        { echo "server-id=$SERVER_ID"; echo "ipv4-address=$IPV4"; echo "ipv6-address=$IPV6"; echo "status=$STATUS"; echo "exists=true"; echo "labels=$LABELS"; echo "config-hash=$CONFIG_HASH"; } >> $GITHUB_OUTPUT
         echo "::endgroup::"
