@@ -280,6 +280,7 @@ class DokployClient:
     def update_server(
         self,
         server_id: str,
+        existing_server: dict[str, Any],
         ip_address: str | None = None,
         name: str | None = None,
         port: int | None = None,
@@ -287,27 +288,41 @@ class DokployClient:
     ) -> dict[str, Any]:
         """Update an existing server in Dokploy.
 
+        The Dokploy server.update API requires ALL fields in every request.
+        This method merges the existing server data with any overrides provided.
+
         Args:
             server_id: Dokploy server ID
-            ip_address: New IP address (optional)
-            name: New server name (optional)
-            port: New SSH port (optional)
-            username: New SSH username (optional)
+            existing_server: Current server object from get_server_by_name()
+            ip_address: New IP address (optional, uses existing if not provided)
+            name: New server name (optional, uses existing if not provided)
+            port: New SSH port (optional, uses existing if not provided)
+            username: New SSH username (optional, uses existing if not provided)
 
         Returns:
             Updated server object
+
+        Raises:
+            ValueError: If existing_server is missing required fields
         """
         from .constants import Endpoints
 
-        payload: dict[str, Any] = {"serverId": server_id}
-        if ip_address is not None:
-            payload["ipAddress"] = ip_address
-        if name is not None:
-            payload["name"] = name
-        if port is not None:
-            payload["port"] = port
-        if username is not None:
-            payload["username"] = username
+        # Build complete payload from existing server + overrides
+        # Dokploy API requires ALL 8 fields in every update request (apiUpdateServer schema)
+        payload: dict[str, Any] = {
+            "serverId": server_id,
+            "name": name if name is not None else existing_server.get("name"),
+            "description": existing_server.get("description", ""),
+            "ipAddress": ip_address if ip_address is not None else existing_server.get("ipAddress"),
+            "port": port if port is not None else existing_server.get("port", 22),
+            "username": username if username is not None else existing_server.get("username", "root"),
+            "sshKeyId": existing_server.get("sshKeyId"),
+            "serverType": existing_server.get("serverType", "deploy"),
+        }
+
+        # Validate required fields are present
+        if not payload.get("name"):
+            raise ValueError("Server name is required (not found in existing_server)")
 
         wrapped = {"0": {"json": payload}}
         result = self.post(Endpoints.SERVER_UPDATE, json=wrapped)

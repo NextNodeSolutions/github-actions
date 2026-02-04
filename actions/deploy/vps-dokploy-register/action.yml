@@ -85,7 +85,7 @@ runs:
                 if existing_ip != SERVER_IP:
                     print(f"Server IP changed: {existing_ip} -> {SERVER_IP}")
                     print(f"Updating server {server_id}...")
-                    client.update_server(server_id, ip_address=SERVER_IP)
+                    client.update_server(server_id, existing_server=existing, ip_address=SERVER_IP)
                     print("Server IP updated successfully")
                     output('server-id', server_id)
                     output('registered', 'false')
