@@ -115,10 +115,12 @@ The actions are organized into logical domains to improve maintainability and di
 ### Shared Python Library (lib/dokploy/)
 
 The `lib/dokploy/` directory contains shared Python utilities used by multiple actions:
+- **client.py**: `DokployClient` for API interactions, `ServerUpdatePayload` TypedDict
 - **config.py**: `deep_merge()`, `load_toml()`, `load_merged_config()`, `get_project_name()`, `get_environment_config()`
 - **domain.py**: `compute_domain()`, `compute_url()`, `compute_app_name()`, `is_sub_subdomain()`
 - **port.py**: `read_env_file()`, `detect_port()`, `get_port()`
 - **output.py**: `output()` helper for GitHub Actions output
+- **docs/api-quirks.md**: Critical API behavior documentation (read before modifying client.py)
 
 ## Infrastructure Integration
 
