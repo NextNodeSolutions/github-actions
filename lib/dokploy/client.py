@@ -1,10 +1,27 @@
 """Dokploy API client with consistent error handling and request patterns."""
 
 import os
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import requests
 from requests.exceptions import RequestException
+
+
+class ServerUpdatePayload(TypedDict):
+    """Required payload for Dokploy server.update API.
+
+    CRITICAL: Dokploy uses PUT semantics - ALL fields are required in every request.
+    Missing any field will result in HTTP 400 Bad Request.
+    """
+
+    serverId: str
+    name: str
+    description: str  # Can be empty string, but must be present
+    ipAddress: str
+    port: int
+    username: str
+    sshKeyId: str | None
+    serverType: Literal["deploy", "build"]
 
 
 class DokployError(Exception):
@@ -309,11 +326,11 @@ class DokployClient:
 
         # Build complete payload from existing server + overrides
         # Dokploy API requires ALL 8 fields in every update request (apiUpdateServer schema)
-        payload: dict[str, Any] = {
+        payload: ServerUpdatePayload = {
             "serverId": server_id,
-            "name": name if name is not None else existing_server.get("name"),
+            "name": name if name is not None else existing_server.get("name", ""),
             "description": existing_server.get("description", ""),
-            "ipAddress": ip_address if ip_address is not None else existing_server.get("ipAddress"),
+            "ipAddress": ip_address if ip_address is not None else existing_server.get("ipAddress", ""),
             "port": port if port is not None else existing_server.get("port", 22),
             "username": username if username is not None else existing_server.get("username", "root"),
             "sshKeyId": existing_server.get("sshKeyId"),

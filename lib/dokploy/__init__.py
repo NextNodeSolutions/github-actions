@@ -14,6 +14,7 @@ from .client import (
     DokployClient,
     DokployError,
     DokployNotFoundError,
+    ServerUpdatePayload,
 )
 from .config import (
     deep_merge,
@@ -122,6 +123,7 @@ __all__ = [
     "DokployError",
     "DokployAuthError",
     "DokployNotFoundError",
+    "ServerUpdatePayload",
     # config
     "deep_merge",
     "get_environment_config",
