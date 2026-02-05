@@ -168,9 +168,14 @@ runs:
         echo "This is a non-atomic operation - VPS will be fully destroyed before recreation"
 
         terraform init
-        terraform destroy -auto-approve
 
-        echo "VPS destroyed successfully"
+        # Destroy only the server and volume attachment, NOT the volume itself
+        # The volume has prevent_destroy=true to protect persistent data
+        terraform destroy -auto-approve \
+          -target=hcloud_volume_attachment.data \
+          -target=module.vps
+
+        echo "VPS destroyed successfully (volume preserved)"
         echo "::endgroup::"
 
     # Step 4b: Provision VPS with Terraform
