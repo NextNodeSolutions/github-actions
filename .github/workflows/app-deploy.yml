@@ -535,21 +535,51 @@ jobs:
         with:
           domain: ${{ needs.config.outputs.domain }}
 
+      # Determine where to deploy Traefik routing config
+      # Custom VPS has its own Traefik - deploy there
+      # Shared workers use centralized Traefik on admin-dokploy
+      - name: Determine Traefik Target
+        id: traefik-target
+        if: inputs.action == 'deploy'
+        shell: bash
+        env:
+          IS_CUSTOM_VPS: ${{ needs.config.outputs.vps-enabled }}
+          SERVER: ${{ needs.config.outputs.server }}
+          TRAEFIK_SERVER: ${{ needs.config.outputs.traefik-server }}
+          SERVER_TS_IP: ${{ steps.server.outputs.server-tailscale-ip }}
+          TRAEFIK_TS_IP: ${{ steps.server.outputs.traefik-tailscale-ip }}
+        run: |
+          # Custom VPS has its own Traefik - deploy config there
+          if [[ "$IS_CUSTOM_VPS" == "true" && "$SERVER" != "$TRAEFIK_SERVER" && -n "$SERVER_TS_IP" ]]; then
+            echo "target-ip=$SERVER_TS_IP" >> $GITHUB_OUTPUT
+            echo "same-server=true" >> $GITHUB_OUTPUT
+            echo "Custom VPS: routing config goes to $SERVER ($SERVER_TS_IP)"
+          else
+            # Shared worker: use centralized Traefik on admin-dokploy
+            echo "target-ip=$TRAEFIK_TS_IP" >> $GITHUB_OUTPUT
+            if [[ "$SERVER" == "$TRAEFIK_SERVER" ]]; then
+              echo "same-server=true" >> $GITHUB_OUTPUT
+            else
+              echo "same-server=false" >> $GITHUB_OUTPUT
+            fi
+            echo "Shared worker: routing config goes to traefik-server ($TRAEFIK_TS_IP)"
+          fi
+
       # File-based Traefik routing for compose (NixOS servers with file provider)
       - name: Configure Compose Traefik Routing
         if: |
           inputs.action == 'deploy' &&
           (needs.config.outputs.is-compose == 'true' || inputs.compose-file != '') &&
           needs.config.outputs.domain != '' &&
-          steps.server.outputs.traefik-tailscale-ip != ''
+          steps.traefik-target.outputs.target-ip != ''
         uses: ./.github-actions/actions/deploy/compose-traefik-routing
         with:
           compose-name: ${{ needs.config.outputs.app-name }}
           domain: ${{ needs.config.outputs.domain }}
           service-port: ${{ needs.config.outputs.port }}
           server-tailscale-ip: ${{ steps.server.outputs.server-tailscale-ip }}
-          traefik-tailscale-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
-          same-server: ${{ needs.config.outputs.server == needs.config.outputs.traefik-server }}
+          traefik-tailscale-ip: ${{ steps.traefik-target.outputs.target-ip }}
+          same-server: ${{ steps.traefik-target.outputs.same-server }}
           use-https: ${{ steps.ssl-strategy.outputs.use_https }}
 
       # DNS Configuration (only if app or compose deployment succeeded)
@@ -573,14 +603,14 @@ jobs:
         if: |
           inputs.action == 'deploy' &&
           needs.config.outputs.domain != '' &&
-          steps.server.outputs.traefik-tailscale-ip != '' &&
+          steps.traefik-target.outputs.target-ip != '' &&
           steps.ssl-strategy.outputs.ssl_type != 'http_only' &&
           (steps.app.outputs.success == 'true' || steps.compose.outputs.success == 'true')
         uses: ./.github-actions/actions/ssl/traefik-wildcard-config
         with:
           domain: ${{ needs.config.outputs.domain }}
           router-name: ${{ needs.config.outputs.app-name }}
-          traefik-server-ip: ${{ steps.server.outputs.traefik-tailscale-ip }}
+          traefik-server-ip: ${{ steps.traefik-target.outputs.target-ip }}
           container-port: ${{ needs.config.outputs.port }}
 
       - name: Set Final Status
