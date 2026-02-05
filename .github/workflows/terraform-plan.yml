@@ -55,10 +55,7 @@ jobs:
         run: |
           echo "::group::Generate Terraform vars from config"
           jq '{
-            location: .hetzner.location,
-            admin_server_type: .hetzner.server_types.admin,
-            dev_server_type: .hetzner.server_types.dev,
-            prod_server_type: .hetzner.server_types.prod
+            location: .hetzner.location
           }' ../${{ inputs.config-file }} > config.auto.tfvars.json
           echo "Generated config.auto.tfvars.json:"
           cat config.auto.tfvars.json
