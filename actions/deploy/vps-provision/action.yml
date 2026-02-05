@@ -269,9 +269,7 @@ runs:
         echo "::endgroup::"
 
     # Step 7: Register VPS in Dokploy
-    # IMPORTANT: Use public IP for Dokploy registration.
-    # Dokploy runs inside Docker's overlay network and cannot reach Tailscale IPs.
-    # The GitHub Actions runner can use Tailscale for SSH, but Dokploy needs public IP.
+    # Use Tailscale IP - Dokploy reaches Tailscale network via host routing
     - name: Register in Dokploy
       id: register
       uses: nextnodesolutions/github-actions/actions/deploy/vps-dokploy-register@main
@@ -279,7 +277,7 @@ runs:
         dokploy-url: ${{ inputs.dokploy-url }}
         dokploy-api-token: ${{ inputs.dokploy-api-token }}
         server-name: ${{ inputs.vps-name }}
-        server-ip: ${{ steps.set-outputs.outputs.server-ip }}
+        server-ip: ${{ steps.set-outputs.outputs.tailscale-ip }}
 
     # Step 8: Wait for Docker to be ready (if newly provisioned)
     - name: Wait for Docker
