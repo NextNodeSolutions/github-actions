@@ -609,3 +609,96 @@ Checklist for secrets:
 - [ ] Use `github.token` not `secrets.GITHUB_TOKEN`
 - [ ] Add `permissions` block if creating tags/releases
 - [ ] Use tailscale-oauth action (never static TAILSCALE_AUTH_KEY)
+
+## Traefik Routing Architecture
+
+NextNode uses TWO distinct Traefik routing modes depending on deployment type.
+
+### Centralized Traefik (Shared Workers)
+
+Used for: Small apps, Swarm services on dev-worker/prod-worker
+
+```
+Traffic Flow:
+User -> admin-dokploy:443 -> Swarm mesh network -> worker container
+```
+
+| Aspect | Detail |
+|--------|--------|
+| Traefik location | admin-dokploy |
+| Config deployment | admin-dokploy via Tailscale SSH |
+| SSL certs | Single wildcard cert on admin-dokploy |
+| Routing backend | `http://{worker-tailscale-ip}:{port}` |
+| Pros | Single SSL cert, single config, Swarm load balancing |
+| Cons | SPOF (admin-dokploy down = all apps down), extra latency |
+
+### Distributed Traefik (Custom VPS)
+
+Used for: Important apps with SLA, compose deployments, high-traffic apps
+
+```
+Traffic Flow:
+User -> worker:443 -> localhost container
+```
+
+| Aspect | Detail |
+|--------|--------|
+| Traefik location | The VPS itself (e.g., plane-worker) |
+| Config deployment | VPS via Tailscale SSH |
+| SSL certs | Each VPS manages its own cert |
+| Routing backend | `http://127.0.0.1:{port}` |
+| Pros | No SPOF, direct traffic, isolation |
+| Cons | Each VPS manages own SSL cert |
+
+### How Routing Mode is Determined
+
+The `app-deploy.yml` workflow determines where to deploy Traefik config based on `vps.enabled`:
+
+```
+IF vps.enabled == true AND server != traefik-server:
+    Deploy config to: server-tailscale-ip (the VPS itself)
+    Backend: localhost:PORT
+ELSE:
+    Deploy config to: admin-dokploy
+    Backend: worker-tailscale-ip:PORT
+```
+
+This logic is implemented in the "Determine Traefik Target" step of `app-deploy.yml`. See `docs/traefik-routing.md` for detailed implementation.
+
+### dokploy.toml Configuration Examples
+
+**Centralized (small/non-critical apps):**
+```toml
+[project]
+name = "my-app"
+domain = "app.nextnode.fr"
+# No [vps] section = uses shared workers with centralized Traefik
+```
+
+**Distributed (important/dedicated apps):**
+```toml
+[project]
+name = "my-important-app"
+domain = "important.nextnode.fr"
+exposure = "internal"  # or "external" for public access
+
+[vps]
+enabled = true
+name = "my-app-worker"
+type = "cx23"
+location = "nbg1"
+```
+
+### Deployment Recommendations
+
+| App Type | VPS Config | Traefik Mode | Example |
+|----------|------------|--------------|---------|
+| Small/internal apps | No `[vps]` section | Centralized | nextnode-front |
+| Important apps with SLA | `[vps] enabled = true` | Distributed | Plane, Kicked |
+| High-traffic apps | `[vps] enabled = true` | Distributed | Any production app |
+
+### NixOS Image Note
+
+All workers have Traefik INSTALLED via NixOS, but activation depends on boot configuration:
+- **Shared workers (dev/prod)**: Traefik may be inactive if dependent on dokploy-stack
+- **Custom VPS (plane-worker)**: Traefik active - newer NixOS image has fixed dependencies
